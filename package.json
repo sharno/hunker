@@ -1,0 +1,32 @@
+{
+  "name": "hunker",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "concurrently --kill-others --names api,web --prefix-colors magenta,cyan \"bun run dev:api\" \"bun run dev:web\"",
+    "dev:api": "tsx watch backend/server.ts",
+    "dev:web": "vite",
+    "build": "bun run typecheck && vite build",
+    "typecheck": "tsc --noEmit",
+    "start:api": "tsx backend/server.ts",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@effect/platform-browser": "4.0.0-beta.102",
+    "@effect/platform-node": "4.0.0-beta.102",
+    "concurrently": "9.2.1",
+    "effect": "4.0.0-beta.102",
+    "foldkit": "0.137.0"
+  },
+  "devDependencies": {
+    "@foldkit/vite-plugin": "0.11.3",
+    "@types/node": "22.19.19",
+    "tsx": "4.22.4",
+    "typescript": "5.9.3",
+    "vite": "8.0.13"
+  },
+  "type": "module"
+}
