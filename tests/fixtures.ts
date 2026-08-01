@@ -63,6 +63,49 @@ export const semanticResponse = {
   ],
 } as const;
 
+const characterRows = {
+  "src/greet.ts": [
+    {
+      oldLine: 1,
+      newLine: 1,
+      oldRanges: [{ start: 22, end: 26 }],
+      newRanges: [{ start: 22, end: 28 }],
+    },
+    {
+      oldLine: 2,
+      newLine: 2,
+      oldRanges: [{ start: 2, end: 35 }],
+      newRanges: [{ start: 2, end: 27 }],
+    },
+    {
+      oldLine: 3,
+      newLine: null,
+      oldRanges: [{ start: 2, end: 17 }],
+      newRanges: [],
+    },
+  ],
+  "src/message.ts": [
+    {
+      oldLine: null,
+      newLine: 1,
+      oldRanges: [],
+      newRanges: [{ start: 0, end: 38 }],
+    },
+    {
+      oldLine: null,
+      newLine: 2,
+      oldRanges: [],
+      newRanges: [{ start: 0, end: 38 }],
+    },
+  ],
+} as const;
+
+export const characterDiffResponse = (path: string, ignoreWhitespace: boolean) => ({
+  path,
+  ignoreWhitespace,
+  rows: characterRows[path as keyof typeof characterRows] ?? [],
+});
+
 export const reviewCommentsResponse = {
   comments: [
     {

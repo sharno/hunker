@@ -24,11 +24,14 @@ The stack is Effect end to end:
 - `backend/github-reviews.ts` — review-thread reads, replies, and review submission
 - `backend/ast-grep-analysis.ts` — parser selection, AST units, and structural fingerprints
 - `backend/semantic-engine.ts` — Effect service, semantic matching, and review-wide move detection
+- `backend/character-diff-engine.ts` — native Git whole-file alignment and character ranges
 - `backend/server.ts` — Effect HTTP route composition
 
 ## Run locally
 
-Requires Bun and Node.js 22 or newer. ast-grep runs in the server process through its native TypeScript package, so no separate diff binary is required.
+Requires Bun, Node.js 22 or newer, and Git. ast-grep runs in the server process
+through its native TypeScript package. Character diffs invoke the locally
+installed Git binary through an Effect service.
 
 ```bash
 bun install
@@ -56,6 +59,14 @@ syntax colors compose with character-diff overlays without injecting HTML.
 Hunker registers only its supported grammars, including JavaScript, TypeScript,
 Python, Rust, OpenTofu/HCL, Go, shell, JSON, YAML, HTML, CSS, SQL, C/C++, Java,
 and Markdown.
+
+Character highlighting is calculated from the complete base and head files,
+not from adjacent patch lines. The backend runs Git's histogram diff with
+porcelain word-diff output and a one-character token regex, then returns typed
+line pairings and character ranges to the renderer. This lets unified and
+side-by-side views share the same alignment, handles multi-line replacements,
+and composes with the whitespace setting. Results are cached by file contents
+and never expose temporary paths to the browser.
 
 GitHub review threads can be shown or hidden inline, and that choice is recorded
 in the review URL. Hunker can reply to an existing thread and submit Comment,

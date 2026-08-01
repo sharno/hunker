@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import {
   movesResponse,
+  characterDiffResponse,
   reviewCommentsResponse,
   reviewResponse,
   reviewUrl,
@@ -9,6 +10,21 @@ import {
 } from "./fixtures";
 
 const classToken = (token: string) => new RegExp(`(?:^|\\s)${token}(?:\\s|$)`);
+
+test.beforeEach(async ({ page }) => {
+  await page.route("**/api/characters?**", route => {
+    const requestUrl = new URL(route.request().url());
+    const path = requestUrl.searchParams.get("path") ?? "";
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: characterDiffResponse(
+        path,
+        requestUrl.searchParams.get("whitespace") === "ignore",
+      ),
+    });
+  });
+});
 
 test("loads a PR and renders ast-grep intelligence in both review layouts", async ({ page }) => {
   await page.route("**/api/diff?**", route =>

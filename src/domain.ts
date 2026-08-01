@@ -109,6 +109,41 @@ export const ReviewMoves = S.Union([
 ]);
 export type ReviewMoves = typeof ReviewMoves.Type;
 
+export const CharacterRange = S.Struct({
+  start: S.Number,
+  end: S.Number,
+});
+export type CharacterRange = typeof CharacterRange.Type;
+
+export const CharacterDiffRow = S.Struct({
+  oldLine: S.NullOr(S.Number),
+  newLine: S.NullOr(S.Number),
+  oldRanges: S.Array(CharacterRange),
+  newRanges: S.Array(CharacterRange),
+});
+export type CharacterDiffRow = typeof CharacterDiffRow.Type;
+
+export const CharacterDiffResult = S.Struct({
+  path: S.String,
+  ignoreWhitespace: S.Boolean,
+  rows: S.Array(CharacterDiffRow),
+});
+export type CharacterDiffResult = typeof CharacterDiffResult.Type;
+
+export const CharacterDiffState = S.Union([
+  S.TaggedStruct("Loading", {
+    path: S.String,
+    ignoreWhitespace: S.Boolean,
+  }),
+  S.TaggedStruct("Ready", { result: CharacterDiffResult }),
+  S.TaggedStruct("Failed", {
+    path: S.String,
+    ignoreWhitespace: S.Boolean,
+    error: S.String,
+  }),
+]);
+export type CharacterDiffState = typeof CharacterDiffState.Type;
+
 export const FullFileState = S.Union([
   S.TaggedStruct("Loading", { path: S.String }),
   S.TaggedStruct("Ready", {
@@ -180,6 +215,7 @@ export const Model = S.Struct({
   semanticResults: S.Array(SemanticResult),
   semanticRequest: SemanticRequest,
   reviewMoves: ReviewMoves,
+  characterDiffStates: S.Array(CharacterDiffState),
   collapsedPaths: S.Array(S.String),
   collapsedHunks: S.Array(S.String),
   fullFileStates: S.Array(FullFileState),
@@ -219,6 +255,14 @@ export const FailedSemantic = m("FailedSemantic", {
 });
 export const LoadedMoves = m("LoadedMoves", { moves: S.Array(MovedBlock) });
 export const FailedMoves = m("FailedMoves", { error: S.String });
+export const LoadedCharacterDiff = m("LoadedCharacterDiff", {
+  result: CharacterDiffResult,
+});
+export const FailedCharacterDiff = m("FailedCharacterDiff", {
+  path: S.String,
+  ignoreWhitespace: S.Boolean,
+  error: S.String,
+});
 export const ChangedFilter = m("ChangedFilter", { value: S.String });
 export const SelectedFile = m("SelectedFile", { path: S.String });
 export const SelectedViewMode = m("SelectedViewMode", {
@@ -285,6 +329,8 @@ export const Message = S.Union([
   FailedSemantic,
   LoadedMoves,
   FailedMoves,
+  LoadedCharacterDiff,
+  FailedCharacterDiff,
   ChangedFilter,
   SelectedFile,
   SelectedViewMode,

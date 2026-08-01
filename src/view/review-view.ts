@@ -448,6 +448,16 @@ const diffPanelView = (
         )
       : toDiffLines(file.patch, model.ignoreWhitespace);
   const semanticResult = model.semanticResults.find(result => result.path === file.path);
+  const characterDiffState = model.characterDiffStates.find(
+    state => {
+      const statePath = state._tag === "Ready" ? state.result.path : state.path;
+      const ignoresWhitespace =
+        state._tag === "Ready"
+          ? state.result.ignoreWhitespace
+          : state.ignoreWhitespace;
+      return statePath === file.path && ignoresWhitespace === model.ignoreWhitespace;
+    },
+  );
   const parsedSemantic =
     semanticResult?._tag === "Parsed" ? semanticResult : undefined;
   const rangeFor = (side: "old" | "new") =>
@@ -486,6 +496,8 @@ const diffPanelView = (
     path: file.path,
     collapsedHunks: model.collapsedHunks,
     syntaxHighlighting: model.syntaxHighlighting,
+    characterRows:
+      characterDiffState?._tag === "Ready" ? characterDiffState.result.rows : [],
     reviews: {
       comments:
         model.showGitHubReviews && model.githubReviews._tag === "Ready"
@@ -590,6 +602,12 @@ const diffPanelView = (
             ? h.div([h.Class("file-context-error"), h.Role("alert")], [
                 h.strong([], ["Could not load the complete file"]),
                 h.span([], [fullFileState.error]),
+              ])
+            : h.empty,
+          model.characterDiff && characterDiffState?._tag === "Failed"
+            ? h.div([h.Class("file-context-error"), h.Role("alert")], [
+                h.strong([], ["Could not calculate character changes"]),
+                h.span([], [characterDiffState.error]),
               ])
             : h.empty,
           model.semantic ? semanticBannerView(file, model, semanticResult, h) : h.empty,

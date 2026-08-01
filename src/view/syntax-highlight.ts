@@ -18,14 +18,12 @@ import yaml from "highlight.js/lib/languages/yaml";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import { createLowlight } from "lowlight";
 
-import type { Message } from "../domain";
+import type { CharacterRange, Message } from "../domain";
 
 type SyntaxToken = Readonly<{
   text: string;
   classes: ReadonlyArray<string>;
 }>;
-
-export type CharacterRange = Readonly<{ start: number; end: number }>;
 
 const hcl: LanguageFn = hljs => ({
   name: "OpenTofu/HCL",
@@ -160,30 +158,40 @@ const tokenPiece = (
 const renderToken = (
   token: SyntaxToken,
   offset: number,
-  changed: CharacterRange | undefined,
+  changed: ReadonlyArray<CharacterRange>,
   h: HtmlBuilder<Message>,
 ): ReadonlyArray<string | Html> => {
-  if (changed === undefined) return [tokenPiece(token.text, token.classes, false, h)];
   const tokenEnd = offset + token.text.length;
-  const overlapStart = Math.max(offset, changed.start);
-  const overlapEnd = Math.min(tokenEnd, changed.end);
-  if (overlapStart >= overlapEnd) {
+  const boundaries = changed.flatMap(range => {
+    const overlapStart = Math.max(offset, range.start);
+    const overlapEnd = Math.min(tokenEnd, range.end);
+    return overlapStart < overlapEnd
+      ? [overlapStart - offset, overlapEnd - offset]
+      : [];
+  });
+  if (boundaries.length === 0) {
     return [tokenPiece(token.text, token.classes, false, h)];
   }
-  const localStart = overlapStart - offset;
-  const localEnd = overlapEnd - offset;
-  return [
-    tokenPiece(token.text.slice(0, localStart), token.classes, false, h),
-    tokenPiece(token.text.slice(localStart, localEnd), token.classes, true, h),
-    tokenPiece(token.text.slice(localEnd), token.classes, false, h),
-  ].filter((item): item is string | Html => item !== "");
+  const points = [...new Set([0, ...boundaries, token.text.length])].sort(
+    (left, right) => left - right,
+  );
+  return points.slice(0, -1).flatMap((start, index) => {
+    const end = points[index + 1];
+    if (end === undefined || start === end) return [];
+    const absoluteStart = offset + start;
+    const absoluteEnd = offset + end;
+    const isChanged = changed.some(
+      range => absoluteStart < range.end && absoluteEnd > range.start,
+    );
+    return [tokenPiece(token.text.slice(start, end), token.classes, isChanged, h)];
+  });
 };
 
 export const syntaxHighlightedContent = (
   path: string,
   source: string,
   enabled: boolean,
-  changed: CharacterRange | undefined,
+  changed: ReadonlyArray<CharacterRange>,
   h: HtmlBuilder<Message>,
 ): ReadonlyArray<string | Html> => {
   const visibleSource = source || " ";

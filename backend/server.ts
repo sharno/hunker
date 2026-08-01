@@ -17,6 +17,11 @@ import {
 
 import { isGeneratedDiffPath, parseGitDiff } from "../src/diff";
 import {
+  CharacterDiffEngine,
+  CharacterDiffFailed,
+  NativeGitCharacterLive,
+} from "./character-diff-engine";
+import {
   GitHubFetchFailed,
   InvalidGitHubUrl,
   loadFilePair,
@@ -175,6 +180,39 @@ const handleFile = (request: HttpServerRequest.HttpServerRequest) =>
     }),
   );
 
+const handleCharacters = (request: HttpServerRequest.HttpServerRequest) =>
+  Effect.gen(function* () {
+    const requestUrl = new URL(request.url, "http://localhost:8787");
+    const { target, path, previousPath, status } = yield* fileRequest(request);
+    const pair = yield* loadFilePair(target, path, previousPath, status);
+    const engine = yield* CharacterDiffEngine;
+    const result = yield* engine.analyzeFile({
+      path,
+      ...pair,
+      ignoreWhitespace: requestUrl.searchParams.get("whitespace") === "ignore",
+    });
+    return HttpServerResponse.jsonUnsafe(result);
+  }).pipe(
+    Effect.catchTags({
+      InvalidGitHubUrl: error =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+        ),
+      InvalidFileRequest: error =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+        ),
+      GitHubFetchFailed: error =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
+        ),
+      CharacterDiffFailed: (error: CharacterDiffFailed) =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
+        ),
+    }),
+  );
+
 const handleReviews = (request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
     const requestUrl = new URL(request.url, "http://localhost:8787");
@@ -293,12 +331,14 @@ const handleMoves = (request: HttpServerRequest.HttpServerRequest) =>
 const Routes = Layer.mergeAll(
   HttpRouter.add("GET", "/api/diff", handleDiff),
   HttpRouter.add("GET", "/api/file", handleFile),
+  HttpRouter.add("GET", "/api/characters", handleCharacters),
   HttpRouter.add("GET", "/api/semantic", handleSemantic),
   HttpRouter.add("GET", "/api/moves", handleMoves),
   HttpRouter.add("GET", "/api/reviews", handleReviews),
   HttpRouter.add("POST", "/api/reviews/reply", handleReviewReply),
   HttpRouter.add("POST", "/api/reviews/submit", handleSubmitReview),
 ).pipe(
+  Layer.provide(NativeGitCharacterLive),
   Layer.provide(NodeHttpClient.layerUndici),
   Layer.provide(NodeServices.layer),
   Layer.provide(GitHubAuthLive),
@@ -318,6 +358,7 @@ const Main = HttpAppLive.pipe(
   Layer.provide(NodeServices.layer),
   Layer.provide(GitHubAuthLive),
   Layer.provide(AstGrepSemanticLive),
+  Layer.provide(NativeGitCharacterLive),
 );
 
 NodeRuntime.runMain(Layer.launch(Main));

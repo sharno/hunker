@@ -1,7 +1,7 @@
 import type { Html, HtmlBuilder } from "foldkit/html";
 
 import { ToggledHunkCollapse } from "../domain";
-import type { Message } from "../domain";
+import type { CharacterDiffRow, CharacterRange, Message } from "../domain";
 import { hunkKey } from "../diff";
 import type { DiffLine, HunkDiffLine } from "../diff";
 import { inlineReviewThreads } from "./github-review-view";
@@ -19,6 +19,7 @@ export type DiffInteraction = Readonly<{
   path: string;
   collapsedHunks: ReadonlyArray<string>;
   syntaxHighlighting: boolean;
+  characterRows: ReadonlyArray<CharacterDiffRow>;
   reviews: GitHubReviewInteraction;
 }>;
 
@@ -28,64 +29,40 @@ const isInMovedRange = (
 ) =>
   line !== null && ranges.some(range => line >= range.start && line < range.start + range.count);
 
-const sharedPrefixLength = (left: string, right: string) => {
-  let index = 0;
-  while (index < left.length && index < right.length && left[index] === right[index]) {
-    index += 1;
-  }
-  return index;
-};
-
-const sharedSuffixLength = (left: string, right: string, prefix: number) => {
-  let index = 0;
-  while (
-    index < left.length - prefix &&
-    index < right.length - prefix &&
-    left[left.length - 1 - index] === right[right.length - 1 - index]
-  ) {
-    index += 1;
-  }
-  return index;
+const characterRangesFor = (
+  line: DiffLine,
+  rows: ReadonlyArray<CharacterDiffRow>,
+): ReadonlyArray<CharacterRange> => {
+  if (line.kind === "hunk" || line.kind === "context") return [];
+  const lineNumber = line.kind === "add" ? line.newNumber : line.oldNumber;
+  const row = rows.find(candidate =>
+    line.kind === "add"
+      ? candidate.newLine === lineNumber
+      : candidate.oldLine === lineNumber,
+  );
+  return line.kind === "add" ? row?.newRanges ?? [] : row?.oldRanges ?? [];
 };
 
 const codeContent = (
   line: DiffLine,
-  paired: DiffLine | undefined,
   characterDiff: boolean,
   interaction: DiffInteraction,
   h: HtmlBuilder<Message>,
 ): ReadonlyArray<string | Html> => {
-  if (
-    !characterDiff ||
-    paired === undefined ||
-    line.kind === "context" ||
-    line.kind === "hunk"
-  ) {
+  if (!characterDiff || line.kind === "context" || line.kind === "hunk") {
     return syntaxHighlightedContent(
       interaction.path,
       line.content,
       interaction.syntaxHighlighting,
-      undefined,
+      [],
       h,
     );
   }
-  const prefix = sharedPrefixLength(line.content, paired.content);
-  const suffix = sharedSuffixLength(line.content, paired.content, prefix);
-  if (prefix + suffix >= line.content.length) {
-    return syntaxHighlightedContent(
-      interaction.path,
-      line.content,
-      interaction.syntaxHighlighting,
-      undefined,
-      h,
-    );
-  }
-  const end = suffix === 0 ? line.content.length : line.content.length - suffix;
   return syntaxHighlightedContent(
     interaction.path,
     line.content,
     interaction.syntaxHighlighting,
-    { start: prefix, end },
+    characterRangesFor(line, interaction.characterRows),
     h,
   );
 };
@@ -148,14 +125,8 @@ export const unifiedDiffView = (
 ) =>
   h.div(
     [h.Class("diff-lines unified-lines")],
-    visibleLines(lines, interaction).flatMap((line, index, renderedLines) => {
+    visibleLines(lines, interaction).flatMap((line, index) => {
       if (line.kind === "hunk") return [hunkHeader(line, interaction, h)];
-      const paired =
-        line.kind === "remove" && renderedLines[index + 1]?.kind === "add"
-          ? renderedLines[index + 1]
-          : line.kind === "add" && renderedLines[index - 1]?.kind === "remove"
-            ? renderedLines[index - 1]
-            : undefined;
       const diffLine = h.div(
         [
           h.Key(`${index}-${line.kind}`),
@@ -185,7 +156,7 @@ export const unifiedDiffView = (
           ]),
           h.code(
             [h.Class("line-code")],
-            codeContent(line, paired, characterDiff, interaction, h),
+            codeContent(line, characterDiff, interaction, h),
           ),
         ],
       );
@@ -204,21 +175,69 @@ export const unifiedDiffView = (
 
 type SplitRow = Readonly<{ left?: DiffLine; right?: DiffLine }>;
 
-const splitRows = (lines: ReadonlyArray<DiffLine>): ReadonlyArray<SplitRow> => {
+const splitRows = (
+  lines: ReadonlyArray<DiffLine>,
+  characterRows: ReadonlyArray<CharacterDiffRow>,
+): ReadonlyArray<SplitRow> => {
   const rows: Array<SplitRow> = [];
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
     if (line === undefined) continue;
-    const next = lines[index + 1];
-    if (line.kind === "remove" && next?.kind === "add") {
-      rows.push({ left: line, right: next });
-      index += 1;
-    } else if (line.kind === "remove") {
-      rows.push({ left: line });
-    } else if (line.kind === "add") {
-      rows.push({ right: line });
-    } else {
+    if (line.kind !== "remove" && line.kind !== "add") {
       rows.push({ left: line, right: line });
+      continue;
+    }
+
+    const block: Array<DiffLine> = [];
+    while (index < lines.length) {
+      const candidate = lines[index];
+      if (candidate?.kind !== "remove" && candidate?.kind !== "add") break;
+      block.push(candidate);
+      index += 1;
+    }
+    index -= 1;
+    const oldLines = new Map(
+      block.flatMap(candidate =>
+        candidate.kind === "remove" && candidate.oldNumber !== null
+          ? [[candidate.oldNumber, candidate] as const]
+          : [],
+      ),
+    );
+    const newLines = new Map(
+      block.flatMap(candidate =>
+        candidate.kind === "add" && candidate.newNumber !== null
+          ? [[candidate.newNumber, candidate] as const]
+          : [],
+      ),
+    );
+    const consumedOld = new Set<number>();
+    const consumedNew = new Set<number>();
+    for (const pairing of characterRows) {
+      const left = pairing.oldLine === null ? undefined : oldLines.get(pairing.oldLine);
+      const right = pairing.newLine === null ? undefined : newLines.get(pairing.newLine);
+      if (left === undefined && right === undefined) continue;
+      rows.push({ left, right });
+      if (pairing.oldLine !== null) consumedOld.add(pairing.oldLine);
+      if (pairing.newLine !== null) consumedNew.add(pairing.newLine);
+    }
+    const remainingOld = block.filter(
+      candidate =>
+        candidate.kind === "remove" &&
+        candidate.oldNumber !== null &&
+        !consumedOld.has(candidate.oldNumber),
+    );
+    const remainingNew = block.filter(
+      candidate =>
+        candidate.kind === "add" &&
+        candidate.newNumber !== null &&
+        !consumedNew.has(candidate.newNumber),
+    );
+    for (
+      let remainder = 0;
+      remainder < Math.max(remainingOld.length, remainingNew.length);
+      remainder += 1
+    ) {
+      rows.push({ left: remainingOld[remainder], right: remainingNew[remainder] });
     }
   }
   return rows;
@@ -226,7 +245,6 @@ const splitRows = (lines: ReadonlyArray<DiffLine>): ReadonlyArray<SplitRow> => {
 
 const splitCell = (
   line: DiffLine | undefined,
-  paired: DiffLine | undefined,
   side: "left" | "right",
   characterDiff: boolean,
   moved: MovedRanges,
@@ -265,7 +283,7 @@ const splitCell = (
       ]),
       h.code(
         [h.Class("line-code")],
-        codeContent(line, paired, characterDiff, interaction, h),
+        codeContent(line, characterDiff, interaction, h),
       ),
     ],
   );
@@ -280,40 +298,28 @@ export const splitDiffView = (
 ) =>
   h.div(
     [h.Class("diff-lines split-lines")],
-    splitRows(visibleLines(lines, interaction)).flatMap((row, index) => {
-      if (row.left?.kind === "hunk") return [hunkHeader(row.left, interaction, h)];
-      const splitRow = h.div(
-        [h.Key(`split-${index}`), h.Class("split-row")],
-        [
-          splitCell(
-            row.left,
-            row.right?.kind === "add" ? row.right : undefined,
-            "left",
-            characterDiff,
-            moved,
-            interaction,
+    splitRows(visibleLines(lines, interaction), interaction.characterRows).flatMap(
+      (row, index) => {
+        if (row.left?.kind === "hunk") {
+          return [hunkHeader(row.left, interaction, h)];
+        }
+        const splitRow = h.div(
+          [h.Key(`split-${index}`), h.Class("split-row")],
+          [
+            splitCell(row.left, "left", characterDiff, moved, interaction, h),
+            splitCell(row.right, "right", characterDiff, moved, interaction, h),
+          ],
+        );
+        return [
+          splitRow,
+          ...inlineReviewThreads(
+            interaction.path,
+            row.left?.oldNumber ?? null,
+            row.right?.newNumber ?? null,
+            interaction.reviews,
             h,
           ),
-          splitCell(
-            row.right,
-            row.left?.kind === "remove" ? row.left : undefined,
-            "right",
-            characterDiff,
-            moved,
-            interaction,
-            h,
-          ),
-        ],
-      );
-      return [
-        splitRow,
-        ...inlineReviewThreads(
-          interaction.path,
-          row.left?.oldNumber ?? null,
-          row.right?.newNumber ?? null,
-          interaction.reviews,
-          h,
-        ),
-      ];
-    }),
+        ];
+      },
+    ),
   );

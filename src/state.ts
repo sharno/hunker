@@ -13,7 +13,9 @@ import {
   ChangedPrUrl,
   ChangedReplyDraft,
   ChangedReviewBody,
+  CharacterDiffResult,
   CompletedNavigation,
+  FailedCharacterDiff,
   FailedFullFile,
   FailedGitHubReviews,
   FailedMoves,
@@ -22,6 +24,7 @@ import {
   FailedReviewSubmission,
   FailedSemantic,
   GitHubReviewComment,
+  LoadedCharacterDiff,
   LoadedFullFile,
   LoadedGitHubReviews,
   LoadedMoves,
@@ -185,6 +188,50 @@ const MoveResponse = S.Struct({ moves: S.Array(MovedBlock) });
 const FullFileResponse = S.Struct({ oldText: S.String, newText: S.String });
 const GitHubReviewsResponse = S.Struct({ comments: S.Array(GitHubReviewComment) });
 const GitHubReplyResponse = S.Struct({ comment: GitHubReviewComment });
+
+const FetchCharacterDiff = Command.define("FetchCharacterDiff", {
+  args: {
+    url: S.String,
+    path: S.String,
+    previousPath: S.String,
+    status: S.Literals(["modified", "added", "deleted", "renamed"]),
+    ignoreWhitespace: S.Boolean,
+  },
+  messages: [LoadedCharacterDiff, FailedCharacterDiff],
+  execute: ({ url, path, previousPath, status, ignoreWhitespace }) =>
+    Effect.gen(function* () {
+      const client = yield* HttpClient.HttpClient;
+      const query = new URLSearchParams({
+        url,
+        path,
+        previousPath,
+        status,
+        whitespace: ignoreWhitespace ? "ignore" : "show",
+      });
+      const response = yield* client.execute(
+        HttpClientRequest.get(`/api/characters?${query.toString()}`),
+      );
+      const data: unknown = yield* response.json;
+      if (response.status < 200 || response.status >= 300) {
+        return yield* Effect.fail(
+          new Error(responseError(data, "Could not calculate character changes.")),
+        );
+      }
+      const result = yield* S.decodeUnknownEffect(CharacterDiffResult)(data);
+      return LoadedCharacterDiff({ result });
+    }).pipe(
+      Effect.catch(error =>
+        Effect.succeed(
+          FailedCharacterDiff({
+            path,
+            ignoreWhitespace,
+            error: fetchErrorMessage(error),
+          }),
+        ),
+      ),
+      Effect.provide(Http.layer),
+    ),
+});
 
 const FetchFullFile = Command.define("FetchFullFile", {
   args: {
@@ -379,13 +426,66 @@ const requestGitHubReviews = (model: ModelType): UpdateReturn => {
   ];
 };
 
+const requestCharacterDiff = (
+  model: ModelType,
+  file: FileChange,
+): UpdateReturn => {
+  const requested = model.characterDiffStates.some(state => {
+    if (state._tag === "Failed") return false;
+    return state._tag === "Ready"
+      ? state.result.path === file.path &&
+          state.result.ignoreWhitespace === model.ignoreWhitespace
+      : state.path === file.path && state.ignoreWhitespace === model.ignoreWhitespace;
+  });
+  if (!model.characterDiff || model.prUrl.trim() === "" || requested) {
+    return [model, []];
+  }
+  return [
+    evo(model, {
+      characterDiffStates: states => [
+        ...states,
+        {
+          _tag: "Loading" as const,
+          path: file.path,
+          ignoreWhitespace: model.ignoreWhitespace,
+        },
+      ],
+    }),
+    [
+      FetchCharacterDiff({
+        url: model.meta.url,
+        path: file.path,
+        previousPath: file.previousPath,
+        status: file.status,
+        ignoreWhitespace: model.ignoreWhitespace,
+      }),
+    ],
+  ];
+};
+
+const requestCharacterDiffs = (model: ModelType): UpdateReturn => {
+  const selected = model.files.find(file => file.path === model.selectedPath);
+  const files = model.reviewScope === "full" ? model.files : selected === undefined ? [] : [selected];
+  return files.reduce<UpdateReturn>(
+    ([current, commands], file) => {
+      const [next, requested] = requestCharacterDiff(current, file);
+      return [next, [...commands, ...requested]];
+    },
+    [model, []],
+  );
+};
+
 const requestSelectedIntelligence = (model: ModelType): UpdateReturn => {
   const selected = model.files.find(file => file.path === model.selectedPath);
   const [withSemantic, semanticCommands] =
     selected === undefined ? [model, []] : requestSemantic(model, selected);
   const [withMoves, moveCommands] = requestMoves(withSemantic);
   const [withReviews, reviewCommands] = requestGitHubReviews(withMoves);
-  return [withReviews, [...semanticCommands, ...moveCommands, ...reviewCommands]];
+  const [withCharacters, characterCommands] = requestCharacterDiffs(withReviews);
+  return [
+    withCharacters,
+    [...semanticCommands, ...moveCommands, ...reviewCommands, ...characterCommands],
+  ];
 };
 
 const beginReviewLoad = (model: ModelType, url: string): ModelType =>
@@ -396,6 +496,7 @@ const beginReviewLoad = (model: ModelType, url: string): ModelType =>
     semanticResults: () => [],
     semanticRequest: () => ({ _tag: "Idle" as const }),
     reviewMoves: () => ({ _tag: "Idle" as const }),
+    characterDiffStates: () => [],
     reviewedPaths: () => [],
     collapsedPaths: () => [],
     collapsedHunks: () => [],
@@ -419,6 +520,7 @@ const sampleModel = (model: ModelType): ModelType =>
     semanticResults: () => [],
     semanticRequest: () => ({ _tag: "Idle" as const }),
     reviewMoves: () => ({ _tag: "Idle" as const }),
+    characterDiffStates: () => [],
     collapsedPaths: () => [],
     collapsedHunks: () => [],
     fullFileStates: () => [],
@@ -533,6 +635,7 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
           reviewedPaths: () => [],
           semanticRequest: () => ({ _tag: "Idle" as const }),
           reviewMoves: () => ({ _tag: "Idle" as const }),
+          characterDiffStates: () => [],
           collapsedPaths: () => [],
           collapsedHunks: () => [],
           fullFileStates: () => [],
@@ -577,6 +680,40 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
       ],
       FailedMoves: ({ error }) => [
         evo(model, { reviewMoves: () => ({ _tag: "Failed" as const, error }) }),
+        [],
+      ],
+      LoadedCharacterDiff: ({ result }) => [
+        evo(model, {
+          characterDiffStates: states => [
+            ...states.filter(state =>
+              state._tag === "Ready"
+                ? state.result.path !== result.path ||
+                  state.result.ignoreWhitespace !== result.ignoreWhitespace
+                : state.path !== result.path ||
+                  state.ignoreWhitespace !== result.ignoreWhitespace,
+            ),
+            { _tag: "Ready" as const, result },
+          ],
+        }),
+        [],
+      ],
+      FailedCharacterDiff: ({ path, ignoreWhitespace, error }) => [
+        evo(model, {
+          characterDiffStates: states => [
+            ...states.filter(state =>
+              state._tag === "Ready"
+                ? state.result.path !== path ||
+                  state.result.ignoreWhitespace !== ignoreWhitespace
+                : state.path !== path || state.ignoreWhitespace !== ignoreWhitespace,
+            ),
+            {
+              _tag: "Failed" as const,
+              path,
+              ignoreWhitespace,
+              error,
+            },
+          ],
+        }),
         [],
       ],
       LoadedFullFile: ({ path, oldText, newText }) => {
@@ -718,32 +855,31 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
           selectedPath: () => path,
           reviewScope: () => "file" as const,
         });
-        const file = next.files.find(item => item.path === path);
-        const result = file === undefined ? ([next, []] as const) : requestSemantic(next, file);
+        const result = requestSelectedIntelligence(next);
         return synchronizeReviewUrl(result[0], result[1]);
       },
       SelectedReviewScope: ({ value }) => {
         const next = evo(model, { reviewScope: () => value });
-        const result = value === "full" ? requestMoves(next) : ([next, []] as const);
+        const result = requestSelectedIntelligence(next);
         return synchronizeReviewUrl(result[0], result[1]);
       },
       SelectedViewMode: ({ value }) =>
         synchronizeReviewUrl(evo(model, { viewMode: () => value }), []),
-      ToggledWhitespace: () =>
-        synchronizeReviewUrl(
-          evo(model, { ignoreWhitespace: value => !value }),
-          [],
-        ),
+      ToggledWhitespace: () => {
+        const next = evo(model, { ignoreWhitespace: value => !value });
+        const [updated, commands] = requestSelectedIntelligence(next);
+        return synchronizeReviewUrl(updated, commands);
+      },
       ToggledSemantic: () => {
         const next = evo(model, { semantic: value => !value });
         const [updated, commands] = requestSelectedIntelligence(next);
         return synchronizeReviewUrl(updated, commands);
       },
-      ToggledCharacterDiff: () =>
-        synchronizeReviewUrl(
-          evo(model, { characterDiff: value => !value }),
-          [],
-        ),
+      ToggledCharacterDiff: () => {
+        const next = evo(model, { characterDiff: value => !value });
+        const [updated, commands] = requestSelectedIntelligence(next);
+        return synchronizeReviewUrl(updated, commands);
+      },
       ToggledSyntaxHighlighting: () =>
         synchronizeReviewUrl(
           evo(model, { syntaxHighlighting: value => !value }),
@@ -826,6 +962,7 @@ const initialModel = (prUrl: string, options: ReviewOptions) =>
     semanticResults: [],
     semanticRequest: { _tag: "Idle" },
     reviewMoves: { _tag: "Idle" },
+    characterDiffStates: [],
     collapsedPaths: [],
     collapsedHunks: [],
     fullFileStates: [],
