@@ -12,9 +12,14 @@ import {
   ChangedBrowserUrl,
   ChangedPrUrl,
   ChangedReplyDraft,
+  ChangedRepositoryQuery,
   ChangedReviewBody,
+  ClosedRepositoryFile,
+  ClosedToolbarMenus,
   CharacterDiffResult,
   CompletedNavigation,
+  FailedCommitDiff,
+  FailedCommits,
   FailedCharacterDiff,
   FailedFullFile,
   FailedGitHubReviews,
@@ -22,13 +27,21 @@ import {
   FailedReply,
   FailedReview,
   FailedReviewSubmission,
+  FailedRepositoryFile,
+  FailedRepositoryFiles,
+  FailedRepositorySearch,
   FailedSemantic,
   GitHubReviewComment,
   LoadedCharacterDiff,
+  LoadedCommitDiff,
+  LoadedCommits,
   LoadedFullFile,
   LoadedGitHubReviews,
   LoadedMoves,
   LoadedReview,
+  LoadedRepositoryFile,
+  LoadedRepositoryFiles,
+  LoadedRepositorySearch,
   LoadedSemantic,
   Model,
   MovedBlock,
@@ -37,11 +50,16 @@ import {
   RefreshedReview,
   RequestedNavigation,
   SelectedFile,
+  SelectedCommit,
+  SelectedReviewTab,
+  SelectedRepositoryFile,
   SelectedReviewScope,
   SelectedViewMode,
   SemanticResult,
   SubmittedReply,
   SubmittedReview,
+  SubmittedRepositorySearch,
+  ReturnedToCommitList,
   SelectedInlineDiffMode,
   ToggledFileCollapse,
   ToggledFullFile,
@@ -52,6 +70,7 @@ import {
   ToggledSemantic,
   ToggledSidebar,
   ToggledSyntaxHighlighting,
+  ToggledToolbarMenu,
   ToggledWhitespace,
 } from "./domain";
 import type {
@@ -61,6 +80,26 @@ import type {
   ReviewMeta,
 } from "./domain";
 import { hunkKey, parseGitDiff } from "./diff";
+import {
+  commitGitHubUrl,
+  FetchCommitDiff,
+  FetchCommits,
+} from "./features/commits";
+import {
+  changeRepositoryQuery,
+  closeRepositoryFile,
+  loadRepositoryLocation,
+  repositoryFileFailed,
+  repositoryFileLoaded,
+  repositoryFilesFailed,
+  repositoryFilesLoaded,
+  repositoryOptionsFromSearch,
+  repositoryRouteFromPathname,
+  repositorySearchFailed,
+  repositorySearchLoaded,
+  selectRepositoryFile,
+  submitRepositorySearch,
+} from "./features/repository";
 import {
   defaultReviewOptions,
   githubUrlFromPathname,
@@ -382,6 +421,11 @@ const FetchMoves = Command.define("FetchMoves", {
     ),
 });
 
+const activeDiffUrl = (model: ModelType) =>
+  model.reviewTab === "commits" && model.selectedCommit !== ""
+    ? commitGitHubUrl(model.meta, model.selectedCommit)
+    : model.meta.url;
+
 const requestSemantic = (model: ModelType, file: FileChange): UpdateReturn => {
   const alreadyLoaded = model.semanticResults.some(result => result.path === file.path);
   const alreadyLoading =
@@ -400,7 +444,7 @@ const requestSemantic = (model: ModelType, file: FileChange): UpdateReturn => {
     }),
     [
       FetchSemantic({
-        url: model.meta.url,
+        url: activeDiffUrl(model),
         path: file.path,
         previousPath: file.previousPath,
         status: file.status,
@@ -421,13 +465,14 @@ const requestMoves = (model: ModelType): UpdateReturn => {
   }
   return [
     evo(model, { reviewMoves: () => ({ _tag: "Loading" as const }) }),
-    [FetchMoves({ url: model.meta.url })],
+    [FetchMoves({ url: activeDiffUrl(model) })],
   ];
 };
 
 const requestGitHubReviews = (model: ModelType): UpdateReturn => {
   if (
     !model.showGitHubReviews ||
+    model.reviewTab !== "files" ||
     model.meta.number === "compare" ||
     model.prUrl.trim() === "" ||
     model.githubReviews._tag === "Loading" ||
@@ -476,7 +521,7 @@ const requestCharacterDiff = (
     }),
     [
       FetchCharacterDiff({
-        url: model.meta.url,
+        url: activeDiffUrl(model),
         path: file.path,
         previousPath: file.previousPath,
         status: file.status,
@@ -512,6 +557,68 @@ const requestSelectedIntelligence = (model: ModelType): UpdateReturn => {
   ];
 };
 
+const resetDiffAnalysis = (model: ModelType): ModelType =>
+  evo(model, {
+    semanticResults: () => [],
+    semanticRequest: () => ({ _tag: "Idle" as const }),
+    reviewMoves: () => ({ _tag: "Idle" as const }),
+    characterDiffStates: () => [],
+    collapsedPaths: () => [],
+    collapsedHunks: () => [],
+    fullFileStates: () => [],
+  });
+
+const requestCommits = (model: ModelType): UpdateReturn => {
+  if (
+    model.meta.number === "compare" ||
+    model.commits._tag === "Loading" ||
+    model.commits._tag === "Ready"
+  ) {
+    return [model, []];
+  }
+  return [
+    evo(model, { commits: () => ({ _tag: "Loading" as const }) }),
+    [FetchCommits({ url: model.meta.url })],
+  ];
+};
+
+const requestCommitDiff = (model: ModelType, sha: string): UpdateReturn => {
+  if (sha === "" || model.meta.number === "compare") return [model, []];
+  if (model.commitDiff._tag === "Loading" && model.commitDiff.sha === sha) {
+    return [model, []];
+  }
+  if (model.commitDiff._tag === "Ready" && model.commitDiff.sha === sha) {
+    const files = model.commitDiff.files;
+    const ready = resetDiffAnalysis(
+      evo(model, {
+        selectedCommit: () => sha,
+        files: () => files,
+      }),
+    );
+    return requestSelectedIntelligence(ready);
+  }
+  return [
+    resetDiffAnalysis(
+      evo(model, {
+        selectedCommit: () => sha,
+        commitDiff: () => ({ _tag: "Loading" as const, sha }),
+      }),
+    ),
+    [FetchCommitDiff({ repository: model.meta.repository, sha })],
+  ];
+};
+
+const requestReviewLocation = (model: ModelType): UpdateReturn => {
+  if (model.reviewTab === "files") return requestSelectedIntelligence(model);
+  const [withCommits, commitCommands] = requestCommits(model);
+  if (model.selectedCommit === "") return [withCommits, commitCommands];
+  const [withDiff, diffCommands] = requestCommitDiff(
+    withCommits,
+    model.selectedCommit,
+  );
+  return [withDiff, [...commitCommands, ...diffCommands]];
+};
+
 const beginReviewLoad = (model: ModelType, url: string): ModelType =>
   evo(model, {
     phase: () => "loading" as const,
@@ -531,15 +638,25 @@ const beginReviewLoad = (model: ModelType, url: string): ModelType =>
     replyStates: () => [],
     reviewBody: () => "",
     reviewSubmission: () => ({ _tag: "Idle" as const }),
+    commits: () => ({ _tag: "Idle" as const }),
+    commitDiff: () => ({ _tag: "Idle" as const }),
+    toolbarMenu: () => "none" as const,
   });
 
 const sampleModel = (model: ModelType): ModelType =>
   evo(model, {
+    page: () => "review" as const,
     phase: () => "ready" as const,
     error: () => "",
     prUrl: () => "",
     meta: () => sampleMeta,
     files: () => sampleFiles,
+    pullRequestFiles: () => sampleFiles,
+    reviewTab: () => "files" as const,
+    commits: () => ({ _tag: "Idle" as const }),
+    selectedCommit: () => "",
+    commitDiff: () => ({ _tag: "Idle" as const }),
+    toolbarMenu: () => "none" as const,
     selectedPath: () => sampleFiles[0]?.path ?? "",
     reviewedPaths: () => [],
     semanticResults: () => [],
@@ -569,6 +686,8 @@ const reviewOptions = (model: ModelType): ReviewOptions => ({
   sidebarCollapsed: model.sidebarCollapsed,
   showGitHubReviews: model.showGitHubReviews,
   selectedPath: model.selectedPath,
+  reviewTab: model.reviewTab,
+  selectedCommit: model.selectedCommit,
 });
 
 const applyReviewOptions = (
@@ -585,6 +704,8 @@ const applyReviewOptions = (
     sidebarCollapsed: () => options.sidebarCollapsed,
     showGitHubReviews: () => options.showGitHubReviews,
     selectedPath: () => options.selectedPath,
+    reviewTab: () => options.reviewTab,
+    selectedCommit: () => options.selectedCommit,
   });
 
 const synchronizeReviewUrl = (
@@ -611,9 +732,15 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         const href = localReviewUrl(url, {
           ...reviewOptions(model),
           selectedPath: "",
+          reviewTab: "files",
+          selectedCommit: "",
+        });
+        const fresh = evo(model, {
+          reviewTab: () => "files" as const,
+          selectedCommit: () => "",
         });
         return [
-          beginReviewLoad(model, url),
+          beginReviewLoad(fresh, url),
           [
             FetchReview({ url }),
             ...(href === undefined ? [] : [Navigate({ href, method: "push" })]),
@@ -625,8 +752,26 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         const url = model.meta.url || model.prUrl.trim();
         return [beginReviewLoad(model, url), [FetchReview({ url })]];
       },
+      ToggledToolbarMenu: ({ value }) => [
+        evo(model, {
+          toolbarMenu: current => current === value ? "none" : value,
+        }),
+        [],
+      ],
+      ClosedToolbarMenus: () => [
+        evo(model, { toolbarMenu: () => "none" as const }),
+        [],
+      ],
       ChangedBrowserUrl: ({ pathname, search }) => {
         if (pathname === "/") return [sampleModel(model), []];
+        const repositoryRoute = repositoryRouteFromPathname(pathname);
+        if (repositoryRoute !== undefined) {
+          return loadRepositoryLocation(
+            model,
+            repositoryRoute,
+            repositoryOptionsFromSearch(search),
+          );
+        }
         const url = githubUrlFromPathname(pathname);
         if (url === undefined) {
           return [
@@ -637,9 +782,20 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
             [],
           ];
         }
-        const withOptions = applyReviewOptions(model, reviewOptionsFromSearch(search));
+        const options = reviewOptionsFromSearch(search);
+        const tabChanged = options.reviewTab !== model.reviewTab;
+        const withOptions = applyReviewOptions(model, options);
         if (url === model.prUrl || url === model.meta.url) {
-          return requestSelectedIntelligence(withOptions);
+          const located =
+            tabChanged && options.reviewTab === "files"
+              ? resetDiffAnalysis(
+                  evo(withOptions, {
+                    files: () => model.pullRequestFiles,
+                    commitDiff: () => ({ _tag: "Idle" as const }),
+                  }),
+                )
+              : withOptions;
+          return requestReviewLocation(located);
         }
         return [beginReviewLoad(withOptions, url), [FetchReview({ url })]];
       },
@@ -650,10 +806,12 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
       CompletedNavigation: () => [model, []],
       LoadedReview: ({ meta, files }) => {
         const next = evo(model, {
+          page: () => "review" as const,
           phase: () => "ready" as const,
           prUrl: () => meta.url,
           meta: () => meta,
           files: () => files,
+          pullRequestFiles: () => files,
           selectedPath: selectedPath =>
             files.some(file => file.path === selectedPath)
               ? selectedPath
@@ -672,13 +830,66 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
           reviewBody: () => "",
           reviewSubmission: () => ({ _tag: "Idle" as const }),
         });
-        const [loaded, commands] = requestSelectedIntelligence(next);
+        const [loaded, commands] = requestReviewLocation(next);
         return synchronizeReviewUrl(loaded, commands);
       },
       FailedReview: ({ error }) => [
         evo(model, { phase: () => "error" as const, error: () => error }),
         [],
       ],
+      LoadedCommits: ({ commits }) => [
+        evo(model, {
+          commits: () => ({ _tag: "Ready" as const, commits }),
+        }),
+        [],
+      ],
+      FailedCommits: ({ error }) => [
+        evo(model, {
+          commits: () => ({ _tag: "Failed" as const, error }),
+        }),
+        [],
+      ],
+      LoadedCommitDiff: ({ sha, files }) => {
+        if (
+          model.reviewTab !== "commits" ||
+          model.selectedCommit !== sha ||
+          model.commitDiff._tag !== "Loading" ||
+          model.commitDiff.sha !== sha
+        ) {
+          return [model, []];
+        }
+        const next = evo(model, {
+          files: () => files,
+          commitDiff: () => ({ _tag: "Ready" as const, sha, files }),
+          selectedPath: selectedPath =>
+            files.some(file => file.path === selectedPath)
+              ? selectedPath
+              : (files[0]?.path ?? ""),
+        });
+        const [loaded, commands] = requestSelectedIntelligence(next);
+        return synchronizeReviewUrl(loaded, commands);
+      },
+      FailedCommitDiff: ({ sha, error }) =>
+        model.reviewTab === "commits" && model.selectedCommit === sha
+          ? [
+              evo(model, {
+                commitDiff: () => ({ _tag: "Failed" as const, sha, error }),
+              }),
+              [],
+            ]
+          : [model, []],
+      LoadedRepositoryFiles: ({ files }) => repositoryFilesLoaded(model, files),
+      FailedRepositoryFiles: ({ error }) => repositoryFilesFailed(model, error),
+      ChangedRepositoryQuery: ({ value }) => changeRepositoryQuery(model, value),
+      SubmittedRepositorySearch: () => submitRepositorySearch(model),
+      LoadedRepositorySearch: input => repositorySearchLoaded(model, input),
+      FailedRepositorySearch: ({ query, error }) =>
+        repositorySearchFailed(model, query, error),
+      SelectedRepositoryFile: ({ path }) => selectRepositoryFile(model, path),
+      ClosedRepositoryFile: () => closeRepositoryFile(model),
+      LoadedRepositoryFile: input => repositoryFileLoaded(model, input),
+      FailedRepositoryFile: ({ path, error }) =>
+        repositoryFileFailed(model, path, error),
       LoadedSemantic: ({ path, result }) => [
         evo(model, {
           semanticResults: results => [
@@ -895,6 +1106,48 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         const result = requestSelectedIntelligence(next);
         return synchronizeReviewUrl(result[0], result[1]);
       },
+      SelectedReviewTab: ({ value }) => {
+        if (value === "files") {
+          const files = model.pullRequestFiles;
+          const next = resetDiffAnalysis(
+            evo(model, {
+              reviewTab: () => "files" as const,
+              selectedCommit: () => "",
+              commitDiff: () => ({ _tag: "Idle" as const }),
+              files: () => files,
+              selectedPath: selectedPath =>
+                files.some(file => file.path === selectedPath)
+                  ? selectedPath
+                  : (files[0]?.path ?? ""),
+            }),
+          );
+          const [loaded, commands] = requestSelectedIntelligence(next);
+          return synchronizeReviewUrl(loaded, commands);
+        }
+        const next = resetDiffAnalysis(
+          evo(model, {
+            reviewTab: () => "commits" as const,
+            selectedCommit: () => "",
+            commitDiff: () => ({ _tag: "Idle" as const }),
+          }),
+        );
+        const [loaded, commands] = requestCommits(next);
+        return synchronizeReviewUrl(loaded, commands);
+      },
+      SelectedCommit: ({ sha }) => {
+        const [next, commands] = requestCommitDiff(model, sha);
+        return synchronizeReviewUrl(next, commands);
+      },
+      ReturnedToCommitList: () =>
+        synchronizeReviewUrl(
+          resetDiffAnalysis(
+            evo(model, {
+              selectedCommit: () => "",
+              commitDiff: () => ({ _tag: "Idle" as const }),
+            }),
+          ),
+          [],
+        ),
       SelectedReviewScope: ({ value }) => {
         const next = evo(model, { reviewScope: () => value });
         const result = requestSelectedIntelligence(next);
@@ -980,7 +1233,7 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
           next,
           [
             FetchFullFile({
-              url: model.meta.url,
+              url: activeDiffUrl(model),
               path,
               previousPath: file.previousPath,
               status: file.status,
@@ -993,12 +1246,28 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
 
 const initialModel = (prUrl: string, options: ReviewOptions) =>
   Model.make({
+    page: "review",
     phase: prUrl === "" ? "ready" : "loading",
     error: "",
     prUrl,
     filter: "",
     meta: sampleMeta,
     files: sampleFiles,
+    pullRequestFiles: sampleFiles,
+    reviewTab: options.reviewTab,
+    commits: { _tag: "Idle" },
+    selectedCommit: options.selectedCommit,
+    commitDiff: { _tag: "Idle" },
+    repositoryBrowser: {
+      owner: "",
+      name: "",
+      query: "",
+      selectedPath: "",
+      files: { _tag: "Idle" },
+      search: { _tag: "Idle" },
+      file: { _tag: "Idle" },
+    },
+    toolbarMenu: "none",
     selectedPath: options.selectedPath || sampleFiles[0]?.path || "",
     sidebarCollapsed: options.sidebarCollapsed,
     reviewScope: options.reviewScope,
@@ -1025,6 +1294,15 @@ const initialModel = (prUrl: string, options: ReviewOptions) =>
   });
 
 export const init: Runtime.RoutingApplicationInit<ModelType, Message> = url => {
+  const repositoryRoute = repositoryRouteFromPathname(url.pathname);
+  if (repositoryRoute !== undefined) {
+    const model = initialModel("", defaultReviewOptions);
+    return loadRepositoryLocation(
+      model,
+      repositoryRoute,
+      repositoryOptionsFromSearch(Option.getOrElse(url.search, () => "")),
+    );
+  }
   const prUrl = githubUrlFromPathname(url.pathname) ?? "";
   const options =
     prUrl === ""

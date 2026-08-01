@@ -1,0 +1,99 @@
+import { Effect, Schema as S } from "effect";
+import { HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { Command, Http } from "foldkit";
+
+import {
+  FailedCommitDiff,
+  FailedCommits,
+  FileChange,
+  LoadedCommitDiff,
+  LoadedCommits,
+  PullCommit,
+} from "../domain";
+import type { Message, ReviewMeta } from "../domain";
+import { parseGitDiff } from "../diff";
+
+const errorMessage = (value: unknown, fallback: string) =>
+  typeof value === "object" &&
+  value !== null &&
+  typeof (value as Record<string, unknown>).error === "string"
+    ? String((value as Record<string, unknown>).error)
+    : fallback;
+
+const commitsResponse = S.Struct({ commits: S.Array(PullCommit) });
+const reviewResponse = S.Struct({
+  title: S.String,
+  repository: S.String,
+  number: S.String,
+  author: S.String,
+  base: S.String,
+  head: S.String,
+  url: S.String,
+  diff: S.String,
+});
+
+export const commitGitHubUrl = (meta: ReviewMeta, sha: string) =>
+  `https://github.com/${meta.repository}/commit/${sha}`;
+
+export const FetchCommits = Command.define("FetchCommits", {
+  args: { url: S.String },
+  messages: [LoadedCommits, FailedCommits],
+  execute: ({ url }) =>
+    Effect.gen(function* () {
+      const client = yield* HttpClient.HttpClient;
+      const response = yield* client.execute(
+        HttpClientRequest.get(`/api/commits?url=${encodeURIComponent(url)}`),
+      );
+      const data: unknown = yield* response.json;
+      if (response.status < 200 || response.status >= 300) {
+        return yield* Effect.fail(
+          new Error(errorMessage(data, "Could not load this pull request's commits.")),
+        );
+      }
+      const decoded = yield* S.decodeUnknownEffect(commitsResponse)(data);
+      return LoadedCommits({ commits: decoded.commits });
+    }).pipe(
+      Effect.catch(error =>
+        Effect.succeed(
+          FailedCommits({
+            error: error instanceof Error ? error.message : "Could not load commits.",
+          }),
+        ),
+      ),
+      Effect.provide(Http.layer),
+    ),
+});
+
+export const FetchCommitDiff = Command.define("FetchCommitDiff", {
+  args: { repository: S.String, sha: S.String },
+  messages: [LoadedCommitDiff, FailedCommitDiff],
+  execute: ({ repository, sha }) =>
+    Effect.gen(function* () {
+      const client = yield* HttpClient.HttpClient;
+      const url = `https://github.com/${repository}/commit/${sha}`;
+      const response = yield* client.execute(
+        HttpClientRequest.get(`/api/diff?url=${encodeURIComponent(url)}`),
+      );
+      const data: unknown = yield* response.json;
+      if (response.status < 200 || response.status >= 300) {
+        return yield* Effect.fail(
+          new Error(errorMessage(data, "Could not load this commit's diff.")),
+        );
+      }
+      const decoded = yield* S.decodeUnknownEffect(reviewResponse)(data);
+      const files: ReadonlyArray<FileChange> = parseGitDiff(decoded.diff);
+      return LoadedCommitDiff({ sha, files });
+    }).pipe(
+      Effect.catch(error =>
+        Effect.succeed(
+          FailedCommitDiff({
+            sha,
+            error: error instanceof Error ? error.message : "Could not load commit diff.",
+          }),
+        ),
+      ),
+      Effect.provide(Http.layer),
+    ),
+});
+
+export type CommitCommand = Command.Command<Message>;

@@ -20,7 +20,14 @@ export type CompareTarget = Readonly<{
   range: string;
 }>;
 
-export type GitHubTarget = PullTarget | CompareTarget;
+export type CommitTarget = Readonly<{
+  _tag: "CommitTarget";
+  owner: string;
+  repo: string;
+  sha: string;
+}>;
+
+export type GitHubTarget = PullTarget | CompareTarget | CommitTarget;
 
 export class InvalidGitHubUrl extends Data.TaggedError("InvalidGitHubUrl")<{
   readonly message: string;
@@ -39,7 +46,9 @@ export const parseGitHubUrl = (
     url = new URL(input);
   } catch {
     return Effect.fail(
-      new InvalidGitHubUrl({ message: "Paste a GitHub pull request or compare URL." }),
+      new InvalidGitHubUrl({
+        message: "Paste a GitHub pull request, compare, or commit URL.",
+      }),
     );
   }
 
@@ -61,8 +70,13 @@ export const parseGitHubUrl = (
   if (resource === "compare" && id.length > 2) {
     return Effect.succeed<GitHubTarget>({ _tag: "CompareTarget", owner, repo, range: id });
   }
+  if (resource === "commit" && /^[0-9a-f]{7,64}$/i.test(id)) {
+    return Effect.succeed<GitHubTarget>({ _tag: "CommitTarget", owner, repo, sha: id });
+  }
   return Effect.fail(
-    new InvalidGitHubUrl({ message: "Paste a GitHub pull request or compare URL." }),
+    new InvalidGitHubUrl({
+      message: "Paste a GitHub pull request, compare, or commit URL.",
+    }),
   );
 };
 
@@ -133,6 +147,8 @@ const apiUrl = (target: GitHubTarget) =>
         `https://api.github.com/repos/${owner}/${repo}/pulls/${number}`,
       CompareTarget: ({ owner, repo, range }) =>
         `https://api.github.com/repos/${owner}/${repo}/compare/${range}`,
+      CommitTarget: ({ owner, repo, sha }) =>
+        `https://api.github.com/repos/${owner}/${repo}/commits/${sha}`,
     }),
   );
 
@@ -144,6 +160,8 @@ export const loadReview = (target: GitHubTarget) =>
           `https://github.com/${owner}/${repo}/pull/${number}`,
         CompareTarget: ({ owner, repo, range }) =>
           `https://github.com/${owner}/${repo}/compare/${range}`,
+        CommitTarget: ({ owner, repo, sha }) =>
+          `https://github.com/${owner}/${repo}/commit/${sha}`,
       }),
     );
     const diffResponse = yield* executeGitHub(apiUrl(target), "application/vnd.github.diff");
@@ -168,6 +186,26 @@ export const loadReview = (target: GitHubTarget) =>
       "application/vnd.github+json",
     );
     const metadata = asRecord(yield* metadataResponse.json);
+    if (target._tag === "CommitTarget") {
+      const commit = asRecord(metadata.commit);
+      const commitAuthor = asRecord(commit.author);
+      const user = asRecord(metadata.author);
+      const parents = Array.isArray(metadata.parents) ? metadata.parents : [];
+      const parent = asRecord(parents[0]);
+      const message = stringField(commit, "message", `Commit ${target.sha.slice(0, 7)}`);
+      return {
+        title: message.split("\n")[0] ?? message,
+        repository: `${target.owner}/${target.repo}`,
+        number: target.sha.slice(0, 7),
+        author:
+          stringField(user, "login", "") ||
+          stringField(commitAuthor, "name", "GitHub user"),
+        base: stringField(parent, "sha", ""),
+        head: stringField(metadata, "sha", target.sha),
+        url: webUrl,
+        diff,
+      };
+    }
     const user = asRecord(metadata.user);
     const base = asRecord(metadata.base);
     const head = asRecord(metadata.head);
@@ -186,6 +224,60 @@ export const loadReview = (target: GitHubTarget) =>
 
 export type FileVersion = "base" | "head";
 
+export type PullCommit = Readonly<{
+  sha: string;
+  message: string;
+  author: string;
+  avatarUrl: string;
+  authoredAt: string;
+  htmlUrl: string;
+}>;
+
+const decodePullCommit = (value: unknown): PullCommit | undefined => {
+  const item = asRecord(value);
+  const sha = stringField(item, "sha", "");
+  if (sha === "") return undefined;
+  const commit = asRecord(item.commit);
+  const authored = asRecord(commit.author);
+  const user = asRecord(item.author);
+  return {
+    sha,
+    message: stringField(commit, "message", `Commit ${sha.slice(0, 7)}`),
+    author:
+      stringField(user, "login", "") || stringField(authored, "name", "GitHub user"),
+    avatarUrl: stringField(user, "avatar_url", ""),
+    authoredAt: stringField(authored, "date", ""),
+    htmlUrl: stringField(item, "html_url", ""),
+  };
+};
+
+export const decodePullCommits = (value: unknown): ReadonlyArray<PullCommit> =>
+  Array.isArray(value)
+    ? value.flatMap(item => {
+        const commit = decodePullCommit(item);
+        return commit === undefined ? [] : [commit];
+      })
+    : [];
+
+export const loadPullCommits = (target: PullTarget) =>
+  Effect.gen(function* () {
+    const commits: Array<PullCommit> = [];
+    let page = 1;
+    let hasNextPage = true;
+    while (hasNextPage) {
+      const response = yield* executeGitHub(
+        `https://api.github.com/repos/${target.owner}/${target.repo}/pulls/${target.number}/commits?per_page=100&page=${page}`,
+        "application/vnd.github+json",
+      );
+      const value: unknown = yield* response.json;
+      const rawCount = Array.isArray(value) ? value.length : 0;
+      commits.push(...decodePullCommits(value));
+      hasNextPage = rawCount === 100;
+      page += 1;
+    }
+    return commits;
+  });
+
 const loadTargetRefs = (target: GitHubTarget) =>
   target._tag === "CompareTarget"
     ? Effect.succeed(
@@ -197,6 +289,13 @@ const loadTargetRefs = (target: GitHubTarget) =>
     : Effect.gen(function* () {
         const response = yield* executeGitHub(apiUrl(target), "application/vnd.github+json");
         const metadata = asRecord(yield* response.json);
+        if (target._tag === "CommitTarget") {
+          const parents = Array.isArray(metadata.parents) ? metadata.parents : [];
+          return {
+            base: stringField(asRecord(parents[0]), "sha", ""),
+            head: stringField(metadata, "sha", target.sha),
+          };
+        }
         return {
           base: stringField(asRecord(metadata.base), "sha", ""),
           head: stringField(asRecord(metadata.head), "sha", ""),

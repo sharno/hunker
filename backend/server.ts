@@ -26,11 +26,17 @@ import {
   InvalidGitHubUrl,
   loadFilePair,
   loadFilePairs,
+  loadPullCommits,
   loadReview,
   parseGitHubUrl,
 } from "./github";
 import type { FileStatus } from "./github";
 import { GitHubAuthLive } from "./github-auth";
+import {
+  LocalRepository,
+  LocalRepositoryFailed,
+  LocalRepositoryLive,
+} from "./local-repository";
 import {
   loadReviewComments,
   replyToReviewComment,
@@ -82,6 +88,26 @@ const pullTarget = (url: string) =>
     return target;
   });
 
+const localRepositoryRequest = (request: HttpServerRequest.HttpServerRequest) =>
+  Effect.gen(function* () {
+    const requestUrl = new URL(request.url, "http://localhost:8787");
+    const [owner, name, ...remaining] = (
+      requestUrl.searchParams.get("repository") ?? ""
+    ).split("/");
+    if (
+      remaining.length > 0 ||
+      owner === undefined ||
+      owner === "" ||
+      name === undefined ||
+      name === ""
+    ) {
+      return yield* new InvalidReviewRequest({
+        message: "Choose a repository in owner/name format.",
+      });
+    }
+    return { requestUrl, repository: { owner, name } };
+  });
+
 const ReplyBody = S.Struct({
   url: S.String,
   commentId: S.Number,
@@ -121,6 +147,89 @@ const handleDiff = (request: HttpServerRequest.HttpServerRequest) =>
         Effect.succeed(
           HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
         ),
+    }),
+  );
+
+const handleCommits = (request: HttpServerRequest.HttpServerRequest) =>
+  Effect.gen(function* () {
+    const requestUrl = new URL(request.url, "http://localhost:8787");
+    const target = yield* pullTarget(requestUrl.searchParams.get("url") ?? "");
+    const commits = yield* loadPullCommits(target);
+    return HttpServerResponse.jsonUnsafe({ commits });
+  }).pipe(
+    Effect.catchTags({
+      InvalidGitHubUrl: error =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+        ),
+      InvalidReviewRequest: error =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+        ),
+      GitHubFetchFailed: error =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
+        ),
+    }),
+  );
+
+const localRepositoryError = (error: LocalRepositoryFailed) =>
+  Effect.succeed(
+    HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
+  );
+
+const handleRepositoryFiles = (request: HttpServerRequest.HttpServerRequest) =>
+  Effect.gen(function* () {
+    const { repository } = yield* localRepositoryRequest(request);
+    const local = yield* LocalRepository;
+    const files = yield* local.listFiles(repository);
+    return HttpServerResponse.jsonUnsafe({ files });
+  }).pipe(
+    Effect.catchTags({
+      InvalidReviewRequest: error =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+        ),
+      LocalRepositoryFailed: localRepositoryError,
+    }),
+  );
+
+const handleRepositorySearch = (request: HttpServerRequest.HttpServerRequest) =>
+  Effect.gen(function* () {
+    const { requestUrl, repository } = yield* localRepositoryRequest(request);
+    const query = requestUrl.searchParams.get("query")?.trim() ?? "";
+    if (query === "") {
+      return yield* new InvalidReviewRequest({ message: "Enter a search query." });
+    }
+    const local = yield* LocalRepository;
+    const results = yield* local.search(repository, query);
+    return HttpServerResponse.jsonUnsafe(results);
+  }).pipe(
+    Effect.catchTags({
+      InvalidReviewRequest: error =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+        ),
+      LocalRepositoryFailed: localRepositoryError,
+    }),
+  );
+
+const handleRepositoryFile = (request: HttpServerRequest.HttpServerRequest) =>
+  Effect.gen(function* () {
+    const { requestUrl, repository } = yield* localRepositoryRequest(request);
+    const local = yield* LocalRepository;
+    const file = yield* local.readFile(
+      repository,
+      requestUrl.searchParams.get("path") ?? "",
+    );
+    return HttpServerResponse.jsonUnsafe(file);
+  }).pipe(
+    Effect.catchTags({
+      InvalidReviewRequest: error =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+        ),
+      LocalRepositoryFailed: localRepositoryError,
     }),
   );
 
@@ -332,6 +441,10 @@ const handleMoves = (request: HttpServerRequest.HttpServerRequest) =>
 
 const Routes = Layer.mergeAll(
   HttpRouter.add("GET", "/api/diff", handleDiff),
+  HttpRouter.add("GET", "/api/commits", handleCommits),
+  HttpRouter.add("GET", "/api/repository/files", handleRepositoryFiles),
+  HttpRouter.add("GET", "/api/repository/search", handleRepositorySearch),
+  HttpRouter.add("GET", "/api/repository/file", handleRepositoryFile),
   HttpRouter.add("GET", "/api/file", handleFile),
   HttpRouter.add("GET", "/api/characters", handleCharacters),
   HttpRouter.add("GET", "/api/semantic", handleSemantic),
@@ -340,11 +453,12 @@ const Routes = Layer.mergeAll(
   HttpRouter.add("POST", "/api/reviews/reply", handleReviewReply),
   HttpRouter.add("POST", "/api/reviews/submit", handleSubmitReview),
 ).pipe(
+  Layer.provide(LocalRepositoryLive),
   Layer.provide(NativeGitCharacterLive),
   Layer.provide(NodeHttpClient.layerUndici),
-  Layer.provide(NodeServices.layer),
   Layer.provide(GitHubAuthLive),
   Layer.provide(AstGrepSemanticLive),
+  Layer.provide(NodeServices.layer),
 );
 
 const HttpAppLive = Layer.unwrap(
@@ -356,11 +470,12 @@ const HttpAppLive = Layer.unwrap(
 const Main = HttpAppLive.pipe(
   HttpServer.withLogAddress,
   Layer.provide(NodeHttpServer.layer(createServer, { port: 8787 })),
+  Layer.provide(LocalRepositoryLive),
   Layer.provide(NodeHttpClient.layerUndici),
-  Layer.provide(NodeServices.layer),
   Layer.provide(GitHubAuthLive),
   Layer.provide(AstGrepSemanticLive),
   Layer.provide(NativeGitCharacterLive),
+  Layer.provide(NodeServices.layer),
 );
 
 NodeRuntime.runMain(Layer.launch(Main));

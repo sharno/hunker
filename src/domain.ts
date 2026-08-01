@@ -22,6 +22,91 @@ export const ReviewMeta = S.Struct({
 });
 export type ReviewMeta = typeof ReviewMeta.Type;
 
+export const PullCommit = S.Struct({
+  sha: S.String,
+  message: S.String,
+  author: S.String,
+  avatarUrl: S.String,
+  authoredAt: S.String,
+  htmlUrl: S.String,
+});
+export type PullCommit = typeof PullCommit.Type;
+
+export const PullCommits = S.Union([
+  S.TaggedStruct("Idle", {}),
+  S.TaggedStruct("Loading", {}),
+  S.TaggedStruct("Ready", { commits: S.Array(PullCommit) }),
+  S.TaggedStruct("Failed", { error: S.String }),
+]);
+export type PullCommits = typeof PullCommits.Type;
+
+export const CommitDiff = S.Union([
+  S.TaggedStruct("Idle", {}),
+  S.TaggedStruct("Loading", { sha: S.String }),
+  S.TaggedStruct("Ready", { sha: S.String, files: S.Array(FileChange) }),
+  S.TaggedStruct("Failed", { sha: S.String, error: S.String }),
+]);
+export type CommitDiff = typeof CommitDiff.Type;
+
+export const RepositoryFile = S.Struct({
+  path: S.String,
+  size: S.Number,
+  gitStatus: S.String,
+});
+export type RepositoryFile = typeof RepositoryFile.Type;
+
+export const RepositorySearchMatch = S.Struct({
+  path: S.String,
+  line: S.Number,
+  column: S.Number,
+  lineContent: S.String,
+  contextBefore: S.Array(S.String),
+  contextAfter: S.Array(S.String),
+  ranges: S.Array(S.Tuple([S.Number, S.Number])),
+  definition: S.Boolean,
+});
+export type RepositorySearchMatch = typeof RepositorySearchMatch.Type;
+
+export const RepositoryFiles = S.Union([
+  S.TaggedStruct("Idle", {}),
+  S.TaggedStruct("Loading", {}),
+  S.TaggedStruct("Ready", { files: S.Array(RepositoryFile) }),
+  S.TaggedStruct("Failed", { error: S.String }),
+]);
+
+export const RepositorySearch = S.Union([
+  S.TaggedStruct("Idle", {}),
+  S.TaggedStruct("Loading", { query: S.String }),
+  S.TaggedStruct("Ready", {
+    query: S.String,
+    files: S.Array(RepositoryFile),
+    matches: S.Array(RepositorySearchMatch),
+  }),
+  S.TaggedStruct("Failed", { query: S.String, error: S.String }),
+]);
+
+export const RepositoryFileContent = S.Union([
+  S.TaggedStruct("Idle", {}),
+  S.TaggedStruct("Loading", { path: S.String }),
+  S.TaggedStruct("Ready", {
+    path: S.String,
+    content: S.String,
+    truncated: S.Boolean,
+  }),
+  S.TaggedStruct("Failed", { path: S.String, error: S.String }),
+]);
+
+export const RepositoryBrowser = S.Struct({
+  owner: S.String,
+  name: S.String,
+  query: S.String,
+  selectedPath: S.String,
+  files: RepositoryFiles,
+  search: RepositorySearch,
+  file: RepositoryFileContent,
+});
+export type RepositoryBrowser = typeof RepositoryBrowser.Type;
+
 export const SourceRange = S.Struct({
   startLine: S.Number,
   endLine: S.Number,
@@ -204,12 +289,20 @@ export const ReviewSubmission = S.Union([
 export type ReviewSubmission = typeof ReviewSubmission.Type;
 
 export const Model = S.Struct({
+  page: S.Literals(["review", "repository"]),
   phase: S.Literals(["ready", "loading", "error"]),
   error: S.String,
   prUrl: S.String,
   filter: S.String,
   meta: ReviewMeta,
   files: S.Array(FileChange),
+  pullRequestFiles: S.Array(FileChange),
+  reviewTab: S.Literals(["files", "commits"]),
+  commits: PullCommits,
+  selectedCommit: S.String,
+  commitDiff: CommitDiff,
+  repositoryBrowser: RepositoryBrowser,
+  toolbarMenu: S.Literals(["none", "options", "open-review"]),
   selectedPath: S.String,
   sidebarCollapsed: S.Boolean,
   reviewScope: S.Literals(["file", "full"]),
@@ -239,6 +332,10 @@ export type Model = typeof Model.Type;
 export const ChangedPrUrl = m("ChangedPrUrl", { value: S.String });
 export const SubmittedPrUrl = m("SubmittedPrUrl");
 export const RefreshedReview = m("RefreshedReview");
+export const ToggledToolbarMenu = m("ToggledToolbarMenu", {
+  value: S.Literals(["options", "open-review"]),
+});
+export const ClosedToolbarMenus = m("ClosedToolbarMenus");
 export const ChangedBrowserUrl = m("ChangedBrowserUrl", {
   pathname: S.String,
   search: S.String,
@@ -253,6 +350,44 @@ export const LoadedReview = m("LoadedReview", {
   files: S.Array(FileChange),
 });
 export const FailedReview = m("FailedReview", { error: S.String });
+export const LoadedCommits = m("LoadedCommits", { commits: S.Array(PullCommit) });
+export const FailedCommits = m("FailedCommits", { error: S.String });
+export const LoadedCommitDiff = m("LoadedCommitDiff", {
+  sha: S.String,
+  files: S.Array(FileChange),
+});
+export const FailedCommitDiff = m("FailedCommitDiff", {
+  sha: S.String,
+  error: S.String,
+});
+export const LoadedRepositoryFiles = m("LoadedRepositoryFiles", {
+  files: S.Array(RepositoryFile),
+});
+export const FailedRepositoryFiles = m("FailedRepositoryFiles", { error: S.String });
+export const ChangedRepositoryQuery = m("ChangedRepositoryQuery", { value: S.String });
+export const SubmittedRepositorySearch = m("SubmittedRepositorySearch");
+export const LoadedRepositorySearch = m("LoadedRepositorySearch", {
+  query: S.String,
+  files: S.Array(RepositoryFile),
+  matches: S.Array(RepositorySearchMatch),
+});
+export const FailedRepositorySearch = m("FailedRepositorySearch", {
+  query: S.String,
+  error: S.String,
+});
+export const SelectedRepositoryFile = m("SelectedRepositoryFile", {
+  path: S.String,
+});
+export const ClosedRepositoryFile = m("ClosedRepositoryFile");
+export const LoadedRepositoryFile = m("LoadedRepositoryFile", {
+  path: S.String,
+  content: S.String,
+  truncated: S.Boolean,
+});
+export const FailedRepositoryFile = m("FailedRepositoryFile", {
+  path: S.String,
+  error: S.String,
+});
 export const LoadedSemantic = m("LoadedSemantic", {
   path: S.String,
   result: SemanticResult,
@@ -274,6 +409,11 @@ export const FailedCharacterDiff = m("FailedCharacterDiff", {
 });
 export const ChangedFilter = m("ChangedFilter", { value: S.String });
 export const SelectedFile = m("SelectedFile", { path: S.String });
+export const SelectedReviewTab = m("SelectedReviewTab", {
+  value: S.Literals(["files", "commits"]),
+});
+export const SelectedCommit = m("SelectedCommit", { sha: S.String });
+export const ReturnedToCommitList = m("ReturnedToCommitList");
 export const SelectedViewMode = m("SelectedViewMode", {
   value: S.Literals(["unified", "split"]),
 });
@@ -334,11 +474,27 @@ export const Message = S.Union([
   ChangedPrUrl,
   SubmittedPrUrl,
   RefreshedReview,
+  ToggledToolbarMenu,
+  ClosedToolbarMenus,
   ChangedBrowserUrl,
   RequestedNavigation,
   CompletedNavigation,
   LoadedReview,
   FailedReview,
+  LoadedCommits,
+  FailedCommits,
+  LoadedCommitDiff,
+  FailedCommitDiff,
+  LoadedRepositoryFiles,
+  FailedRepositoryFiles,
+  ChangedRepositoryQuery,
+  SubmittedRepositorySearch,
+  LoadedRepositorySearch,
+  FailedRepositorySearch,
+  SelectedRepositoryFile,
+  ClosedRepositoryFile,
+  LoadedRepositoryFile,
+  FailedRepositoryFile,
   LoadedSemantic,
   FailedSemantic,
   LoadedMoves,
@@ -347,6 +503,9 @@ export const Message = S.Union([
   FailedCharacterDiff,
   ChangedFilter,
   SelectedFile,
+  SelectedReviewTab,
+  SelectedCommit,
+  ReturnedToCommitList,
   SelectedViewMode,
   SelectedReviewScope,
   ToggledWhitespace,

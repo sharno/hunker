@@ -12,8 +12,12 @@ The stack is Effect end to end:
 ## Project structure
 
 - `src/domain.ts` — schemas, model, and messages
-- `src/state.ts` — update function, initialization, and HTTP command
+- `src/state.ts` — root review reducer and route orchestration
+- `src/features/commits.ts` — commit-list and commit-diff commands
+- `src/features/repository.ts` — local-repository routes, commands, and reducer transitions
 - `src/diff.ts` — unified-diff parsing and full-file context stitching
+- `src/view/commits-view.ts` — PR commit timeline and selected-commit workspace
+- `src/view/repository-view.ts` — FFF-backed local file browser and search results
 - `src/view/diff-view.ts` — unified/side-by-side rendering and hunk interaction
 - `src/view/syntax-highlight.ts` — safe syntax tokenization and character-overlay composition
 - `src/view/tailwind.ts` — typed Foldkit adapter and component utility definitions
@@ -22,6 +26,7 @@ The stack is Effect end to end:
 - `backend/github-auth.ts` — environment and `gh` credential discovery
 - `backend/github.ts` — GitHub URL parsing, API calls, and base/head content loading
 - `backend/github-reviews.ts` — review-thread reads, replies, and review submission
+- `backend/local-repository.ts` — scoped local clone discovery, FFF indexes, and file reads
 - `backend/ast-grep-analysis.ts` — parser selection, AST units, and structural fingerprints
 - `backend/semantic-engine.ts` — Effect service, semantic matching, and review-wide move detection
 - `backend/character-diff-engine.ts` — native Git whole-file alignment and inline token/character ranges
@@ -44,10 +49,14 @@ Loading a review replaces the local address with a shareable route such as
 `http://localhost:5173/radarlabs/server/pull/7848`. Opening that route in another
 tab or reloading it fetches the review automatically. The query string records
 the selected file, full/file scope, layout, whitespace, semantic, inline-diff,
-syntax-highlighting, review, and sidebar settings, so copying the address
-restores the same review view. Use the Refresh button in the review toolbar to
-discard cached semantic results and pull the latest diff from GitHub without
-losing those settings.
+syntax-highlighting, review, sidebar, active tab, and selected commit settings,
+so copying the address restores the same review view. Use the Refresh button in
+the review toolbar to discard cached semantic results and pull the latest diff
+from GitHub without losing those settings.
+
+The Commits tab loads the PR commit timeline. Selecting a commit reuses the same
+diff workspace and controls for that commit's parent-to-commit change, and the
+selected SHA is recorded in the URL for refreshes and copied tabs.
 
 Once a review loads, Hunker replaces the separate loader and controls bars with
 a single 48px sticky toolbar. Scope and layout remain directly accessible;
@@ -82,6 +91,21 @@ permission for replies and review submission. Individual threads are collapsible
 resolved GitHub threads are labeled and start collapsed so completed discussions
 do not dominate the diff. Comment bodies render GitHub-flavored Markdown through
 a typed syntax tree; raw HTML is displayed as text instead of being injected.
+
+The repository name links to a local repository browser at
+`/repo/:owner/:repository`. By default Hunker resolves clones below `~/src`,
+including both `~/src/repository` and `~/src/owner/repository` layouts. Set
+`HUNKER_REPOS_ROOT` before starting the API to use another root:
+
+```bash
+HUNKER_REPOS_ROOT=/path/to/clones bun run dev
+```
+
+Repository search is entirely local. FFF maintains a native fuzzy index for
+filename ranking and content matches; Hunker adds surrounding source lines and
+opens matched files with the same safe syntax highlighter used by diffs. Search
+queries and selected files are stored in the repository URL. The API validates
+repository and file paths against the configured root before reading them.
 
 ## Useful commands
 

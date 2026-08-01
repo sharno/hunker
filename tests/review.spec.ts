@@ -1,6 +1,8 @@
 import { expect, test } from "@playwright/test";
 
 import {
+  commitDiffResponse,
+  commitsResponse,
   movesResponse,
   characterDiffResponse,
   reviewCommentsResponse,
@@ -80,7 +82,7 @@ test("loads a PR and renders ast-grep intelligence in both review layouts", asyn
   await expect(page.locator(".split-lines .hljs-keyword")).not.toHaveCount(0);
   await expect(page.locator(".line-semantic")).not.toHaveCount(0);
 
-  await page.locator(".toolbar-options summary").click();
+  await page.locator(".toolbar-options > .toolbar-menu-button").click();
   const tokenMode = page.getByRole("button", { name: "Token", exact: true });
   const characterMode = page.getByRole("button", { name: "Character", exact: true });
   await expect(tokenMode).toHaveClass(classToken("is-active"));
@@ -96,6 +98,8 @@ test("loads a PR and renders ast-grep intelligence in both review layouts", asyn
   await syntaxToggle.click();
   await expect(page.locator(".split-lines .hljs-keyword")).not.toHaveCount(0);
   await expect(page).toHaveURL(url => url.searchParams.get("syntax") === "on");
+  await page.getByRole("button", { name: "Close toolbar menu" }).click();
+  await expect(page.locator(".toolbar-options-panel")).toHaveCount(0);
 
   await page.getByRole("button", { name: "Full diff", exact: true }).click();
   await expect(page.locator(".full-diff .diff-panel")).toHaveCount(2);
@@ -121,6 +125,7 @@ test("loads a PR and renders ast-grep intelligence in both review layouts", asyn
     url.searchParams.get("inline") === "token" &&
     url.searchParams.get("syntax") === "on" &&
     url.searchParams.get("sidebar") === "expanded" &&
+    url.searchParams.get("tab") === "files" &&
     url.searchParams.get("file") === "src/greet.ts",
   );
 });
@@ -149,13 +154,15 @@ test("loads a copied review route and refreshes it from GitHub", async ({ page }
   });
 
   const sharedRoute =
-    "/example/hunker-demo/pull/42?scope=full&view=unified&whitespace=show&semantic=off&inline=off&syntax=off&sidebar=collapsed&reviews=hide&file=src%2Fmessage.ts";
+    "/example/hunker-demo/pull/42?scope=full&view=unified&whitespace=show&semantic=off&inline=off&syntax=off&sidebar=collapsed&reviews=hide&tab=files&file=src%2Fmessage.ts";
   await page.goto(sharedRoute);
 
   await expect(page.getByRole("heading", { name: "Review revision 1" })).toBeVisible();
+  await page.getByRole("button", { name: "Open PR", exact: true }).click();
   await expect(page.getByPlaceholder("Paste a GitHub PR or compare URL")).toHaveValue(
     reviewUrl,
   );
+  await page.getByRole("button", { name: "Close toolbar menu" }).click();
   await expect(page.locator(".compact-review-toolbar")).toHaveCSS(
     "position",
     "sticky",
@@ -170,7 +177,7 @@ test("loads a copied review route and refreshes it from GitHub", async ({ page }
   await expect(page.getByRole("button", { name: "Unified" })).toHaveClass(
     classToken("is-active"),
   );
-  await page.locator(".toolbar-options summary").click();
+  await page.locator(".toolbar-options > .toolbar-menu-button").click();
   await expect(page.getByRole("button", { name: "Ignore whitespace" })).toHaveAttribute(
     "aria-pressed",
     "false",
@@ -190,6 +197,7 @@ test("loads a copied review route and refreshes it from GitHub", async ({ page }
   await expect(page.locator(".workspace")).toHaveClass(classToken("sidebar-collapsed"));
   await expect(page.locator(".full-diff .diff-panel")).toHaveCount(2);
   await expect(page.locator(".unified-lines")).toHaveCount(2);
+  await page.getByRole("button", { name: "Close toolbar menu" }).click();
 
   await page.getByRole("button", { name: "One file" }).click();
   await expect(page.locator(".diff-panel")).toHaveCount(1);
@@ -207,6 +215,66 @@ test("loads a copied review route and refreshes it from GitHub", async ({ page }
   await expect(page).toHaveURL(sharedRoute);
   expect(reviewRequests).toBe(3);
   expect(semanticRequests).toBe(0);
+});
+
+test("lists PR commits and opens a URL-persisted commit diff", async ({ page }) => {
+  await page.route("**/api/diff?**", route => {
+    const requestUrl = new URL(route.request().url());
+    const target = requestUrl.searchParams.get("url") ?? "";
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: target.includes("/commit/") ? commitDiffResponse : reviewResponse,
+    });
+  });
+  await page.route("**/api/commits?**", route =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: commitsResponse,
+    }),
+  );
+  await page.route("**/api/semantic?**", route =>
+    route.fulfill({ status: 200, contentType: "application/json", json: semanticResponse }),
+  );
+  await page.route("**/api/reviews?**", route =>
+    route.fulfill({ status: 200, contentType: "application/json", json: { comments: [] } }),
+  );
+
+  await page.goto("/example/hunker-demo/pull/42");
+  await expect(
+    page.getByRole("link", { name: "example/hunker-demo", exact: true }),
+  ).toHaveAttribute("href", "/repo/example/hunker-demo");
+
+  await page.getByRole("button", { name: "Commits", exact: true }).click();
+  await expect(page).toHaveURL(url => url.searchParams.get("tab") === "commits");
+  await expect(page.locator(".commit-row")).toHaveCount(2);
+  await expect(page.locator(".commits-browser")).toContainText(
+    "Introduce greeting helper",
+  );
+
+  await page.getByRole("button", { name: /Use a template literal/ }).click();
+  await expect(page).toHaveURL(url =>
+    url.searchParams.get("commit") === commitsResponse.commits[1].sha,
+  );
+  await expect(page.locator(".commit-detail-header")).toContainText("2222222");
+  await expect(page.locator(".diff-panel")).toHaveCount(1);
+  await expect(page.locator(".diff-panel")).toContainText("hello ${person}");
+  await expect(page.getByRole("button", { name: "Mark reviewed" })).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Add a review comment" }),
+  ).toHaveCount(0);
+
+  await page.reload();
+  await expect(page.locator(".commit-detail-header")).toContainText("Use a template literal");
+  await expect(page.locator(".diff-panel")).toHaveCount(1);
+
+  await page.getByRole("button", { name: "← All commits" }).click();
+  await expect(page.locator(".commit-row")).toHaveCount(2);
+  await expect(page).toHaveURL(url => url.searchParams.get("commit") === null);
+  await page.getByRole("button", { name: "Files", exact: true }).click();
+  await expect(page.locator(".diff-panel")).toHaveCount(1);
+  await expect(page.locator(".diff-panel")).toContainText("const message");
 });
 
 test("shows and hides inline GitHub reviews and posts replies and review decisions", async ({ page }) => {
@@ -255,7 +323,7 @@ test("shows and hides inline GitHub reviews and posts replies and review decisio
   });
 
   await page.goto(
-    "/example/hunker-demo/pull/42?scope=file&view=unified&whitespace=ignore&semantic=off&inline=token&syntax=on&sidebar=expanded&reviews=show&file=src%2Fgreet.ts",
+    "/example/hunker-demo/pull/42?scope=file&view=unified&whitespace=ignore&semantic=off&inline=token&syntax=on&sidebar=expanded&reviews=show&tab=files&file=src%2Fgreet.ts",
   );
   await expect(page.locator(".github-review-thread")).toHaveCount(2);
   const openThread = page.locator(".github-review-thread").filter({
@@ -308,13 +376,14 @@ test("shows and hides inline GitHub reviews and posts replies and review decisio
   }).click();
 
   const reviewsToggle = page.getByRole("button", { name: "GitHub reviews 2" });
-  await page.locator(".toolbar-options summary").click();
+  await page.locator(".toolbar-options > .toolbar-menu-button").click();
   await reviewsToggle.click();
   await expect(page.locator(".github-review-thread")).toHaveCount(0);
   await expect(page).toHaveURL(url => url.searchParams.get("reviews") === "hide");
   await reviewsToggle.click();
   await expect(page.locator(".github-review-thread")).toHaveCount(2);
   expect(reviewLoads).toBe(1);
+  await page.getByRole("button", { name: "Close toolbar menu" }).click();
 
   await page.getByRole("textbox", { name: "Reply to review from alice-reviewer" }).fill(
     "Yes, the rename is intentional.",
@@ -388,7 +457,7 @@ export const untouchedFooter = true;
   });
 
   await page.goto(
-    "/example/hunker-demo/pull/42?scope=file&view=unified&whitespace=ignore&semantic=off&inline=token&syntax=on&sidebar=expanded&reviews=hide&file=src%2Fgreet.ts",
+    "/example/hunker-demo/pull/42?scope=file&view=unified&whitespace=ignore&semantic=off&inline=token&syntax=on&sidebar=expanded&reviews=hide&tab=files&file=src%2Fgreet.ts",
   );
   const panel = page.locator(".diff-panel");
   await expect(panel).toHaveCount(1);

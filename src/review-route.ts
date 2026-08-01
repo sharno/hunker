@@ -12,6 +12,8 @@ export type ReviewOptions = Readonly<{
   sidebarCollapsed: boolean;
   showGitHubReviews: boolean;
   selectedPath: string;
+  reviewTab: "files" | "commits";
+  selectedCommit: string;
 }>;
 
 export const defaultReviewOptions: ReviewOptions = {
@@ -24,6 +26,8 @@ export const defaultReviewOptions: ReviewOptions = {
   sidebarCollapsed: false,
   showGitHubReviews: true,
   selectedPath: "",
+  reviewTab: "files",
+  selectedCommit: "",
 };
 
 const decodeSegment = (segment: string) => {
@@ -96,6 +100,7 @@ export const reviewOptionsFromSearch = (search: string): ReviewOptions => {
   const scope = params.get("scope");
   const view = params.get("view");
   const inline = params.get("inline");
+  const tab = params.get("tab");
   const legacyCharacters = params.get("characters");
   const inlineDiffMode =
     inline === "token" || inline === "character" || inline === "off"
@@ -120,6 +125,8 @@ export const reviewOptionsFromSearch = (search: string): ReviewOptions => {
     ),
     showGitHubReviews: optionBoolean(params.get("reviews"), "show", "hide", true),
     selectedPath: params.get("file") ?? "",
+    reviewTab: tab === "commits" ? "commits" : "files",
+    selectedCommit: params.get("commit") ?? "",
   };
 };
 
@@ -138,7 +145,11 @@ export const localReviewUrl = (
     syntax: options.syntaxHighlighting ? "on" : "off",
     sidebar: options.sidebarCollapsed ? "collapsed" : "expanded",
     reviews: options.showGitHubReviews ? "show" : "hide",
+    tab: options.reviewTab,
   });
   if (options.selectedPath !== "") params.set("file", options.selectedPath);
+  if (options.reviewTab === "commits" && options.selectedCommit !== "") {
+    params.set("commit", options.selectedCommit);
+  }
   return `${path}?${params.toString()}`;
 };

@@ -29,6 +29,49 @@ new file mode 100644
 `,
 } as const;
 
+export const commitsResponse = {
+  commits: [
+    {
+      sha: "1111111111111111111111111111111111111111",
+      message: "Introduce greeting helper\n\nKeep message construction in one place.",
+      author: "review-agent",
+      avatarUrl: "",
+      authoredAt: "2026-07-30T14:00:00Z",
+      htmlUrl:
+        "https://github.com/example/hunker-demo/commit/1111111111111111111111111111111111111111",
+    },
+    {
+      sha: "2222222222222222222222222222222222222222",
+      message: "Use a template literal",
+      author: "review-agent",
+      avatarUrl: "",
+      authoredAt: "2026-07-31T15:30:00Z",
+      htmlUrl:
+        "https://github.com/example/hunker-demo/commit/2222222222222222222222222222222222222222",
+    },
+  ],
+} as const;
+
+export const commitDiffResponse = {
+  title: "Use a template literal",
+  repository: "example/hunker-demo",
+  number: "2222222",
+  author: "review-agent",
+  base: "1111111111111111111111111111111111111111",
+  head: "2222222222222222222222222222222222222222",
+  url: commitsResponse.commits[1].htmlUrl,
+  diff: `diff --git a/src/greet.ts b/src/greet.ts
+index 1111111..2222222 100644
+--- a/src/greet.ts
++++ b/src/greet.ts
+@@ -1,3 +1,3 @@
+ export function greet(person: string) {
+-  return "hello " + person;
++  return \`hello \${person}\`;
+ }
+`,
+} as const;
+
 export const movesResponse = {
   moves: [
     {
