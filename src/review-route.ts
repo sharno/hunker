@@ -1,6 +1,7 @@
 export type ReviewRoute =
   | Readonly<{ _tag: "Pull"; owner: string; repository: string; number: string }>
-  | Readonly<{ _tag: "Compare"; owner: string; repository: string; range: string }>;
+  | Readonly<{ _tag: "Compare"; owner: string; repository: string; range: string }>
+  | Readonly<{ _tag: "Commit"; owner: string; repository: string; sha: string }>;
 
 export type ReviewOptions = Readonly<{
   reviewScope: "file" | "full";
@@ -57,15 +58,31 @@ export const reviewRouteFromPathname = (pathname: string): ReviewRoute | undefin
   if (resource === "compare" && identifier.length > 2) {
     return { _tag: "Compare", owner, repository, range: identifier };
   }
+  if (resource === "commit" && /^[0-9a-f]{7,64}$/i.test(identifier)) {
+    return { _tag: "Commit", owner, repository, sha: identifier };
+  }
   return undefined;
 };
 
 export const githubUrlFromPathname = (pathname: string) => {
   const route = reviewRouteFromPathname(pathname);
   if (route === undefined) return undefined;
-  return route._tag === "Pull"
-    ? `https://github.com/${route.owner}/${route.repository}/pull/${route.number}`
-    : `https://github.com/${route.owner}/${route.repository}/compare/${route.range}`;
+  if (route._tag === "Pull") {
+    return `https://github.com/${route.owner}/${route.repository}/pull/${route.number}`;
+  }
+  if (route._tag === "Compare") {
+    return `https://github.com/${route.owner}/${route.repository}/compare/${route.range}`;
+  }
+  return `https://github.com/${route.owner}/${route.repository}/commit/${route.sha}`;
+};
+
+export const isPullRequestUrl = (input: string) => {
+  try {
+    const url = new URL(input);
+    return reviewRouteFromPathname(url.pathname)?._tag === "Pull";
+  } catch {
+    return false;
+  }
 };
 
 export const localPathFromGitHubUrl = (input: string) => {
@@ -78,9 +95,69 @@ export const localPathFromGitHubUrl = (input: string) => {
   if (url.hostname !== "github.com") return undefined;
   const route = reviewRouteFromPathname(url.pathname);
   if (route === undefined) return undefined;
-  const resource = route._tag === "Pull" ? "pull" : "compare";
-  const identifier = route._tag === "Pull" ? route.number : route.range;
+  const resource =
+    route._tag === "Pull" ? "pull" : route._tag === "Compare" ? "compare" : "commit";
+  const identifier =
+    route._tag === "Pull" ? route.number : route._tag === "Compare" ? route.range : route.sha;
   return `/${encodeURIComponent(route.owner)}/${encodeURIComponent(route.repository)}/${resource}/${encodeURIComponent(identifier)}`;
+};
+
+const normalizedGitHubUrl = (input: string) => {
+  const trimmed = input.trim();
+  if (trimmed.startsWith("github.com/")) return `https://${trimmed}`;
+  return trimmed;
+};
+
+export const localLocationFromGitHubUrl = (
+  input: string,
+  options: ReviewOptions = defaultReviewOptions,
+) => {
+  let url: URL;
+  try {
+    url = new URL(normalizedGitHubUrl(input));
+  } catch {
+    return undefined;
+  }
+  if (url.hostname !== "github.com") return undefined;
+  const [owner, repository, resource, identifier, ...remaining] = url.pathname
+    .split("/")
+    .filter(Boolean)
+    .map(decodeSegment);
+  if (owner === undefined || repository === undefined) return undefined;
+
+  if (resource === "pull" && identifier !== undefined && /^\d+$/.test(identifier)) {
+    const commitIndex = remaining.indexOf("commits");
+    const selectedCommit = commitIndex >= 0 ? (remaining[commitIndex + 1] ?? "") : "";
+    return localReviewUrl(
+      `https://github.com/${owner}/${repository}/pull/${identifier}`,
+      selectedCommit === ""
+        ? { ...options, selectedCommit: "" }
+        : { ...options, reviewTab: "commits", selectedCommit },
+    );
+  }
+  if (resource === "compare" && identifier !== undefined && identifier.length > 2) {
+    return localReviewUrl(
+      `https://github.com/${owner}/${repository}/compare/${identifier}`,
+      options,
+    );
+  }
+  if (
+    resource === "commit" &&
+    identifier !== undefined &&
+    /^[0-9a-f]{7,64}$/i.test(identifier)
+  ) {
+    return localReviewUrl(
+      `https://github.com/${owner}/${repository}/commit/${identifier}`,
+      options,
+    );
+  }
+  const selectedFile =
+    resource === "blob" && identifier !== undefined && remaining.length > 0
+      ? remaining.join("/")
+      : "";
+  return `/repo/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}${
+    selectedFile === "" ? "" : `?file=${encodeURIComponent(selectedFile)}`
+  }`;
 };
 
 const optionBoolean = (

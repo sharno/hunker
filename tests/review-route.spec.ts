@@ -3,13 +3,14 @@ import { expect, test } from "@playwright/test";
 import {
   defaultReviewOptions,
   githubUrlFromPathname,
+  localLocationFromGitHubUrl,
   localReviewUrl,
   localPathFromGitHubUrl,
   reviewOptionsFromSearch,
   reviewRouteFromPathname,
 } from "../src/review-route";
 
-test("round-trips pull and compare review routes", () => {
+test("round-trips pull, compare, and commit review routes", () => {
   expect(reviewRouteFromPathname("/radarlabs/server/pull/7848")).toEqual({
     _tag: "Pull",
     owner: "radarlabs",
@@ -25,6 +26,33 @@ test("round-trips pull and compare review routes", () => {
   expect(
     localPathFromGitHubUrl("https://github.com/radarlabs/server/compare/main...feature"),
   ).toBe("/radarlabs/server/compare/main...feature");
+  expect(
+    localPathFromGitHubUrl(
+      "https://github.com/radarlabs/server/commit/abcdef1234567890",
+    ),
+  ).toBe("/radarlabs/server/commit/abcdef1234567890");
+});
+
+test("selects the best Hunker view for common GitHub links", () => {
+  expect(localLocationFromGitHubUrl("github.com/radarlabs/server")).toBe(
+    "/repo/radarlabs/server",
+  );
+  expect(
+    localLocationFromGitHubUrl(
+      "https://github.com/radarlabs/server/blob/main/src/config.ts#L10",
+    ),
+  ).toBe("/repo/radarlabs/server?file=src%2Fconfig.ts");
+  expect(
+    localLocationFromGitHubUrl(
+      "https://github.com/radarlabs/server/pull/7848/commits/abcdef1234567890",
+    ),
+  ).toContain("tab=commits");
+  expect(
+    localLocationFromGitHubUrl(
+      "https://github.com/radarlabs/server/pull/7848/commits/abcdef1234567890",
+    ),
+  ).toContain("commit=abcdef1234567890");
+  expect(localLocationFromGitHubUrl("https://example.com/radarlabs/server")).toBeUndefined();
 });
 
 test("round-trips a complete review configuration through the query string", () => {

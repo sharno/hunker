@@ -2,7 +2,6 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 
 import {
   ChangedFilter,
-  ChangedPrUrl,
   ClosedToolbarMenus,
   RefreshedReview,
   SelectedFile,
@@ -10,7 +9,6 @@ import {
   SelectedReviewTab,
   SelectedReviewScope,
   SelectedViewMode,
-  SubmittedPrUrl,
   ToggledFileCollapse,
   ToggledFullFile,
   ToggledGitHubReviews,
@@ -31,6 +29,7 @@ import type {
 } from "../domain";
 import { toDiffLines, toFullDiffLines } from "../diff";
 import { localRepositoryUrl } from "../features/repository";
+import { isPullRequestUrl } from "../review-route";
 import { splitDiffView, unifiedDiffView } from "./diff-view";
 import type { MovedRanges } from "./diff-view";
 import {
@@ -43,6 +42,7 @@ import {
   reviewComposerView,
 } from "./github-review-view";
 import { repositoryView } from "./repository-view";
+import { githubLocationForm } from "./github-location-view";
 
 const buttonClass = (active: boolean) =>
   `segmented-button${active ? " is-active" : ""}`;
@@ -135,26 +135,6 @@ const fileRow = (
   );
 };
 
-const prLoaderForm = (
-  model: Model,
-  className: string,
-  h: HtmlBuilder<Message>,
-) =>
-  h.form([h.Class(className), h.OnSubmit(SubmittedPrUrl())], [
-    h.span([h.Class("github-glyph")], ["⌘"]),
-    h.input([
-      h.Type("url"),
-      h.Value(model.prUrl),
-      h.Placeholder("Paste a GitHub PR or compare URL"),
-      h.AriaLabel("GitHub pull request URL"),
-      h.OnInput(value => ChangedPrUrl({ value })),
-    ]),
-    h.button(
-      [h.Type("submit"), h.Class("load-button"), h.Disabled(model.phase === "loading")],
-      [model.phase === "loading" ? "Fetching…" : "Review"],
-    ),
-  ]);
-
 const scopePicker = (
   model: Model,
   showLabel: boolean,
@@ -228,7 +208,7 @@ const intelligenceControls = (model: Model, h: HtmlBuilder<Message>) => [
     ]),
   ]),
   toggleButton("Syntax", model.syntaxHighlighting, ToggledSyntaxHighlighting(), h),
-  model.prUrl === "" || model.meta.number === "compare" || model.reviewTab !== "files"
+  model.prUrl === "" || !isPullRequestUrl(model.meta.url) || model.reviewTab !== "files"
     ? h.empty
     : toggleButton(
         model.githubReviews._tag === "Ready"
@@ -246,7 +226,7 @@ const compactReviewToolbar = (model: Model, h: HtmlBuilder<Message>): Html => {
     model.semantic,
     model.inlineDiffMode !== "off",
     model.syntaxHighlighting,
-    model.meta.number !== "compare" &&
+    isPullRequestUrl(model.meta.url) &&
       model.reviewTab === "files" &&
       model.showGitHubReviews,
   ].filter(Boolean).length;
@@ -324,7 +304,7 @@ const compactReviewToolbar = (model: Model, h: HtmlBuilder<Message>): Html => {
             : h.empty,
         ],
       ),
-      model.meta.number === "compare"
+      !isPullRequestUrl(model.meta.url)
         ? h.empty
         : h.div([h.Class("segmented review-tab-picker")], [
             h.button(
@@ -358,11 +338,11 @@ const compactReviewToolbar = (model: Model, h: HtmlBuilder<Message>): Html => {
               h.AriaExpanded(model.toolbarMenu === "open-review"),
               h.OnClick(ToggledToolbarMenu({ value: "open-review" })),
             ],
-            ["Open PR"],
+            ["Open GitHub link"],
           ),
           model.toolbarMenu === "open-review"
             ? h.div([h.Class("toolbar-loader-panel")], [
-                prLoaderForm(model, "toolbar-pr-loader", h),
+                githubLocationForm(model, "toolbar-pr-loader", h),
               ])
             : h.empty,
         ],
@@ -398,7 +378,7 @@ const topBarView = (model: Model, h: HtmlBuilder<Message>): Html =>
             "review the change, not the noise",
           ]),
         ]),
-        prLoaderForm(model, "pr-loader", h),
+        githubLocationForm(model, "pr-loader", h),
         h.div([h.Class("shortcut-hint")], [
           h.kbd([], ["⌘"]),
           h.kbd([], ["K"]),
@@ -928,6 +908,9 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Html => {
 
   return h.main([h.Class("app-shell")], [
     topBarView(model, h),
+    model.githubInputError === ""
+      ? h.empty
+      : h.div([h.Class("error-banner"), h.Role("alert")], [model.githubInputError]),
     reviewHeaderView(model, h),
     hasLoadedReview(model) ? h.empty : controlsView(model, h),
     githubReviewStatusView(model, h),

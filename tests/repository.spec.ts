@@ -31,6 +31,78 @@ test("round-trips repository routes and browser options", () => {
   });
 });
 
+test("offers a temporary or configured clone when a repository is missing", async ({ page }) => {
+  let fileRequests = 0;
+  await page.route("**/api/repository/files?**", route => {
+    fileRequests += 1;
+    return fileRequests === 1
+      ? route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          json: { error: "Local repository not found." },
+        })
+      : route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          json: { files },
+        });
+  });
+  await page.route("**/api/repository/clone", async route => {
+    expect(route.request().postDataJSON()).toEqual({
+      repository,
+      destination: "temporary",
+    });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: { path: "/tmp/hunker/repositories/example/hunker-demo" },
+    });
+  });
+
+  await page.goto("/repo/example/hunker-demo");
+  await expect(page.getByRole("heading", { name: "Clone this repository for local browsing" })).toBeVisible();
+  await page.getByRole("button", { name: "Clone to /tmp" }).click();
+  await expect(page.locator(".repository-file-row")).toHaveCount(3);
+  expect(fileRequests).toBe(2);
+});
+
+test("opens repository links without accepting a late response from the previous repo", async ({ page }) => {
+  let releaseFirst: () => void = () => undefined;
+  const firstGate = new Promise<void>(resolve => {
+    releaseFirst = resolve;
+  });
+  await page.route("**/api/repository/files?**", async route => {
+    const requestUrl = new URL(route.request().url());
+    const requested = requestUrl.searchParams.get("repository");
+    if (requested === "example/first") await firstGate;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: {
+        files: [
+          {
+            path: requested === "example/first" ? "first.ts" : "second.ts",
+            size: 10,
+            gitStatus: "clean",
+          },
+        ],
+      },
+    });
+  });
+
+  await page.goto("/repo/example/first");
+  await page.getByPlaceholder("Paste any GitHub URL").fill(
+    "https://github.com/example/second",
+  );
+  await page.getByRole("button", { name: "Open", exact: true }).click();
+  await expect(page).toHaveURL("/repo/example/second");
+  await expect(page.locator(".repository-file-row")).toContainText("second.ts");
+
+  releaseFirst();
+  await expect(page.locator(".repository-file-row")).toContainText("second.ts");
+  await expect(page.locator(".repository-file-row")).not.toContainText("first.ts");
+});
+
 test("browses local files and shows fuzzy content results with context", async ({ page }) => {
   await page.route("**/api/repository/files?**", route => {
     const requestUrl = new URL(route.request().url());

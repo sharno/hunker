@@ -120,6 +120,11 @@ const SubmitReviewBody = S.Struct({
   event: S.Literals(["COMMENT", "APPROVE", "REQUEST_CHANGES"]),
 });
 
+const CloneRepositoryBody = S.Struct({
+  repository: S.String,
+  destination: S.Literals(["temporary", "configured"]),
+});
+
 const decodeBody = <A, I>(
   request: HttpServerRequest.HttpServerRequest,
   schema: S.Codec<A, I>,
@@ -223,6 +228,34 @@ const handleRepositoryFile = (request: HttpServerRequest.HttpServerRequest) =>
       requestUrl.searchParams.get("path") ?? "",
     );
     return HttpServerResponse.jsonUnsafe(file);
+  }).pipe(
+    Effect.catchTags({
+      InvalidReviewRequest: error =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+        ),
+      LocalRepositoryFailed: localRepositoryError,
+    }),
+  );
+
+const handleCloneRepository = (request: HttpServerRequest.HttpServerRequest) =>
+  Effect.gen(function* () {
+    const input = yield* decodeBody(request, CloneRepositoryBody);
+    const [owner, name, ...remaining] = input.repository.split("/");
+    if (
+      remaining.length > 0 ||
+      owner === undefined ||
+      owner === "" ||
+      name === undefined ||
+      name === ""
+    ) {
+      return yield* new InvalidReviewRequest({
+        message: "Choose a repository in owner/name format.",
+      });
+    }
+    const local = yield* LocalRepository;
+    const cloned = yield* local.clone({ owner, name }, input.destination);
+    return HttpServerResponse.jsonUnsafe(cloned);
   }).pipe(
     Effect.catchTags({
       InvalidReviewRequest: error =>
@@ -445,6 +478,7 @@ const Routes = Layer.mergeAll(
   HttpRouter.add("GET", "/api/repository/files", handleRepositoryFiles),
   HttpRouter.add("GET", "/api/repository/search", handleRepositorySearch),
   HttpRouter.add("GET", "/api/repository/file", handleRepositoryFile),
+  HttpRouter.add("POST", "/api/repository/clone", handleCloneRepository),
   HttpRouter.add("GET", "/api/file", handleFile),
   HttpRouter.add("GET", "/api/characters", handleCharacters),
   HttpRouter.add("GET", "/api/semantic", handleSemantic),

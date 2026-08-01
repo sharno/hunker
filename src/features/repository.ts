@@ -4,6 +4,8 @@ import { Command, Http, Navigation } from "foldkit";
 import { evo } from "foldkit/struct";
 
 import {
+  ClonedRepository,
+  FailedRepositoryClone,
   FailedRepositoryFile,
   FailedRepositoryFiles,
   FailedRepositorySearch,
@@ -77,6 +79,7 @@ const fileResponse = S.Struct({
   content: S.String,
   truncated: S.Boolean,
 });
+const cloneResponse = S.Struct({ path: S.String });
 
 export const FetchRepositoryFiles = Command.define("FetchRepositoryFiles", {
   args: { repository: S.String },
@@ -92,16 +95,67 @@ export const FetchRepositoryFiles = Command.define("FetchRepositoryFiles", {
       const data: unknown = yield* response.json;
       if (response.status < 200 || response.status >= 300) {
         return yield* Effect.fail(
-          new Error(responseError(data, "Could not list local repository files.")),
+          {
+            _tag: "RepositoryFilesRequestFailed" as const,
+            message: responseError(data, "Could not list local repository files."),
+            missing: response.status === 404,
+          },
         );
       }
       const decoded = yield* S.decodeUnknownEffect(filesResponse)(data);
-      return LoadedRepositoryFiles({ files: decoded.files });
+      return LoadedRepositoryFiles({ repository, files: decoded.files });
     }).pipe(
       Effect.catch(error =>
         Effect.succeed(
           FailedRepositoryFiles({
-            error: error instanceof Error ? error.message : "Could not list files.",
+            repository,
+            error:
+              typeof error === "object" &&
+              error !== null &&
+              "message" in error &&
+              typeof error.message === "string"
+                ? error.message
+                : "Could not list files.",
+            missing:
+              typeof error === "object" &&
+              error !== null &&
+              "missing" in error &&
+              error.missing === true,
+          }),
+        ),
+      ),
+      Effect.provide(Http.layer),
+    ),
+});
+
+export const CloneRepository = Command.define("CloneRepository", {
+  args: {
+    repository: S.String,
+    destination: S.Literals(["temporary", "configured"]),
+  },
+  messages: [ClonedRepository, FailedRepositoryClone],
+  execute: ({ repository, destination }) =>
+    Effect.gen(function* () {
+      const client = yield* HttpClient.HttpClient;
+      const response = yield* client.execute(
+        HttpClientRequest.post("/api/repository/clone").pipe(
+          HttpClientRequest.bodyJsonUnsafe({ repository, destination }),
+        ),
+      );
+      const data: unknown = yield* response.json;
+      if (response.status < 200 || response.status >= 300) {
+        return yield* Effect.fail(
+          new Error(responseError(data, "Could not clone this repository.")),
+        );
+      }
+      const decoded = yield* S.decodeUnknownEffect(cloneResponse)(data);
+      return ClonedRepository({ repository, ...decoded });
+    }).pipe(
+      Effect.catch(error =>
+        Effect.succeed(
+          FailedRepositoryClone({
+            repository,
+            error: error instanceof Error ? error.message : "Could not clone repository.",
           }),
         ),
       ),
@@ -126,11 +180,12 @@ export const SearchRepository = Command.define("SearchRepository", {
         );
       }
       const decoded = yield* S.decodeUnknownEffect(searchResponse)(data);
-      return LoadedRepositorySearch({ query, ...decoded });
+      return LoadedRepositorySearch({ repository, query, ...decoded });
     }).pipe(
       Effect.catch(error =>
         Effect.succeed(
           FailedRepositorySearch({
+            repository,
             query,
             error: error instanceof Error ? error.message : "Could not search files.",
           }),
@@ -157,11 +212,12 @@ export const FetchRepositoryFile = Command.define("FetchRepositoryFile", {
         );
       }
       const decoded = yield* S.decodeUnknownEffect(fileResponse)(data);
-      return LoadedRepositoryFile(decoded);
+      return LoadedRepositoryFile({ repository, ...decoded });
     }).pipe(
       Effect.catch(error =>
         Effect.succeed(
           FailedRepositoryFile({
+            repository,
             path,
             error: error instanceof Error ? error.message : `Could not read ${path}.`,
           }),
@@ -214,6 +270,8 @@ export const loadRepositoryLocation = (
       })
     : evo(model, {
         page: () => "repository" as const,
+        githubInput: () => `https://github.com/${route.owner}/${route.name}`,
+        githubInputError: () => "",
         repositoryBrowser: () => ({
           owner: route.owner,
           name: route.name,
@@ -226,6 +284,7 @@ export const loadRepositoryLocation = (
           file: options.file === ""
             ? { _tag: "Idle" as const }
             : { _tag: "Loading" as const, path: options.file },
+          clone: { _tag: "Idle" as const },
         }),
       });
   const browser = current.repositoryBrowser;
@@ -276,29 +335,96 @@ export const loadRepositoryLocation = (
 
 export const repositoryFilesLoaded = (
   model: Model,
+  repository: string,
   files: ReadonlyArray<RepositoryFileType>,
-): RepositoryUpdate => [
-  evo(model, {
-    repositoryBrowser: browser => ({
-      ...browser,
-      files: { _tag: "Ready" as const, files },
-    }),
-  }),
-  [],
-];
+): RepositoryUpdate =>
+  model.page !== "repository" || repositoryName(model) !== repository
+    ? [model, []]
+    : [
+        evo(model, {
+          repositoryBrowser: browser => ({
+            ...browser,
+            files: { _tag: "Ready" as const, files },
+          }),
+        }),
+        [],
+      ];
 
 export const repositoryFilesFailed = (
   model: Model,
+  repository: string,
   error: string,
-): RepositoryUpdate => [
-  evo(model, {
+  missing: boolean,
+): RepositoryUpdate =>
+  model.page !== "repository" || repositoryName(model) !== repository
+    ? [model, []]
+    : [
+        evo(model, {
+          repositoryBrowser: browser => ({
+            ...browser,
+            files: { _tag: "Failed" as const, error, missing },
+          }),
+        }),
+        [],
+      ];
+
+export const requestRepositoryClone = (
+  model: Model,
+  destination: "temporary" | "configured",
+): RepositoryUpdate => {
+  if (model.page !== "repository" || model.repositoryBrowser.clone._tag === "Loading") {
+    return [model, []];
+  }
+  const next = evo(model, {
     repositoryBrowser: browser => ({
       ...browser,
-      files: { _tag: "Failed" as const, error },
+      clone: { _tag: "Loading" as const, destination },
     }),
-  }),
-  [],
-];
+  });
+  return [
+    next,
+    [CloneRepository({ repository: repositoryName(next), destination })],
+  ];
+};
+
+export const repositoryCloned = (
+  model: Model,
+  repository: string,
+  path: string,
+): RepositoryUpdate => {
+  if (
+    model.page !== "repository" ||
+    repositoryName(model) !== repository ||
+    model.repositoryBrowser.clone._tag !== "Loading"
+  ) {
+    return [model, []];
+  }
+  const next = evo(model, {
+    repositoryBrowser: browser => ({
+      ...browser,
+      files: { _tag: "Loading" as const },
+      clone: { _tag: "Ready" as const, path },
+    }),
+  });
+  return [next, [FetchRepositoryFiles({ repository: repositoryName(next) })]];
+};
+
+export const repositoryCloneFailed = (
+  model: Model,
+  repository: string,
+  error: string,
+): RepositoryUpdate =>
+  model.page !== "repository" || repositoryName(model) !== repository
+    ? [model, []]
+    : [
+        evo(model, {
+          repositoryBrowser: browser => ({
+            ...browser,
+            clone: { _tag: "Failed" as const, error },
+          }),
+        }),
+        [],
+      ];
 
 export const changeRepositoryQuery = (model: Model, value: string): RepositoryUpdate => [
   evo(model, {
@@ -336,12 +462,15 @@ export const submitRepositorySearch = (model: Model): RepositoryUpdate => {
 export const repositorySearchLoaded = (
   model: Model,
   input: Readonly<{
+    repository: string;
     query: string;
     files: ReadonlyArray<RepositoryFileType>;
     matches: ReadonlyArray<RepositorySearchMatchType>;
   }>,
 ): RepositoryUpdate =>
-  model.page === "repository" && model.repositoryBrowser.query === input.query
+  model.page === "repository" &&
+  repositoryName(model) === input.repository &&
+  model.repositoryBrowser.query === input.query
     ? [
         evo(model, {
           repositoryBrowser: browser => ({
@@ -360,10 +489,13 @@ export const repositorySearchLoaded = (
 
 export const repositorySearchFailed = (
   model: Model,
+  repository: string,
   query: string,
   error: string,
 ): RepositoryUpdate =>
-  model.page === "repository" && model.repositoryBrowser.query === query
+  model.page === "repository" &&
+  repositoryName(model) === repository &&
+  model.repositoryBrowser.query === query
     ? [
         evo(model, {
           repositoryBrowser: browser => ({
@@ -402,9 +534,16 @@ export const closeRepositoryFile = (model: Model): RepositoryUpdate =>
 
 export const repositoryFileLoaded = (
   model: Model,
-  input: Readonly<{ path: string; content: string; truncated: boolean }>,
+  input: Readonly<{
+    repository: string;
+    path: string;
+    content: string;
+    truncated: boolean;
+  }>,
 ): RepositoryUpdate =>
-  model.page === "repository" && model.repositoryBrowser.selectedPath === input.path
+  model.page === "repository" &&
+  repositoryName(model) === input.repository &&
+  model.repositoryBrowser.selectedPath === input.path
     ? [
         evo(model, {
           repositoryBrowser: browser => ({
@@ -423,10 +562,13 @@ export const repositoryFileLoaded = (
 
 export const repositoryFileFailed = (
   model: Model,
+  repository: string,
   path: string,
   error: string,
 ): RepositoryUpdate =>
-  model.page === "repository" && model.repositoryBrowser.selectedPath === path
+  model.page === "repository" &&
+  repositoryName(model) === repository &&
+  model.repositoryBrowser.selectedPath === path
     ? [
         evo(model, {
           repositoryBrowser: browser => ({

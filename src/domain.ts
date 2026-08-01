@@ -71,7 +71,7 @@ export const RepositoryFiles = S.Union([
   S.TaggedStruct("Idle", {}),
   S.TaggedStruct("Loading", {}),
   S.TaggedStruct("Ready", { files: S.Array(RepositoryFile) }),
-  S.TaggedStruct("Failed", { error: S.String }),
+  S.TaggedStruct("Failed", { error: S.String, missing: S.Boolean }),
 ]);
 
 export const RepositorySearch = S.Union([
@@ -96,6 +96,15 @@ export const RepositoryFileContent = S.Union([
   S.TaggedStruct("Failed", { path: S.String, error: S.String }),
 ]);
 
+export const RepositoryClone = S.Union([
+  S.TaggedStruct("Idle", {}),
+  S.TaggedStruct("Loading", {
+    destination: S.Literals(["temporary", "configured"]),
+  }),
+  S.TaggedStruct("Ready", { path: S.String }),
+  S.TaggedStruct("Failed", { error: S.String }),
+]);
+
 export const RepositoryBrowser = S.Struct({
   owner: S.String,
   name: S.String,
@@ -104,6 +113,7 @@ export const RepositoryBrowser = S.Struct({
   files: RepositoryFiles,
   search: RepositorySearch,
   file: RepositoryFileContent,
+  clone: RepositoryClone,
 });
 export type RepositoryBrowser = typeof RepositoryBrowser.Type;
 
@@ -292,6 +302,8 @@ export const Model = S.Struct({
   page: S.Literals(["review", "repository"]),
   phase: S.Literals(["ready", "loading", "error"]),
   error: S.String,
+  githubInput: S.String,
+  githubInputError: S.String,
   prUrl: S.String,
   filter: S.String,
   meta: ReviewMeta,
@@ -375,17 +387,35 @@ export const FailedCommitDiff = m("FailedCommitDiff", {
   error: S.String,
 });
 export const LoadedRepositoryFiles = m("LoadedRepositoryFiles", {
+  repository: S.String,
   files: S.Array(RepositoryFile),
 });
-export const FailedRepositoryFiles = m("FailedRepositoryFiles", { error: S.String });
+export const FailedRepositoryFiles = m("FailedRepositoryFiles", {
+  repository: S.String,
+  error: S.String,
+  missing: S.Boolean,
+});
+export const RequestedRepositoryClone = m("RequestedRepositoryClone", {
+  destination: S.Literals(["temporary", "configured"]),
+});
+export const ClonedRepository = m("ClonedRepository", {
+  repository: S.String,
+  path: S.String,
+});
+export const FailedRepositoryClone = m("FailedRepositoryClone", {
+  repository: S.String,
+  error: S.String,
+});
 export const ChangedRepositoryQuery = m("ChangedRepositoryQuery", { value: S.String });
 export const SubmittedRepositorySearch = m("SubmittedRepositorySearch");
 export const LoadedRepositorySearch = m("LoadedRepositorySearch", {
+  repository: S.String,
   query: S.String,
   files: S.Array(RepositoryFile),
   matches: S.Array(RepositorySearchMatch),
 });
 export const FailedRepositorySearch = m("FailedRepositorySearch", {
+  repository: S.String,
   query: S.String,
   error: S.String,
 });
@@ -394,11 +424,13 @@ export const SelectedRepositoryFile = m("SelectedRepositoryFile", {
 });
 export const ClosedRepositoryFile = m("ClosedRepositoryFile");
 export const LoadedRepositoryFile = m("LoadedRepositoryFile", {
+  repository: S.String,
   path: S.String,
   content: S.String,
   truncated: S.Boolean,
 });
 export const FailedRepositoryFile = m("FailedRepositoryFile", {
+  repository: S.String,
   path: S.String,
   error: S.String,
 });
@@ -518,6 +550,9 @@ export const Message = S.Union([
   FailedCommitDiff,
   LoadedRepositoryFiles,
   FailedRepositoryFiles,
+  RequestedRepositoryClone,
+  ClonedRepository,
+  FailedRepositoryClone,
   ChangedRepositoryQuery,
   SubmittedRepositorySearch,
   LoadedRepositorySearch,

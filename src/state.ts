@@ -15,6 +15,7 @@ import {
   ChangedReplyDraft,
   ChangedRepositoryQuery,
   ChangedReviewBody,
+  ClonedRepository,
   ClosedRepositoryFile,
   ClosedToolbarMenus,
   CharacterDiffResult,
@@ -29,6 +30,7 @@ import {
   FailedReview,
   FailedReviewSubmission,
   FailedRepositoryFile,
+  FailedRepositoryClone,
   FailedRepositoryFiles,
   FailedRepositorySearch,
   FailedSemantic,
@@ -49,6 +51,7 @@ import {
   PostedReply,
   PostedReview,
   RefreshedReview,
+  RequestedRepositoryClone,
   RequestedNavigation,
   SelectedFile,
   SelectedCommit,
@@ -92,18 +95,23 @@ import {
   loadRepositoryLocation,
   repositoryFileFailed,
   repositoryFileLoaded,
+  repositoryCloneFailed,
+  repositoryCloned,
   repositoryFilesFailed,
   repositoryFilesLoaded,
   repositoryOptionsFromSearch,
   repositoryRouteFromPathname,
   repositorySearchFailed,
   repositorySearchLoaded,
+  requestRepositoryClone,
   selectRepositoryFile,
   submitRepositorySearch,
 } from "./features/repository";
 import {
   defaultReviewOptions,
   githubUrlFromPathname,
+  isPullRequestUrl,
+  localLocationFromGitHubUrl,
   localReviewUrl,
   reviewOptionsFromSearch,
   type ReviewOptions,
@@ -495,7 +503,7 @@ const requestGitHubReviews = (model: ModelType): UpdateReturn => {
     model.phase !== "ready" ||
     !model.showGitHubReviews ||
     model.reviewTab !== "files" ||
-    model.meta.number === "compare" ||
+    !isPullRequestUrl(model.meta.url) ||
     model.prUrl.trim() === "" ||
     model.githubReviews._tag === "Loading" ||
     model.githubReviews._tag === "Ready"
@@ -597,7 +605,7 @@ const resetDiffAnalysis = (model: ModelType): ModelType =>
 const requestCommits = (model: ModelType): UpdateReturn => {
   if (
     model.phase !== "ready" ||
-    model.meta.number === "compare" ||
+    !isPullRequestUrl(model.meta.url) ||
     model.commits._tag === "Loading" ||
     model.commits._tag === "Ready"
   ) {
@@ -610,7 +618,7 @@ const requestCommits = (model: ModelType): UpdateReturn => {
 };
 
 const requestCommitDiff = (model: ModelType, sha: string): UpdateReturn => {
-  if (sha === "" || model.meta.number === "compare") return [model, []];
+  if (sha === "" || !isPullRequestUrl(model.meta.url)) return [model, []];
   if (model.commitDiff._tag === "Loading" && model.commitDiff.sha === sha) {
     return [model, []];
   }
@@ -661,6 +669,8 @@ const beginReviewLoad = (model: ModelType, url: string): ModelType =>
   evo(model, {
     phase: () => "loading" as const,
     error: () => "",
+    githubInput: () => url,
+    githubInputError: () => "",
     prUrl: () => url,
     filter: () => "",
     files: () => [],
@@ -689,6 +699,8 @@ const sampleModel = (model: ModelType): ModelType =>
     page: () => "review" as const,
     phase: () => "ready" as const,
     error: () => "",
+    githubInput: () => "",
+    githubInputError: () => "",
     prUrl: () => "",
     meta: () => sampleMeta,
     files: () => sampleFiles,
@@ -766,27 +778,38 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
   M.value(message).pipe(
     M.withReturnType<UpdateReturn>(),
     M.tagsExhaustive({
-      ChangedPrUrl: ({ value }) => [evo(model, { prUrl: () => value }), []],
+      ChangedPrUrl: ({ value }) => [
+        evo(model, {
+          githubInput: () => value,
+          githubInputError: () => "",
+        }),
+        [],
+      ],
       SubmittedPrUrl: () => {
-        if (model.phase === "loading" || model.prUrl.trim() === "") return [model, []];
-        const url = model.prUrl.trim();
-        const href = localReviewUrl(url, {
+        if (model.phase === "loading" || model.githubInput.trim() === "") {
+          return [model, []];
+        }
+        const href = localLocationFromGitHubUrl(model.githubInput, {
           ...reviewOptions(model),
           selectedPath: "",
           reviewTab: "files",
           selectedCommit: "",
         });
-        const fresh = evo(model, {
-          reviewTab: () => "files" as const,
-          selectedCommit: () => "",
-        });
-        return [
-          beginReviewLoad(fresh, url),
-          [
-            FetchReview({ url }),
-            ...(href === undefined ? [] : [Navigate({ href, method: "push" })]),
-          ],
-        ];
+        return href === undefined
+          ? [
+              evo(model, {
+                githubInputError: () =>
+                  "Paste a github.com repository, pull request, compare, commit, or file URL.",
+              }),
+              [],
+            ]
+          : [
+              evo(model, {
+                githubInputError: () => "",
+                toolbarMenu: () => "none" as const,
+              }),
+              [Navigate({ href, method: "push" })],
+            ];
       },
       RefreshedReview: () => {
         if (model.phase === "loading" || model.prUrl.trim() === "") return [model, []];
@@ -857,6 +880,8 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         const next = evo(model, {
           page: () => "review" as const,
           phase: () => "ready" as const,
+          githubInput: () => meta.url,
+          githubInputError: () => "",
           prUrl: () => meta.url,
           meta: () => meta,
           files: () => files,
@@ -951,18 +976,26 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
               [],
             ]
           : [model, []],
-      LoadedRepositoryFiles: ({ files }) => repositoryFilesLoaded(model, files),
-      FailedRepositoryFiles: ({ error }) => repositoryFilesFailed(model, error),
+      LoadedRepositoryFiles: ({ repository, files }) =>
+        repositoryFilesLoaded(model, repository, files),
+      FailedRepositoryFiles: ({ repository, error, missing }) =>
+        repositoryFilesFailed(model, repository, error, missing),
+      RequestedRepositoryClone: ({ destination }) =>
+        requestRepositoryClone(model, destination),
+      ClonedRepository: ({ repository, path }) =>
+        repositoryCloned(model, repository, path),
+      FailedRepositoryClone: ({ repository, error }) =>
+        repositoryCloneFailed(model, repository, error),
       ChangedRepositoryQuery: ({ value }) => changeRepositoryQuery(model, value),
       SubmittedRepositorySearch: () => submitRepositorySearch(model),
       LoadedRepositorySearch: input => repositorySearchLoaded(model, input),
-      FailedRepositorySearch: ({ query, error }) =>
-        repositorySearchFailed(model, query, error),
+      FailedRepositorySearch: ({ repository, query, error }) =>
+        repositorySearchFailed(model, repository, query, error),
       SelectedRepositoryFile: ({ path }) => selectRepositoryFile(model, path),
       ClosedRepositoryFile: () => closeRepositoryFile(model),
       LoadedRepositoryFile: input => repositoryFileLoaded(model, input),
-      FailedRepositoryFile: ({ path, error }) =>
-        repositoryFileFailed(model, path, error),
+      FailedRepositoryFile: ({ repository, path, error }) =>
+        repositoryFileFailed(model, repository, path, error),
       LoadedSemantic: ({ requestedUrl, path, result }) =>
         isCurrentDiffRequest(model, requestedUrl)
           ? [
@@ -1175,7 +1208,7 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         const body = model.reviewBody.trim();
         if (
           model.reviewSubmission._tag === "Loading" ||
-          model.meta.number === "compare" ||
+          !isPullRequestUrl(model.meta.url) ||
           (event !== "APPROVE" && body === "")
         ) {
           return [model, []];
@@ -1352,6 +1385,8 @@ const initialModel = (prUrl: string, options: ReviewOptions) =>
     page: "review",
     phase: prUrl === "" ? "ready" : "loading",
     error: "",
+    githubInput: prUrl,
+    githubInputError: "",
     prUrl,
     filter: "",
     meta: sampleMeta,
@@ -1369,6 +1404,7 @@ const initialModel = (prUrl: string, options: ReviewOptions) =>
       files: { _tag: "Idle" },
       search: { _tag: "Idle" },
       file: { _tag: "Idle" },
+      clone: { _tag: "Idle" },
     },
     toolbarMenu: "none",
     toolbarCompact: false,

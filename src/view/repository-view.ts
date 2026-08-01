@@ -3,6 +3,7 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 import {
   ChangedRepositoryQuery,
   ClosedRepositoryFile,
+  RequestedRepositoryClone,
   SelectedRepositoryFile,
   SubmittedRepositorySearch,
 } from "../domain";
@@ -13,6 +14,7 @@ import type {
   RepositorySearchMatch,
 } from "../domain";
 import { syntaxHighlightedContent } from "./syntax-highlight";
+import { githubLocationForm } from "./github-location-view";
 
 const formatSize = (bytes: number) =>
   bytes < 1_024
@@ -160,6 +162,46 @@ const repositoryFileView = (
   ]);
 };
 
+const repositoryCloneView = (model: Model, h: HtmlBuilder<Message>): Html => {
+  const clone = model.repositoryBrowser.clone;
+  const loading = clone._tag === "Loading";
+  return h.section([h.Class("repository-clone-offer")], [
+    h.span([h.Class("repository-clone-mark")], ["git"]),
+    h.h1([], ["Clone this repository for local browsing"]),
+    h.p([], [
+      "Hunker could not find this repository locally. A temporary clone keeps your repos root clean; a configured clone makes it a normal local checkout.",
+    ]),
+    clone._tag === "Failed"
+      ? h.div([h.Class("repository-clone-error"), h.Role("alert")], [clone.error])
+      : h.empty,
+    h.div([h.Class("repository-clone-actions")], [
+      h.button(
+        [
+          h.Type("button"),
+          h.Disabled(loading),
+          h.OnClick(RequestedRepositoryClone({ destination: "temporary" })),
+        ],
+        [loading && clone.destination === "temporary" ? "Cloning…" : "Clone to /tmp"],
+      ),
+      h.button(
+        [
+          h.Type("button"),
+          h.Disabled(loading),
+          h.OnClick(RequestedRepositoryClone({ destination: "configured" })),
+        ],
+        [
+          loading && clone.destination === "configured"
+            ? "Cloning…"
+            : "Clone to repos root",
+        ],
+      ),
+    ]),
+    h.small([], [
+      "Private repositories use the same local gh authentication as PR loading.",
+    ]),
+  ]);
+};
+
 export const repositoryView = (
   model: Model,
   h: HtmlBuilder<Message>,
@@ -176,6 +218,7 @@ export const repositoryView = (
         h.span([], ["Local repository"]),
         h.strong([], [`${browser.owner}/${browser.name}`]),
       ]),
+      githubLocationForm(model, "repository-github-loader", h),
       h.form(
         [h.Class("repository-search"), h.OnSubmit(SubmittedRepositorySearch())],
         [
@@ -200,7 +243,10 @@ export const repositoryView = (
         ["GitHub ↗"],
       ),
     ]),
-    browser.files._tag === "Failed"
+    model.githubInputError === ""
+      ? h.empty
+      : h.div([h.Class("error-banner"), h.Role("alert")], [model.githubInputError]),
+    browser.files._tag === "Failed" && !browser.files.missing
       ? h.div([h.Class("error-banner"), h.Role("alert")], [browser.files.error])
       : h.empty,
     h.div([h.Class("repository-workspace")], [
@@ -219,7 +265,9 @@ export const repositoryView = (
         ),
       ]),
       h.div([h.Class("repository-main")], [
-        browser.selectedPath !== ""
+        browser.files._tag === "Failed" && browser.files.missing
+          ? repositoryCloneView(model, h)
+          : browser.selectedPath !== ""
           ? repositoryFileView(model, h)
           : browser.query !== ""
             ? repositorySearchResults(model, h)

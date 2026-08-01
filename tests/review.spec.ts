@@ -56,8 +56,8 @@ test("shows an empty loading state for initial loads and refreshes", async ({ pa
   );
 
   await page.goto("/");
-  await page.getByPlaceholder("Paste a GitHub PR or compare URL").fill(reviewUrl);
-  await page.getByRole("button", { name: "Review", exact: true }).click();
+  await page.getByPlaceholder("Paste any GitHub URL").fill(reviewUrl);
+  await page.getByRole("button", { name: "Open", exact: true }).click();
 
   await expect(page.locator(".review-loading")).toBeVisible();
   await expect(page.locator(".review-loading")).toContainText(
@@ -115,8 +115,8 @@ test("loads a PR and renders ast-grep intelligence in both review layouts", asyn
   await expect(page.getByRole("navigation", { name: "Changed files" })).toBeHidden();
   await page.getByRole("button", { name: "Expand file sidebar" }).click();
   await expect(page.locator(".workspace")).not.toHaveClass(classToken("sidebar-collapsed"));
-  await page.getByPlaceholder("Paste a GitHub PR or compare URL").fill(reviewUrl);
-  await page.getByRole("button", { name: "Review", exact: true }).click();
+  await page.getByPlaceholder("Paste any GitHub URL").fill(reviewUrl);
+  await page.getByRole("button", { name: "Open", exact: true }).click();
 
   await expect(page).toHaveURL(url =>
     url.pathname === "/example/hunker-demo/pull/42" &&
@@ -220,8 +220,8 @@ test("loads a copied review route and refreshes it from GitHub", async ({ page }
   await page.goto(sharedRoute);
 
   await expect(page.getByRole("heading", { name: "Review revision 1" })).toBeVisible();
-  await page.getByRole("button", { name: "Open PR", exact: true }).click();
-  await expect(page.getByPlaceholder("Paste a GitHub PR or compare URL")).toHaveValue(
+  await page.getByRole("button", { name: "Open GitHub link", exact: true }).click();
+  await expect(page.getByPlaceholder("Paste any GitHub URL")).toHaveValue(
     reviewUrl,
   );
   await page.getByRole("button", { name: "Close toolbar menu" }).click();
@@ -348,6 +348,38 @@ test("lists PR commits and opens a URL-persisted commit diff", async ({ page }) 
   await page.getByRole("button", { name: "Files", exact: true }).click();
   await expect(page.locator(".diff-panel")).toHaveCount(1);
   await expect(page.locator(".diff-panel")).toContainText("const message");
+});
+
+test("opens a direct GitHub commit without PR-only controls", async ({ page }) => {
+  let reviewRequests = 0;
+  await page.route("**/api/diff?**", route =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: commitDiffResponse,
+    }),
+  );
+  await page.route("**/api/semantic?**", route =>
+    route.fulfill({ status: 200, contentType: "application/json", json: semanticResponse }),
+  );
+  await page.route("**/api/reviews?**", route => {
+    reviewRequests += 1;
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: { comments: [] },
+    });
+  });
+
+  await page.goto(
+    "/example/hunker-demo/commit/2222222222222222222222222222222222222222",
+  );
+  await expect(
+    page.getByRole("heading", { name: commitDiffResponse.title }),
+  ).toBeVisible();
+  await expect(page.locator(".review-tab-picker")).toHaveCount(0);
+  await expect(page.locator(".github-review-composer")).toHaveCount(0);
+  expect(reviewRequests).toBe(0);
 });
 
 test("drops a stale commit when restoring URL state for another PR", async ({
@@ -522,8 +554,8 @@ test("reports a semantic backend failure without hiding the patch", async ({ pag
   );
 
   await page.goto("/");
-  await page.getByPlaceholder("Paste a GitHub PR or compare URL").fill(reviewUrl);
-  await page.getByRole("button", { name: "Review", exact: true }).click();
+  await page.getByPlaceholder("Paste any GitHub URL").fill(reviewUrl);
+  await page.getByRole("button", { name: "Open", exact: true }).click();
 
   await expect(page.locator(".semantic-banner.is-error")).toContainText(
     "Syntax analysis unavailable",

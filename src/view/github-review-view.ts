@@ -15,6 +15,7 @@ import type {
   ReplyState,
 } from "../domain";
 import type { DiffLine } from "../diff";
+import { isPullRequestUrl } from "../review-route";
 import { markdownSummary, markdownView } from "./markdown-view";
 
 export type GitHubReviewInteraction = Readonly<{
@@ -227,7 +228,7 @@ export const reviewComposerView = (
   model: Model,
   h: HtmlBuilder<Message>,
 ): Html => {
-  if (model.prUrl === "" || model.meta.number === "compare") return h.empty;
+  if (model.prUrl === "" || !isPullRequestUrl(model.meta.url)) return h.empty;
   const loading = model.reviewSubmission._tag === "Loading";
   const hasBody = model.reviewBody.trim() !== "";
   return h.section([h.Class("github-review-composer")], [

@@ -92,10 +92,12 @@ resolved GitHub threads are labeled and start collapsed so completed discussions
 do not dominate the diff. Comment bodies render GitHub-flavored Markdown through
 a typed syntax tree; raw HTML is displayed as text instead of being injected.
 
-The repository name links to a local repository browser at
-`/repo/:owner/:repository`. By default Hunker resolves clones below `~/src`,
-including both `~/src/repository` and `~/src/owner/repository` layouts. Set
-`HUNKER_REPOS_ROOT` before starting the API to use another root:
+The top bar accepts repository, pull request, compare, commit, PR-commit, and
+blob URLs and opens the most specific Hunker view. The repository name links to
+a local repository browser at `/repo/:owner/:repository`. By default Hunker
+resolves clones below `~/src`, including both `~/src/repository` and
+`~/src/owner/repository` layouts. Set `HUNKER_REPOS_ROOT` before starting the API
+to use another root:
 
 ```bash
 HUNKER_REPOS_ROOT=/path/to/clones bun run dev
@@ -106,6 +108,13 @@ filename ranking and content matches; Hunker adds surrounding source lines and
 opens matched files with the same safe syntax highlighter used by diffs. Search
 queries and selected files are stored in the repository URL. The API validates
 repository and file paths against the configured root before reading them.
+When a repository is unavailable, the browser offers to clone it either below
+the configured repos root or into `/tmp/hunker/repositories`. Set
+`HUNKER_CACHE_ROOT` to move temporary Hunker clones elsewhere. Cloning uses the
+local `gh` authentication, including access to private repositories.
+
+The planned local Git backing design is documented in
+[`docs/local-git-backing.md`](docs/local-git-backing.md).
 
 ## Useful commands
 

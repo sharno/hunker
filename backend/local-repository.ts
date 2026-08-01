@@ -1,7 +1,8 @@
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 
 import { FileFinder } from "@ff-labs/fff-node";
-import { Config, Context, Data, Effect, FileSystem, Layer, Path, Scope } from "effect";
+import { Config, Context, Data, Effect, FileSystem, Layer, Path, Scope, Stream } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 export type RepositoryFile = Readonly<{
   path: string;
@@ -21,6 +22,7 @@ export type RepositorySearchMatch = Readonly<{
 }>;
 
 type RepositoryId = Readonly<{ owner: string; name: string }>;
+export type RepositoryCloneDestination = "temporary" | "configured";
 
 type LocalRepositoryShape = Readonly<{
   listFiles: (
@@ -43,6 +45,10 @@ type LocalRepositoryShape = Readonly<{
     Readonly<{ path: string; content: string; truncated: boolean }>,
     LocalRepositoryFailed
   >;
+  clone: (
+    repository: RepositoryId,
+    destination: RepositoryCloneDestination,
+  ) => Effect.Effect<Readonly<{ path: string }>, LocalRepositoryFailed>;
 }>;
 
 export class LocalRepositoryFailed extends Data.TaggedError("LocalRepositoryFailed")<{
@@ -66,6 +72,7 @@ export const LocalRepositoryLive = Layer.effect(
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const paths = yield* Path.Path;
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const configuredRoot = yield* Config.string("HUNKER_REPOS_ROOT").pipe(
       Config.withDefault(paths.join(homedir(), "src")),
     );
@@ -74,6 +81,10 @@ export const LocalRepositoryLive = Layer.effect(
         ? paths.join(homedir(), configuredRoot.slice(2))
         : configuredRoot,
     );
+    const configuredCacheRoot = yield* Config.string("HUNKER_CACHE_ROOT").pipe(
+      Config.withDefault(paths.join(tmpdir(), "hunker", "repositories")),
+    );
+    const cacheRoot = paths.resolve(configuredCacheRoot);
     const finders = new Map<string, FileFinder>();
 
     const scope = yield* Effect.scope;
@@ -92,6 +103,7 @@ export const LocalRepositoryLive = Layer.effect(
         }
         const flat = paths.resolve(repositoriesRoot, repository.name);
         const nested = paths.resolve(repositoriesRoot, repository.owner, repository.name);
+        const temporary = paths.resolve(cacheRoot, repository.owner, repository.name);
         const flatExists = yield* fs.exists(flat).pipe(
           Effect.mapError(() => failure(`Could not inspect ${repositoriesRoot}.`)),
         );
@@ -100,11 +112,63 @@ export const LocalRepositoryLive = Layer.effect(
           Effect.mapError(() => failure(`Could not inspect ${repositoriesRoot}.`)),
         );
         if (nestedExists) return nested;
+        const temporaryExists = yield* fs.exists(temporary).pipe(
+          Effect.mapError(() => failure(`Could not inspect ${cacheRoot}.`)),
+        );
+        if (temporaryExists) return temporary;
         return yield* failure(
-          `Local repository not found. Expected ${flat} or ${nested}. Set HUNKER_REPOS_ROOT to change the repository root.`,
+          `Local repository not found. Expected ${flat}, ${nested}, or ${temporary}.`,
           404,
         );
       });
+
+    const clone = (repository: RepositoryId, destination: RepositoryCloneDestination) =>
+      Effect.gen(function* () {
+        if (!validSegment.test(repository.owner) || !validSegment.test(repository.name)) {
+          return yield* failure("That repository name is not valid.", 400);
+        }
+        const root = destination === "configured" ? repositoriesRoot : cacheRoot;
+        const target =
+          destination === "configured"
+            ? paths.resolve(root, repository.name)
+            : paths.resolve(root, repository.owner, repository.name);
+        const targetExists = yield* fs.exists(target).pipe(
+          Effect.mapError(() => failure(`Could not inspect ${target}.`)),
+        );
+        if (targetExists) return { path: target };
+        yield* fs.makeDirectory(paths.dirname(target), { recursive: true }).pipe(
+          Effect.mapError(() => failure(`Could not create ${paths.dirname(target)}.`)),
+        );
+        const handle = yield* spawner.spawn(
+          ChildProcess.make(
+            "gh",
+            [
+              "repo",
+              "clone",
+              `${repository.owner}/${repository.name}`,
+              target,
+              "--",
+              "--filter=blob:none",
+            ],
+            { cwd: paths.dirname(target) },
+          ),
+        ).pipe(
+          Effect.mapError(error => failure(`Could not start gh: ${String(error)}`)),
+        );
+        const [output, exitCode] = yield* Effect.all(
+          [Stream.mkString(Stream.decodeText(handle.all)), handle.exitCode],
+          { concurrency: "unbounded" },
+        ).pipe(
+          Effect.mapError(error => failure(`Could not clone the repository: ${String(error)}`)),
+        );
+        if (exitCode !== ChildProcessSpawner.ExitCode(0)) {
+          return yield* failure(
+            output.trim() || "GitHub CLI could not clone this repository.",
+            502,
+          );
+        }
+        return { path: target };
+      }).pipe(Effect.scoped);
 
     const finderFor = (repository: RepositoryId) =>
       Effect.gen(function* () {
@@ -232,6 +296,6 @@ export const LocalRepositoryLive = Layer.effect(
         };
       });
 
-    return LocalRepository.of({ listFiles, search, readFile });
+    return LocalRepository.of({ listFiles, search, readFile, clone });
   }),
 );
