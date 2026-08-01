@@ -242,26 +242,6 @@ const compactReviewToolbar = (model: Model, h: HtmlBuilder<Message>): Html => {
       ],
     ),
     h.nav([h.Class("toolbar-primary-controls"), h.AriaLabel("Review display")], [
-      h.div([h.Class("segmented review-tab-picker")], [
-        h.button(
-          [
-            h.Type("button"),
-            h.Class(buttonClass(model.reviewTab === "files")),
-            h.OnClick(SelectedReviewTab({ value: "files" })),
-          ],
-          ["Files"],
-        ),
-        model.meta.number === "compare"
-          ? h.empty
-          : h.button(
-              [
-                h.Type("button"),
-                h.Class(buttonClass(model.reviewTab === "commits")),
-                h.OnClick(SelectedReviewTab({ value: "commits" })),
-              ],
-              ["Commits"],
-            ),
-      ]),
       model.reviewTab === "files" || model.selectedCommit !== ""
         ? scopePicker(model, false, h)
         : h.empty,
@@ -311,6 +291,26 @@ const compactReviewToolbar = (model: Model, h: HtmlBuilder<Message>): Html => {
             : h.empty,
         ],
       ),
+      model.meta.number === "compare"
+        ? h.empty
+        : h.div([h.Class("segmented review-tab-picker")], [
+            h.button(
+              [
+                h.Type("button"),
+                h.Class(buttonClass(model.reviewTab === "files")),
+                h.OnClick(SelectedReviewTab({ value: "files" })),
+              ],
+              ["Files"],
+            ),
+            h.button(
+              [
+                h.Type("button"),
+                h.Class(buttonClass(model.reviewTab === "commits")),
+                h.OnClick(SelectedReviewTab({ value: "commits" })),
+              ],
+              ["Commits"],
+            ),
+          ]),
       h.div(
         [
           h.Class(

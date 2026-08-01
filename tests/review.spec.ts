@@ -246,8 +246,12 @@ test("lists PR commits and opens a URL-persisted commit diff", async ({ page }) 
     page.getByRole("link", { name: "example/hunker-demo", exact: true }),
   ).toHaveAttribute("href", "/repo/example/hunker-demo");
 
+  const tabPicker = page.locator(".review-tab-picker");
+  const filesPosition = await tabPicker.boundingBox();
   await page.getByRole("button", { name: "Commits", exact: true }).click();
   await expect(page).toHaveURL(url => url.searchParams.get("tab") === "commits");
+  const commitsPosition = await tabPicker.boundingBox();
+  expect(commitsPosition?.x).toBeCloseTo(filesPosition?.x ?? 0, 0);
   await expect(page.locator(".commit-row")).toHaveCount(2);
   await expect(page.locator(".commits-browser")).toContainText(
     "Introduce greeting helper",
