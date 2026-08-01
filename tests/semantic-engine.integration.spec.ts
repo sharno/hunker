@@ -144,3 +144,96 @@ ${before}`;
 
   expect(result).toEqual([]);
 });
+
+test("classifies changed and renamed Rust declarations", async () => {
+  const updated = await runFile({
+    path: "src/greeting.rs",
+    previousPath: "",
+    status: "modified",
+    oldText: "pub fn greet(name: &str) -> usize { name.len() }\n",
+    newText: "pub fn greet(name: &str) -> usize { name.trim().len() }\n",
+  });
+  expect(updated._tag).toBe("Parsed");
+  if (updated._tag !== "Parsed") return;
+  expect(updated.language).toBe("Rust");
+  expect(updated.changes).toEqual([
+    expect.objectContaining({
+      _tag: "Updated",
+      kind: "function_item",
+      label: "greet",
+    }),
+  ]);
+
+  const renamed = await runFile({
+    path: "src/greeting.rs",
+    previousPath: "",
+    status: "modified",
+    oldText: "pub fn greet(name: &str) -> String { name.to_owned() }\n",
+    newText: "pub fn welcome(person: &str) -> String { person.to_owned() }\n",
+  });
+  expect(renamed._tag).toBe("Parsed");
+  if (renamed._tag !== "Parsed") return;
+  expect(renamed.changes).toEqual([
+    expect.objectContaining({
+      _tag: "Renamed",
+      kind: "function_item",
+      oldLabel: "greet",
+      newLabel: "welcome",
+    }),
+  ]);
+});
+
+test("recognizes formatting-only Rust changes as semantically equal", async () => {
+  const result = await runFile({
+    path: "src/lib.rs",
+    previousPath: "",
+    status: "modified",
+    oldText: "pub const ANSWER:i32=42;\n",
+    newText: "pub const ANSWER: i32 = 42;\n",
+  });
+
+  expect(result).toEqual(
+    expect.objectContaining({
+      _tag: "Parsed",
+      language: "Rust",
+      semanticEqual: true,
+      changes: [],
+    }),
+  );
+});
+
+test("detects a Rust function moved between files", async () => {
+  const moved = `pub fn calculate_total(values: &[i64]) -> i64 {
+    values.iter().sum()
+}
+`;
+  const result = await runReview([
+    {
+      path: "src/total.rs",
+      previousPath: "",
+      status: "modified",
+      oldText: `pub const RETAINED: bool = true;\n\n${moved}`,
+      newText: "pub const RETAINED: bool = true;\n",
+    },
+    {
+      path: "src/billing.rs",
+      previousPath: "",
+      status: "modified",
+      oldText: 'pub const MODULE_NAME: &str = "billing";\n',
+      newText: `pub const MODULE_NAME: &str = "billing";\n\n${moved}`,
+    },
+  ]);
+
+  expect(result).toEqual([
+    expect.objectContaining({
+      fromPath: "src/total.rs",
+      toPath: "src/billing.rs",
+      fromLine: 3,
+      toLine: 3,
+      lineCount: 3,
+      kind: "function_item",
+      label: "calculate_total",
+      changed: false,
+    }),
+  ]);
+});

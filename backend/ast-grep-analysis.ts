@@ -1,11 +1,21 @@
-import { Lang, parse, type SgNode } from "@ast-grep/napi";
+import rustRegistration from "@ast-grep/lang-rust";
+import {
+  Lang,
+  parse,
+  registerDynamicLanguage,
+  type SgNode,
+} from "@ast-grep/napi";
 
 import type { SourceRange } from "../src/domain";
 
 export type SupportedLanguage = Readonly<{
-  ast: Lang;
-  name: "JavaScript" | "TypeScript" | "TSX";
+  ast: Parameters<typeof parse>[0];
+  name: "JavaScript" | "Rust" | "TypeScript" | "TSX";
 }>;
+
+const RUST_LANGUAGE = "rust";
+
+registerDynamicLanguage({ [RUST_LANGUAGE]: rustRegistration });
 
 export type AstUnit = Readonly<{
   kind: string;
@@ -22,6 +32,7 @@ export const languageForPath = (path: string): SupportedLanguage | undefined => 
   const extension = path.split(".").at(-1)?.toLowerCase();
   if (extension === "ts") return { ast: Lang.TypeScript, name: "TypeScript" };
   if (extension === "tsx") return { ast: Lang.Tsx, name: "TSX" };
+  if (extension === "rs") return { ast: RUST_LANGUAGE, name: "Rust" };
   if (
     extension === "js" ||
     extension === "jsx" ||
@@ -41,6 +52,19 @@ const declarationKinds = new Set([
   "lexical_declaration",
   "type_alias_declaration",
   "variable_declaration",
+  "const_item",
+  "enum_item",
+  "foreign_mod_item",
+  "function_item",
+  "function_signature_item",
+  "impl_item",
+  "macro_definition",
+  "mod_item",
+  "static_item",
+  "struct_item",
+  "trait_item",
+  "type_item",
+  "union_item",
 ]);
 
 const memberKinds = new Set([
@@ -48,9 +72,20 @@ const memberKinds = new Set([
   "method_definition",
   "method_signature",
   "public_field_definition",
+  "associated_type",
+  "const_item",
+  "function_item",
+  "function_signature_item",
+  "type_item",
 ]);
 
-const containerKinds = new Set(["class_declaration", "interface_declaration"]);
+const containerKinds = new Set([
+  "class_declaration",
+  "impl_item",
+  "interface_declaration",
+  "mod_item",
+  "trait_item",
+]);
 
 const identifierKinds = new Set([
   "identifier",
@@ -58,9 +93,11 @@ const identifierKinds = new Set([
   "property_identifier",
   "shorthand_property_identifier",
   "type_identifier",
+  "field_identifier",
 ]);
 
-const literalKind = /(?:number|string|template|regex|true|false|null|undefined)/;
+const literalKind =
+  /(?:boolean|char|float|integer|number|string|template|regex|true|false|null|undefined)/;
 
 const toSourceRange = (node: SgNode): SourceRange => {
   const range = node.range();
@@ -73,7 +110,7 @@ const toSourceRange = (node: SgNode): SourceRange => {
 };
 
 const leafTokens = (node: SgNode, shape: boolean): ReadonlyArray<string> => {
-  if (String(node.kind()) === "comment") return [];
+  if (String(node.kind()).includes("comment")) return [];
   const children = node.children();
   if (children.length === 0) {
     const kind = String(node.kind());

@@ -5,6 +5,7 @@
     "": {
       "name": "site-creator-vinext-starter",
       "dependencies": {
+        "@ast-grep/lang-rust": "0.0.7",
         "@ast-grep/napi": "0.45.0",
         "@effect/platform-browser": "4.0.0-beta.102",
         "@effect/platform-node": "4.0.0-beta.102",
@@ -23,6 +24,8 @@
     },
   },
   "packages": {
+    "@ast-grep/lang-rust": ["@ast-grep/lang-rust@0.0.7", "", { "dependencies": { "@ast-grep/setup-lang": "0.0.6" }, "peerDependencies": { "tree-sitter-cli": "0.25.8" }, "optionalPeers": ["tree-sitter-cli"] }, "sha512-CF6jv8XmlVQgr/pFKADM87EkoGiHIrHKsG1wcX2iqgdBX5kW8wH+Zd4GP6SMme2eZogD49f19vRoRTF44iZqzg=="],
+
     "@ast-grep/napi": ["@ast-grep/napi@0.45.0", "", { "optionalDependencies": { "@ast-grep/napi-darwin-arm64": "0.45.0", "@ast-grep/napi-darwin-x64": "0.45.0", "@ast-grep/napi-linux-arm64-gnu": "0.45.0", "@ast-grep/napi-linux-arm64-musl": "0.45.0", "@ast-grep/napi-linux-x64-gnu": "0.45.0", "@ast-grep/napi-linux-x64-musl": "0.45.0", "@ast-grep/napi-win32-arm64-msvc": "0.45.0", "@ast-grep/napi-win32-ia32-msvc": "0.45.0", "@ast-grep/napi-win32-x64-msvc": "0.45.0" } }, "sha512-5dQqAVZeHfdQsXjH9FCn+A8a1tb+GVa3Asdq6cKP4l7O0KqH/gmWLswvSaPx7twWfpUwHtGpX7L9frPEAqfNng=="],
 
     "@ast-grep/napi-darwin-arm64": ["@ast-grep/napi-darwin-arm64@0.45.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-yRf7pj+KFgCLw7mA39MjwrTu9zUnz7Kp7f/y8NrZ8Z7b3nI+eBQRvqwdG85J3nR8IJGXLbGBtCBLkrmYtAxWpQ=="],
@@ -42,6 +45,8 @@
     "@ast-grep/napi-win32-ia32-msvc": ["@ast-grep/napi-win32-ia32-msvc@0.45.0", "", { "os": "win32", "cpu": "ia32" }, "sha512-BzysPG/tobpa4YBQ7VHPvvxPth6o3ct4LUS8A9hG0rvYdMGi5DKZya9nxSgpY/8yuxQsi9VSNAzWnCamnKWReg=="],
 
     "@ast-grep/napi-win32-x64-msvc": ["@ast-grep/napi-win32-x64-msvc@0.45.0", "", { "os": "win32", "cpu": "x64" }, "sha512-sBAdQUZHrZL4JECMPWtz+aFF7nK0vUG4xQ68w8UGkqKbA//8JYtddpTtpJ1hM9nYfZupZN/saprkIMWjp7cqbA=="],
+
+    "@ast-grep/setup-lang": ["@ast-grep/setup-lang@0.0.6", "", {}, "sha512-aSYZNF5nGQMxnwiA3Lcc8zi0AtpGlug47ADgqCgP/2n7p922FbnW7vo1rbW4kKjW72B/3mDdN7uvYidv8JnPnw=="],
 
     "@effect/platform-browser": ["@effect/platform-browser@4.0.0-beta.102", "", { "dependencies": { "multipasta": "^0.2.8" }, "peerDependencies": { "effect": "^4.0.0-beta.102" } }, "sha512-DXXVt+oOpukqI3lEaGvvXQxSobzIy3lAsIQvlpVK+MuYBm1o4FHZrHKbrOFItDUvSR1t0kiTncFPRi01YaJUmA=="],
 
