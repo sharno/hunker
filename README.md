@@ -1,6 +1,6 @@
 # Hunker
 
-Hunker is a focused pull-request diff viewer for reviewing human- and agent-written changes. It reduces visual noise with whitespace filtering, character-level highlighting, and syntax-aware structural diffs powered by ast-grep and tree-sitter.
+Hunker is a focused pull-request diff viewer for reviewing human- and agent-written changes. It reduces visual noise with whitespace filtering, character-level highlighting, syntax highlighting, and syntax-aware structural diffs powered by ast-grep and tree-sitter.
 
 The stack is Effect end to end:
 
@@ -14,6 +14,7 @@ The stack is Effect end to end:
 - `src/state.ts` — update function, initialization, and HTTP command
 - `src/diff.ts` — unified-diff parsing and full-file context stitching
 - `src/view/diff-view.ts` — unified/side-by-side rendering and hunk interaction
+- `src/view/syntax-highlight.ts` — safe syntax tokenization and character-overlay composition
 - `src/view/review-view.ts` — review workspace composition
 - `src/sample.ts` — local demonstration fixture
 - `backend/github-auth.ts` — environment and `gh` credential discovery
@@ -38,7 +39,7 @@ Loading a review replaces the local address with a shareable route such as
 `http://localhost:5173/radarlabs/server/pull/7848`. Opening that route in another
 tab or reloading it fetches the review automatically. The query string records
 the selected file, full/file scope, layout, whitespace, semantic, character-diff,
-and sidebar settings, so copying the address restores the same review view. Use
+syntax-highlighting, review, and sidebar settings, so copying the address restores the same review view. Use
 the Refresh button in the review header to discard cached semantic results and
 pull the latest diff from GitHub without losing those settings.
 
@@ -46,6 +47,13 @@ Files and individual hunks can be collapsed independently. The Full file action
 loads the base and head versions through the authenticated Effect backend and
 fills in context omitted by GitHub's patch; Patch only returns to the compact
 review without another network request.
+
+Syntax highlighting is enabled by default and can be toggled from the review
+controls. Lowlight produces a token tree that Foldkit renders as safe spans, so
+syntax colors compose with character-diff overlays without injecting HTML.
+Hunker registers only its supported grammars, including JavaScript, TypeScript,
+Python, Rust, OpenTofu/HCL, Go, shell, JSON, YAML, HTML, CSS, SQL, C/C++, Java,
+and Markdown.
 
 GitHub review threads can be shown or hidden inline, and that choice is recorded
 in the review URL. Hunker can reply to an existing thread and submit Comment,

@@ -55,7 +55,16 @@ test("loads a PR and renders ast-grep intelligence in both review layouts", asyn
   );
   await expect(page.locator(".split-lines")).toBeVisible();
   await expect(page.locator(".split-lines .char-change")).not.toHaveCount(0);
+  await expect(page.locator(".split-lines .hljs-keyword")).not.toHaveCount(0);
   await expect(page.locator(".line-semantic")).not.toHaveCount(0);
+
+  const syntaxToggle = page.getByRole("button", { name: "Syntax", exact: true });
+  await syntaxToggle.click();
+  await expect(page.locator('.diff-lines [class*="hljs-"]')).toHaveCount(0);
+  await expect(page).toHaveURL(url => url.searchParams.get("syntax") === "off");
+  await syntaxToggle.click();
+  await expect(page.locator(".split-lines .hljs-keyword")).not.toHaveCount(0);
+  await expect(page).toHaveURL(url => url.searchParams.get("syntax") === "on");
 
   await page.getByRole("button", { name: "Full diff", exact: true }).click();
   await expect(page.locator(".full-diff .diff-panel")).toHaveCount(2);
@@ -79,6 +88,7 @@ test("loads a PR and renders ast-grep intelligence in both review layouts", asyn
     url.searchParams.get("whitespace") === "ignore" &&
     url.searchParams.get("semantic") === "off" &&
     url.searchParams.get("characters") === "on" &&
+    url.searchParams.get("syntax") === "on" &&
     url.searchParams.get("sidebar") === "expanded" &&
     url.searchParams.get("file") === "src/greet.ts",
   );
@@ -107,7 +117,7 @@ test("loads a copied review route and refreshes it from GitHub", async ({ page }
   });
 
   const sharedRoute =
-    "/example/hunker-demo/pull/42?scope=full&view=unified&whitespace=show&semantic=off&characters=off&sidebar=collapsed&reviews=hide&file=src%2Fmessage.ts";
+    "/example/hunker-demo/pull/42?scope=full&view=unified&whitespace=show&semantic=off&characters=off&syntax=off&sidebar=collapsed&reviews=hide&file=src%2Fmessage.ts";
   await page.goto(sharedRoute);
 
   await expect(page.getByRole("heading", { name: "Review revision 1" })).toBeVisible();
@@ -129,6 +139,11 @@ test("loads a copied review route and refreshes it from GitHub", async ({ page }
     "aria-pressed",
     "false",
   );
+  await expect(page.getByRole("button", { name: "Syntax", exact: true })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  await expect(page.locator('.diff-lines [class*="hljs-"]')).toHaveCount(0);
   await expect(page.locator(".workspace")).toHaveClass(/sidebar-collapsed/);
   await expect(page.locator(".full-diff .diff-panel")).toHaveCount(2);
   await expect(page.locator(".unified-lines")).toHaveCount(2);
@@ -197,7 +212,7 @@ test("shows and hides inline GitHub reviews and posts replies and review decisio
   });
 
   await page.goto(
-    "/example/hunker-demo/pull/42?scope=file&view=unified&whitespace=ignore&semantic=off&characters=on&sidebar=expanded&reviews=show&file=src%2Fgreet.ts",
+    "/example/hunker-demo/pull/42?scope=file&view=unified&whitespace=ignore&semantic=off&characters=on&syntax=on&sidebar=expanded&reviews=show&file=src%2Fgreet.ts",
   );
   await expect(page.locator(".github-review-thread")).toHaveCount(1);
   await expect(page.locator(".github-review-thread")).toContainText(
@@ -287,7 +302,7 @@ export const untouchedFooter = true;
   });
 
   await page.goto(
-    "/example/hunker-demo/pull/42?scope=file&view=unified&whitespace=ignore&semantic=off&characters=on&sidebar=expanded&reviews=hide&file=src%2Fgreet.ts",
+    "/example/hunker-demo/pull/42?scope=file&view=unified&whitespace=ignore&semantic=off&characters=on&syntax=on&sidebar=expanded&reviews=hide&file=src%2Fgreet.ts",
   );
   const panel = page.locator(".diff-panel");
   await expect(panel).toHaveCount(1);

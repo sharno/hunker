@@ -6,6 +6,7 @@ import { hunkKey } from "../diff";
 import type { DiffLine, HunkDiffLine } from "../diff";
 import { inlineReviewThreads } from "./github-review-view";
 import type { GitHubReviewInteraction } from "./github-review-view";
+import { syntaxHighlightedContent } from "./syntax-highlight";
 
 export type MovedRanges = Readonly<{
   old: ReadonlyArray<Readonly<{ start: number; count: number }>>;
@@ -17,6 +18,7 @@ export type MovedRanges = Readonly<{
 export type DiffInteraction = Readonly<{
   path: string;
   collapsedHunks: ReadonlyArray<string>;
+  syntaxHighlighting: boolean;
   reviews: GitHubReviewInteraction;
 }>;
 
@@ -50,6 +52,7 @@ const codeContent = (
   line: DiffLine,
   paired: DiffLine | undefined,
   characterDiff: boolean,
+  interaction: DiffInteraction,
   h: HtmlBuilder<Message>,
 ): ReadonlyArray<string | Html> => {
   if (
@@ -58,17 +61,33 @@ const codeContent = (
     line.kind === "context" ||
     line.kind === "hunk"
   ) {
-    return [line.content || " "];
+    return syntaxHighlightedContent(
+      interaction.path,
+      line.content,
+      interaction.syntaxHighlighting,
+      undefined,
+      h,
+    );
   }
   const prefix = sharedPrefixLength(line.content, paired.content);
   const suffix = sharedSuffixLength(line.content, paired.content, prefix);
-  if (prefix + suffix >= line.content.length) return [line.content || " "];
+  if (prefix + suffix >= line.content.length) {
+    return syntaxHighlightedContent(
+      interaction.path,
+      line.content,
+      interaction.syntaxHighlighting,
+      undefined,
+      h,
+    );
+  }
   const end = suffix === 0 ? line.content.length : line.content.length - suffix;
-  return [
-    line.content.slice(0, prefix),
-    h.span([h.Class("char-change")], [line.content.slice(prefix, end)]),
-    suffix === 0 ? "" : line.content.slice(-suffix),
-  ];
+  return syntaxHighlightedContent(
+    interaction.path,
+    line.content,
+    interaction.syntaxHighlighting,
+    { start: prefix, end },
+    h,
+  );
 };
 
 const isCollapsedHunk = (line: DiffLine, interaction: DiffInteraction) =>
@@ -166,7 +185,7 @@ export const unifiedDiffView = (
           ]),
           h.code(
             [h.Class("line-code")],
-            codeContent(line, paired, characterDiff, h),
+            codeContent(line, paired, characterDiff, interaction, h),
           ),
         ],
       );
@@ -211,6 +230,7 @@ const splitCell = (
   side: "left" | "right",
   characterDiff: boolean,
   moved: MovedRanges,
+  interaction: DiffInteraction,
   h: HtmlBuilder<Message>,
 ) => {
   if (line === undefined) {
@@ -245,7 +265,7 @@ const splitCell = (
       ]),
       h.code(
         [h.Class("line-code")],
-        codeContent(line, paired, characterDiff, h),
+        codeContent(line, paired, characterDiff, interaction, h),
       ),
     ],
   );
@@ -271,6 +291,7 @@ export const splitDiffView = (
             "left",
             characterDiff,
             moved,
+            interaction,
             h,
           ),
           splitCell(
@@ -279,6 +300,7 @@ export const splitDiffView = (
             "right",
             characterDiff,
             moved,
+            interaction,
             h,
           ),
         ],

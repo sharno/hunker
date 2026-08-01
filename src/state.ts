@@ -47,6 +47,7 @@ import {
   ToggledReviewed,
   ToggledSemantic,
   ToggledSidebar,
+  ToggledSyntaxHighlighting,
   ToggledWhitespace,
 } from "./domain";
 import type {
@@ -427,6 +428,7 @@ const sampleModel = (model: ModelType): ModelType =>
     reviewBody: () => "",
     reviewSubmission: () => ({ _tag: "Idle" as const }),
     showGitHubReviews: () => true,
+    syntaxHighlighting: () => true,
   });
 
 const reviewOptions = (model: ModelType): ReviewOptions => ({
@@ -435,6 +437,7 @@ const reviewOptions = (model: ModelType): ReviewOptions => ({
   ignoreWhitespace: model.ignoreWhitespace,
   semantic: model.semantic,
   characterDiff: model.characterDiff,
+  syntaxHighlighting: model.syntaxHighlighting,
   sidebarCollapsed: model.sidebarCollapsed,
   showGitHubReviews: model.showGitHubReviews,
   selectedPath: model.selectedPath,
@@ -450,6 +453,7 @@ const applyReviewOptions = (
     ignoreWhitespace: () => options.ignoreWhitespace,
     semantic: () => options.semantic,
     characterDiff: () => options.characterDiff,
+    syntaxHighlighting: () => options.syntaxHighlighting,
     sidebarCollapsed: () => options.sidebarCollapsed,
     showGitHubReviews: () => options.showGitHubReviews,
     selectedPath: () => options.selectedPath,
@@ -740,6 +744,11 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
           evo(model, { characterDiff: value => !value }),
           [],
         ),
+      ToggledSyntaxHighlighting: () =>
+        synchronizeReviewUrl(
+          evo(model, { syntaxHighlighting: value => !value }),
+          [],
+        ),
       ToggledSidebar: () =>
         synchronizeReviewUrl(
           evo(model, { sidebarCollapsed: value => !value }),
@@ -812,6 +821,7 @@ const initialModel = (prUrl: string, options: ReviewOptions) =>
     ignoreWhitespace: options.ignoreWhitespace,
     semantic: options.semantic,
     characterDiff: options.characterDiff,
+    syntaxHighlighting: options.syntaxHighlighting,
     reviewedPaths: [],
     semanticResults: [],
     semanticRequest: { _tag: "Idle" },

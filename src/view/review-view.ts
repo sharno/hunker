@@ -15,6 +15,7 @@ import {
   ToggledReviewed,
   ToggledSemantic,
   ToggledSidebar,
+  ToggledSyntaxHighlighting,
   ToggledWhitespace,
 } from "../domain";
 import type {
@@ -244,6 +245,12 @@ const controlsView = (model: Model, h: HtmlBuilder<Message>): Html =>
         "Character diff",
         model.characterDiff,
         ToggledCharacterDiff(),
+        h,
+      ),
+      toggleButton(
+        "Syntax",
+        model.syntaxHighlighting,
+        ToggledSyntaxHighlighting(),
         h,
       ),
       model.prUrl === "" || model.meta.number === "compare"
@@ -478,6 +485,7 @@ const diffPanelView = (
   const interaction = {
     path: file.path,
     collapsedHunks: model.collapsedHunks,
+    syntaxHighlighting: model.syntaxHighlighting,
     reviews: {
       comments:
         model.showGitHubReviews && model.githubReviews._tag === "Ready"

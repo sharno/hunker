@@ -175,6 +175,7 @@ export const Model = S.Struct({
   ignoreWhitespace: S.Boolean,
   semantic: S.Boolean,
   characterDiff: S.Boolean,
+  syntaxHighlighting: S.Boolean,
   reviewedPaths: S.Array(S.String),
   semanticResults: S.Array(SemanticResult),
   semanticRequest: SemanticRequest,
@@ -229,6 +230,7 @@ export const SelectedReviewScope = m("SelectedReviewScope", {
 export const ToggledWhitespace = m("ToggledWhitespace");
 export const ToggledSemantic = m("ToggledSemantic");
 export const ToggledCharacterDiff = m("ToggledCharacterDiff");
+export const ToggledSyntaxHighlighting = m("ToggledSyntaxHighlighting");
 export const ToggledSidebar = m("ToggledSidebar");
 export const ToggledReviewed = m("ToggledReviewed", { path: S.String });
 export const ToggledFileCollapse = m("ToggledFileCollapse", { path: S.String });
@@ -290,6 +292,7 @@ export const Message = S.Union([
   ToggledWhitespace,
   ToggledSemantic,
   ToggledCharacterDiff,
+  ToggledSyntaxHighlighting,
   ToggledSidebar,
   ToggledReviewed,
   ToggledFileCollapse,

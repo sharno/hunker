@@ -8,6 +8,7 @@ export type ReviewOptions = Readonly<{
   ignoreWhitespace: boolean;
   semantic: boolean;
   characterDiff: boolean;
+  syntaxHighlighting: boolean;
   sidebarCollapsed: boolean;
   showGitHubReviews: boolean;
   selectedPath: string;
@@ -19,6 +20,7 @@ export const defaultReviewOptions: ReviewOptions = {
   ignoreWhitespace: true,
   semantic: true,
   characterDiff: true,
+  syntaxHighlighting: true,
   sidebarCollapsed: false,
   showGitHubReviews: true,
   selectedPath: "",
@@ -99,6 +101,7 @@ export const reviewOptionsFromSearch = (search: string): ReviewOptions => {
     ignoreWhitespace: optionBoolean(params.get("whitespace"), "ignore", "show", true),
     semantic: optionBoolean(params.get("semantic"), "on", "off", true),
     characterDiff: optionBoolean(params.get("characters"), "on", "off", true),
+    syntaxHighlighting: optionBoolean(params.get("syntax"), "on", "off", true),
     sidebarCollapsed: optionBoolean(
       params.get("sidebar"),
       "collapsed",
@@ -122,6 +125,7 @@ export const localReviewUrl = (
     whitespace: options.ignoreWhitespace ? "ignore" : "show",
     semantic: options.semantic ? "on" : "off",
     characters: options.characterDiff ? "on" : "off",
+    syntax: options.syntaxHighlighting ? "on" : "off",
     sidebar: options.sidebarCollapsed ? "collapsed" : "expanded",
     reviews: options.showGitHubReviews ? "show" : "hide",
   });
