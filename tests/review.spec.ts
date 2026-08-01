@@ -246,17 +246,36 @@ test("shows and hides inline GitHub reviews and posts replies and review decisio
   await expect(openThread).toContainText(
     "The rename makes the template clearer.",
   );
+  await expect(openThread.locator(".github-comment-markdown strong")).toHaveText(
+    "original parameter name",
+  );
+  await expect(openThread.locator(".markdown-inline-code")).toHaveText("callers");
+  await expect(openThread.locator(".github-comment-markdown li")).toHaveCount(2);
+  await expect(
+    openThread.getByRole("link", { name: "the style guide" }),
+  ).toHaveAttribute("href", "https://example.com/style");
+  await expect(openThread.getByRole("link", { name: "do not run this" })).toHaveCount(0);
+  await expect(openThread.locator("script")).toHaveCount(0);
+  await expect(openThread.locator(".markdown-raw")).toContainText(
+    "window.markdownWasUnsafe",
+  );
   const resolvedThread = page.locator(".github-review-thread").filter({
     hasText: "bob-reviewer",
   });
   await expect(resolvedThread).toHaveClass(classToken("is-collapsed"));
   await expect(resolvedThread.locator(".github-review-resolved")).toHaveText("Resolved");
+  await expect(resolvedThread.locator(".github-review-summary")).toHaveText(
+    "This thread has already been handled and can stay out of the way.",
+  );
   await resolvedThread.getByRole("button", {
     name: "Expand review thread from bob-reviewer",
   }).click();
   await expect(resolvedThread).not.toHaveClass(classToken("is-collapsed"));
   await expect(resolvedThread).toContainText(
     "This thread has already been handled and can stay out of the way.",
+  );
+  await expect(resolvedThread.locator(".github-comment-markdown em")).toHaveText(
+    "already been handled",
   );
 
   await openThread.getByRole("button", {

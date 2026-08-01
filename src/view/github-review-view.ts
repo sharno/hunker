@@ -15,6 +15,7 @@ import type {
   ReplyState,
 } from "../domain";
 import type { DiffLine } from "../diff";
+import { markdownSummary, markdownView } from "./markdown-view";
 
 export type GitHubReviewInteraction = Readonly<{
   comments: ReadonlyArray<GitHubReviewComment>;
@@ -70,7 +71,7 @@ const commentView = (
               ),
         ])
       : h.empty,
-    h.p([], [comment.body]),
+    markdownView(comment.body, h),
   ]);
 
 const threadView = (
@@ -82,7 +83,7 @@ const threadView = (
   const replyState = interaction.replyStates.find(item => item.commentId === root.id);
   const loading = replyState?._tag === "Loading";
   const collapsed = interaction.collapsedThreads.includes(root.id);
-  const summary = root.body.split("\n")[0] ?? "";
+  const summary = markdownSummary(root.body);
   return h.section(
     [
       h.Key(`review-thread-${root.id}`),

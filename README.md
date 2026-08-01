@@ -74,7 +74,8 @@ Approve, or Request changes reviews through the same server-side GitHub
 credential used for private repositories. GitHub tokens need pull-request write
 permission for replies and review submission. Individual threads are collapsible;
 resolved GitHub threads are labeled and start collapsed so completed discussions
-do not dominate the diff.
+do not dominate the diff. Comment bodies render GitHub-flavored Markdown through
+a typed syntax tree; raw HTML is displayed as text instead of being injected.
 
 ## Useful commands
 
