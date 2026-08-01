@@ -4,12 +4,14 @@ import {
   HttpClientError,
   HttpClientRequest,
 } from "effect/unstable/http";
-import { Command, Http, Runtime } from "foldkit";
+import { Command, Http, Navigation, Runtime, Url } from "foldkit";
 import { evo } from "foldkit/struct";
 
 import {
   ChangedFilter,
+  ChangedBrowserUrl,
   ChangedPrUrl,
+  CompletedNavigation,
   FailedMoves,
   FailedReview,
   FailedSemantic,
@@ -18,6 +20,8 @@ import {
   LoadedSemantic,
   Model,
   MovedBlock,
+  RefreshedReview,
+  RequestedNavigation,
   SelectedFile,
   SelectedReviewScope,
   SelectedViewMode,
@@ -35,6 +39,7 @@ import type {
   ReviewMeta,
 } from "./domain";
 import { parseGitDiff } from "./diff";
+import { githubUrlFromPathname, localPathFromGitHubUrl } from "./review-route";
 import { sampleFiles, sampleMeta } from "./sample";
 
 type UpdateReturn = readonly [ModelType, ReadonlyArray<Command.Command<Message>>];
@@ -74,7 +79,10 @@ const FetchReview = Command.define("FetchReview", {
   execute: ({ url }) =>
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient;
-      const request = HttpClientRequest.get(`/api/diff?url=${encodeURIComponent(url)}`);
+      const cacheBust = yield* Effect.sync(() => Date.now().toString());
+      const request = HttpClientRequest.get(
+        `/api/diff?url=${encodeURIComponent(url)}&refresh=${cacheBust}`,
+      );
       const response = yield* client.execute(request);
       const data: unknown = yield* response.json;
 
@@ -98,6 +106,15 @@ const FetchReview = Command.define("FetchReview", {
         Effect.succeed(FailedReview({ error: fetchErrorMessage(error) })),
       ),
       Effect.provide(Http.layer),
+    ),
+});
+
+const Navigate = Command.define("Navigate", {
+  args: { href: S.String, external: S.Boolean },
+  messages: [CompletedNavigation],
+  execute: ({ href, external }) =>
+    (external ? Navigation.load(href) : Navigation.pushUrl(href)).pipe(
+      Effect.as(CompletedNavigation()),
     ),
 });
 
@@ -210,6 +227,31 @@ const requestSelectedIntelligence = (model: ModelType): UpdateReturn => {
   return [withMoves, [...semanticCommands, ...moveCommands]];
 };
 
+const beginReviewLoad = (model: ModelType, url: string): ModelType =>
+  evo(model, {
+    phase: () => "loading" as const,
+    error: () => "",
+    prUrl: () => url,
+    semanticResults: () => [],
+    semanticRequest: () => ({ _tag: "Idle" as const }),
+    reviewMoves: () => ({ _tag: "Idle" as const }),
+    reviewedPaths: () => [],
+  });
+
+const sampleModel = (model: ModelType): ModelType =>
+  evo(model, {
+    phase: () => "ready" as const,
+    error: () => "",
+    prUrl: () => "",
+    meta: () => sampleMeta,
+    files: () => sampleFiles,
+    selectedPath: () => sampleFiles[0]?.path ?? "",
+    reviewedPaths: () => [],
+    semanticResults: () => [],
+    semanticRequest: () => ({ _tag: "Idle" as const }),
+    reviewMoves: () => ({ _tag: "Idle" as const }),
+  });
+
 export const update = (model: ModelType, message: Message): UpdateReturn =>
   M.value(message).pipe(
     M.withReturnType<UpdateReturn>(),
@@ -217,23 +259,51 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
       ChangedPrUrl: ({ value }) => [evo(model, { prUrl: () => value }), []],
       SubmittedPrUrl: () => {
         if (model.phase === "loading" || model.prUrl.trim() === "") return [model, []];
+        const url = model.prUrl.trim();
+        const path = localPathFromGitHubUrl(url);
         return [
-          evo(model, {
-            phase: () => "loading" as const,
-            error: () => "",
-            semanticResults: () => [],
-            semanticRequest: () => ({ _tag: "Idle" as const }),
-            reviewMoves: () => ({ _tag: "Idle" as const }),
-          }),
-          [FetchReview({ url: model.prUrl.trim() })],
+          beginReviewLoad(model, url),
+          [
+            FetchReview({ url }),
+            ...(path === undefined ? [] : [Navigate({ href: path, external: false })]),
+          ],
         ];
       },
+      RefreshedReview: () => {
+        if (model.phase === "loading" || model.prUrl.trim() === "") return [model, []];
+        const url = model.meta.url || model.prUrl.trim();
+        return [beginReviewLoad(model, url), [FetchReview({ url })]];
+      },
+      ChangedBrowserUrl: ({ pathname }) => {
+        if (pathname === "/") return [sampleModel(model), []];
+        const url = githubUrlFromPathname(pathname);
+        if (url === undefined) {
+          return [
+            evo(model, {
+              phase: () => "error" as const,
+              error: () => "That Hunker review URL is not recognized.",
+            }),
+            [],
+          ];
+        }
+        if (url === model.prUrl || url === model.meta.url) return [model, []];
+        return [beginReviewLoad(model, url), [FetchReview({ url })]];
+      },
+      RequestedNavigation: ({ href, external }) => [
+        model,
+        [Navigate({ href, external })],
+      ],
+      CompletedNavigation: () => [model, []],
       LoadedReview: ({ meta, files }) => {
         const next = evo(model, {
           phase: () => "ready" as const,
+          prUrl: () => meta.url,
           meta: () => meta,
           files: () => files,
-          selectedPath: () => files[0]?.path ?? "",
+          selectedPath: selectedPath =>
+            files.some(file => file.path === selectedPath)
+              ? selectedPath
+              : (files[0]?.path ?? ""),
           reviewedPaths: () => [],
           semanticRequest: () => ({ _tag: "Idle" as const }),
           reviewMoves: () => ({ _tag: "Idle" as const }),
@@ -311,11 +381,11 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
     }),
   );
 
-export const init: Runtime.ElementInit<ModelType, Message> = () => [
+const initialModel = (prUrl: string) =>
   Model.make({
-    phase: "ready",
+    phase: prUrl === "" ? "ready" : "loading",
     error: "",
-    prUrl: "",
+    prUrl,
     filter: "",
     meta: sampleMeta,
     files: sampleFiles,
@@ -330,6 +400,18 @@ export const init: Runtime.ElementInit<ModelType, Message> = () => [
     semanticResults: [],
     semanticRequest: { _tag: "Idle" },
     reviewMoves: { _tag: "Idle" },
-  }),
-  [],
-];
+  });
+
+export const init: Runtime.RoutingApplicationInit<ModelType, Message> = url => {
+  const prUrl = githubUrlFromPathname(url.pathname) ?? "";
+  const model = initialModel(prUrl);
+  return [model, prUrl === "" ? [] : [FetchReview({ url: prUrl })]];
+};
+
+export const routing: Runtime.RoutingConfig<Message> = {
+  onUrlChange: url => ChangedBrowserUrl({ pathname: url.pathname }),
+  onUrlRequest: request =>
+    request._tag === "External"
+      ? RequestedNavigation({ href: request.href, external: true })
+      : RequestedNavigation({ href: Url.toString(request.url), external: false }),
+};

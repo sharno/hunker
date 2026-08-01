@@ -3,6 +3,7 @@ import type { Html, HtmlBuilder } from "foldkit/html";
 import {
   ChangedFilter,
   ChangedPrUrl,
+  RefreshedReview,
   SelectedFile,
   SelectedReviewScope,
   SelectedViewMode,
@@ -138,6 +139,22 @@ const reviewHeaderView = (model: Model, h: HtmlBuilder<Message>): Html => {
       ]),
     ]),
     h.div([h.Class("review-stats")], [
+      model.prUrl === ""
+        ? h.empty
+        : h.button(
+            [
+              h.Type("button"),
+              h.Class("refresh-button"),
+              h.Title("Pull the latest diff from GitHub"),
+              h.AriaLabel("Refresh diff from GitHub"),
+              h.Disabled(model.phase === "loading"),
+              h.OnClick(RefreshedReview()),
+            ],
+            [
+              h.span([h.Class(model.phase === "loading" ? "is-spinning" : "")], ["↻"]),
+              model.phase === "loading" ? "Refreshing…" : "Refresh",
+            ],
+          ),
       h.div([h.Class("stat-block")], [
         h.strong([], [String(model.files.length)]),
         h.span([], ["files"]),

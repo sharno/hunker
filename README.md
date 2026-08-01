@@ -33,6 +33,12 @@ bun run dev
 
 Open [http://localhost:5173](http://localhost:5173). The API runs on port `8787` and Vite proxies `/api` to it.
 
+Loading a review replaces the local address with a shareable route such as
+`http://localhost:5173/radarlabs/server/pull/7848`. Opening that route in another
+tab or reloading it fetches the review automatically. Use the Refresh button in
+the review header to discard cached semantic results and pull the latest diff
+from GitHub without changing the route.
+
 ## Useful commands
 
 ```bash

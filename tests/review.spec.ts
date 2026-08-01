@@ -32,6 +32,7 @@ test("loads a PR and renders ast-grep intelligence in both review layouts", asyn
   await page.getByPlaceholder("Paste a GitHub PR or compare URL").fill(reviewUrl);
   await page.getByRole("button", { name: "Review", exact: true }).click();
 
+  await expect(page).toHaveURL(/\/example\/hunker-demo\/pull\/42$/);
   await expect(page.getByRole("heading", { name: reviewResponse.title })).toBeVisible();
   await expect(page.locator(".semantic-banner")).toContainText(
     "ast-grep is analyzing this file",
@@ -62,6 +63,43 @@ test("loads a PR and renders ast-grep intelligence in both review layouts", asyn
   await expect(page.locator(".semantic-banner")).toHaveCount(0);
   await expect(page.locator(".semantic-findings")).toHaveCount(0);
   await expect(page.locator(".unified-lines")).toHaveCount(2);
+});
+
+test("loads a copied review route and refreshes it from GitHub", async ({ page }) => {
+  let reviewRequests = 0;
+  await page.route("**/api/diff?**", route => {
+    reviewRequests += 1;
+    const requestUrl = new URL(route.request().url());
+    expect(requestUrl.searchParams.get("refresh")).not.toBeNull();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: { ...reviewResponse, title: `Review revision ${reviewRequests}` },
+    });
+  });
+  await page.route("**/api/semantic?**", route =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: semanticResponse,
+    }),
+  );
+
+  await page.goto("/example/hunker-demo/pull/42");
+
+  await expect(page.getByRole("heading", { name: "Review revision 1" })).toBeVisible();
+  await expect(page.getByPlaceholder("Paste a GitHub PR or compare URL")).toHaveValue(
+    reviewUrl,
+  );
+  await expect(page).toHaveURL(/\/example\/hunker-demo\/pull\/42$/);
+
+  await page.getByRole("button", { name: "Refresh diff from GitHub" }).click();
+  await expect(page.getByRole("heading", { name: "Review revision 2" })).toBeVisible();
+  await expect(page).toHaveURL(/\/example\/hunker-demo\/pull\/42$/);
+
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Review revision 3" })).toBeVisible();
+  expect(reviewRequests).toBe(3);
 });
 
 test("reports a semantic backend failure without hiding the patch", async ({ page }) => {

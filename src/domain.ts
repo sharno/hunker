@@ -132,6 +132,13 @@ export type Model = typeof Model.Type;
 
 export const ChangedPrUrl = m("ChangedPrUrl", { value: S.String });
 export const SubmittedPrUrl = m("SubmittedPrUrl");
+export const RefreshedReview = m("RefreshedReview");
+export const ChangedBrowserUrl = m("ChangedBrowserUrl", { pathname: S.String });
+export const RequestedNavigation = m("RequestedNavigation", {
+  href: S.String,
+  external: S.Boolean,
+});
+export const CompletedNavigation = m("CompletedNavigation");
 export const LoadedReview = m("LoadedReview", {
   meta: ReviewMeta,
   files: S.Array(FileChange),
@@ -164,6 +171,10 @@ export const ToggledReviewed = m("ToggledReviewed", { path: S.String });
 export const Message = S.Union([
   ChangedPrUrl,
   SubmittedPrUrl,
+  RefreshedReview,
+  ChangedBrowserUrl,
+  RequestedNavigation,
+  CompletedNavigation,
   LoadedReview,
   FailedReview,
   LoadedSemantic,
