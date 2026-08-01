@@ -76,6 +76,7 @@ test("loads a PR and renders ast-grep intelligence in both review layouts", asyn
   await expect(page.locator(".split-lines .hljs-keyword")).not.toHaveCount(0);
   await expect(page.locator(".line-semantic")).not.toHaveCount(0);
 
+  await page.locator(".toolbar-options summary").click();
   const syntaxToggle = page.getByRole("button", { name: "Syntax", exact: true });
   await syntaxToggle.click();
   await expect(page.locator('.diff-lines [class*="hljs-"]')).toHaveCount(0);
@@ -113,6 +114,7 @@ test("loads a PR and renders ast-grep intelligence in both review layouts", asyn
 });
 
 test("loads a copied review route and refreshes it from GitHub", async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
   let reviewRequests = 0;
   let semanticRequests = 0;
   await page.route("**/api/diff?**", route => {
@@ -142,6 +144,13 @@ test("loads a copied review route and refreshes it from GitHub", async ({ page }
   await expect(page.getByPlaceholder("Paste a GitHub PR or compare URL")).toHaveValue(
     reviewUrl,
   );
+  await expect(page.locator(".compact-review-toolbar")).toHaveCSS(
+    "position",
+    "sticky",
+  );
+  const toolbarBounds = await page.locator(".compact-review-toolbar").boundingBox();
+  expect(toolbarBounds?.height).toBeLessThanOrEqual(48);
+  await expect(page.locator(".controlbar")).toHaveCount(0);
   await expect(page).toHaveURL(sharedRoute);
   await expect(page.getByRole("button", { name: "Full diff" })).toHaveClass(
     classToken("is-active"),
@@ -149,6 +158,7 @@ test("loads a copied review route and refreshes it from GitHub", async ({ page }
   await expect(page.getByRole("button", { name: "Unified" })).toHaveClass(
     classToken("is-active"),
   );
+  await page.locator(".toolbar-options summary").click();
   await expect(page.getByRole("button", { name: "Ignore whitespace" })).toHaveAttribute(
     "aria-pressed",
     "false",
@@ -287,6 +297,7 @@ test("shows and hides inline GitHub reviews and posts replies and review decisio
   }).click();
 
   const reviewsToggle = page.getByRole("button", { name: "GitHub reviews 2" });
+  await page.locator(".toolbar-options summary").click();
   await reviewsToggle.click();
   await expect(page.locator(".github-review-thread")).toHaveCount(0);
   await expect(page).toHaveURL(url => url.searchParams.get("reviews") === "hide");

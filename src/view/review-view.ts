@@ -37,6 +37,9 @@ import {
 const buttonClass = (active: boolean) =>
   `segmented-button${active ? " is-active" : ""}`;
 
+const hasLoadedReview = (model: Model) =>
+  model.prUrl !== "" && model.meta.url === model.prUrl;
+
 const toggleButton = (
   label: string,
   active: boolean,
@@ -95,33 +98,197 @@ const fileRow = (
   );
 };
 
-const topBarView = (model: Model, h: HtmlBuilder<Message>): Html =>
-  h.header([h.Class("topbar")], [
-    h.div([h.Class("brand")], [
-      h.span([h.Class("brand-mark")], ["H"]),
-      h.span([h.Class("brand-name")], ["hunker"]),
-      h.span([h.Class("brand-tagline")], ["review the change, not the noise"]),
+const prLoaderForm = (
+  model: Model,
+  className: string,
+  h: HtmlBuilder<Message>,
+) =>
+  h.form([h.Class(className), h.OnSubmit(SubmittedPrUrl())], [
+    h.span([h.Class("github-glyph")], ["⌘"]),
+    h.input([
+      h.Type("url"),
+      h.Value(model.prUrl),
+      h.Placeholder("Paste a GitHub PR or compare URL"),
+      h.AriaLabel("GitHub pull request URL"),
+      h.OnInput(value => ChangedPrUrl({ value })),
     ]),
-    h.form([h.Class("pr-loader"), h.OnSubmit(SubmittedPrUrl())], [
-      h.span([h.Class("github-glyph")], ["⌘"]),
-      h.input([
-        h.Type("url"),
-        h.Value(model.prUrl),
-        h.Placeholder("Paste a GitHub PR or compare URL"),
-        h.AriaLabel("GitHub pull request URL"),
-        h.OnInput(value => ChangedPrUrl({ value })),
-      ]),
+    h.button(
+      [h.Type("submit"), h.Class("load-button"), h.Disabled(model.phase === "loading")],
+      [model.phase === "loading" ? "Fetching…" : "Review"],
+    ),
+  ]);
+
+const scopePicker = (
+  model: Model,
+  showLabel: boolean,
+  h: HtmlBuilder<Message>,
+) =>
+  h.div([h.Class("control-group scope-picker")], [
+    showLabel ? h.span([h.Class("control-label")], ["Scope"]) : h.empty,
+    h.div([h.Class("segmented")], [
       h.button(
-        [h.Type("submit"), h.Class("load-button"), h.Disabled(model.phase === "loading")],
-        [model.phase === "loading" ? "Fetching…" : "Review"],
+        [
+          h.Type("button"),
+          h.Class(buttonClass(model.reviewScope === "file")),
+          h.OnClick(SelectedReviewScope({ value: "file" })),
+        ],
+        ["One file"],
+      ),
+      h.button(
+        [
+          h.Type("button"),
+          h.Class(buttonClass(model.reviewScope === "full")),
+          h.OnClick(SelectedReviewScope({ value: "full" })),
+        ],
+        ["Full diff"],
       ),
     ]),
-    h.div([h.Class("shortcut-hint")], [
-      h.kbd([], ["⌘"]),
-      h.kbd([], ["K"]),
-      " Quick open",
+  ]);
+
+const viewPicker = (
+  model: Model,
+  showLabel: boolean,
+  h: HtmlBuilder<Message>,
+) =>
+  h.div([h.Class("control-group view-picker")], [
+    showLabel ? h.span([h.Class("control-label")], ["View"]) : h.empty,
+    h.div([h.Class("segmented")], [
+      h.button(
+        [
+          h.Type("button"),
+          h.Class(buttonClass(model.viewMode === "unified")),
+          h.OnClick(SelectedViewMode({ value: "unified" })),
+        ],
+        ["Unified"],
+      ),
+      h.button(
+        [
+          h.Type("button"),
+          h.Class(buttonClass(model.viewMode === "split")),
+          h.OnClick(SelectedViewMode({ value: "split" })),
+        ],
+        ["Side by side"],
+      ),
     ]),
   ]);
+
+const intelligenceControls = (model: Model, h: HtmlBuilder<Message>) => [
+  toggleButton("Ignore whitespace", model.ignoreWhitespace, ToggledWhitespace(), h),
+  toggleButton("Semantic", model.semantic, ToggledSemantic(), h),
+  toggleButton("Character diff", model.characterDiff, ToggledCharacterDiff(), h),
+  toggleButton("Syntax", model.syntaxHighlighting, ToggledSyntaxHighlighting(), h),
+  model.prUrl === "" || model.meta.number === "compare"
+    ? h.empty
+    : toggleButton(
+        model.githubReviews._tag === "Ready"
+          ? `GitHub reviews ${model.githubReviews.comments.filter(comment => comment.id === comment.rootId).length}`
+          : "GitHub reviews",
+        model.showGitHubReviews,
+        ToggledGitHubReviews(),
+        h,
+      ),
+];
+
+const compactReviewToolbar = (model: Model, h: HtmlBuilder<Message>): Html => {
+  const activeOptions = [
+    model.ignoreWhitespace,
+    model.semantic,
+    model.characterDiff,
+    model.syntaxHighlighting,
+    model.meta.number !== "compare" && model.showGitHubReviews,
+  ].filter(Boolean).length;
+  return h.header([h.Class("compact-review-toolbar")], [
+    h.div([h.Class("compact-brand")], [
+      h.span([h.Class("brand-mark")], ["H"]),
+      h.span([h.Class("brand-name")], ["hunker"]),
+    ]),
+    h.a(
+      [
+        h.Class("toolbar-review-identity"),
+        h.Href(model.meta.url),
+        h.Target("_blank"),
+        h.Rel("noreferrer"),
+        h.Title("Open pull request on GitHub"),
+      ],
+      [
+        h.strong([], [`${model.meta.repository} #${model.meta.number}`]),
+        h.span([], [model.meta.title]),
+      ],
+    ),
+    h.nav([h.Class("toolbar-primary-controls"), h.AriaLabel("Review display")], [
+      scopePicker(model, false, h),
+      viewPicker(model, false, h),
+    ]),
+    h.div([h.Class("toolbar-actions")], [
+      h.details(
+        [h.Class("toolbar-menu toolbar-options"), h.Name("review-toolbar-menu")],
+        [
+          h.summary([h.Class("toolbar-menu-button")], [
+            "Diff options",
+            h.span([], [String(activeOptions)]),
+          ]),
+          h.div([h.Class("toolbar-options-panel")], [
+            h.div([h.Class("toolbar-panel-heading")], [
+              h.strong([], ["Diff intelligence"]),
+              h.span([], ["Tune what Hunker emphasizes in this review."]),
+            ]),
+            h.div(
+              [h.Class("toolbar-filter-grid")],
+              intelligenceControls(model, h),
+            ),
+          ]),
+        ],
+      ),
+      h.details(
+        [
+          h.Class("toolbar-menu toolbar-open-review"),
+          h.Name("review-toolbar-menu"),
+        ],
+        [
+          h.summary([h.Class("toolbar-menu-button")], ["Open PR"]),
+          h.div([h.Class("toolbar-loader-panel")], [
+            prLoaderForm(model, "toolbar-pr-loader", h),
+          ]),
+        ],
+      ),
+      h.button(
+        [
+          h.Type("button"),
+          h.Class("toolbar-refresh"),
+          h.Title("Pull the latest diff from GitHub"),
+          h.AriaLabel("Refresh diff from GitHub"),
+          h.Disabled(model.phase === "loading"),
+          h.OnClick(RefreshedReview()),
+        ],
+        [
+          h.span([h.Class(model.phase === "loading" ? "is-spinning" : "")], ["↻"]),
+          h.span([h.Class("toolbar-refresh-label")], [
+            model.phase === "loading" ? "Refreshing…" : "Refresh",
+          ]),
+        ],
+      ),
+    ]),
+  ]);
+};
+
+const topBarView = (model: Model, h: HtmlBuilder<Message>): Html =>
+  hasLoadedReview(model)
+    ? compactReviewToolbar(model, h)
+    : h.header([h.Class("topbar")], [
+        h.div([h.Class("brand")], [
+          h.span([h.Class("brand-mark")], ["H"]),
+          h.span([h.Class("brand-name")], ["hunker"]),
+          h.span([h.Class("brand-tagline")], [
+            "review the change, not the noise",
+          ]),
+        ]),
+        prLoaderForm(model, "pr-loader", h),
+        h.div([h.Class("shortcut-hint")], [
+          h.kbd([], ["⌘"]),
+          h.kbd([], ["K"]),
+          " Quick open",
+        ]),
+      ]);
 
 const reviewHeaderView = (model: Model, h: HtmlBuilder<Message>): Html => {
   const totalAdditions = model.files.reduce((sum, file) => sum + file.additions, 0);
@@ -147,22 +314,6 @@ const reviewHeaderView = (model: Model, h: HtmlBuilder<Message>): Html => {
       ]),
     ]),
     h.div([h.Class("review-stats")], [
-      model.prUrl === ""
-        ? h.empty
-        : h.button(
-            [
-              h.Type("button"),
-              h.Class("refresh-button"),
-              h.Title("Pull the latest diff from GitHub"),
-              h.AriaLabel("Refresh diff from GitHub"),
-              h.Disabled(model.phase === "loading"),
-              h.OnClick(RefreshedReview()),
-            ],
-            [
-              h.span([h.Class(model.phase === "loading" ? "is-spinning" : "")], ["↻"]),
-              model.phase === "loading" ? "Refreshing…" : "Refresh",
-            ],
-          ),
       h.div([h.Class("stat-block")], [
         h.strong([], [String(model.files.length)]),
         h.span([], ["files"]),
@@ -193,76 +344,13 @@ const reviewHeaderView = (model: Model, h: HtmlBuilder<Message>): Html => {
 
 const controlsView = (model: Model, h: HtmlBuilder<Message>): Html =>
   h.section([h.Class("controlbar")], [
-    h.div([h.Class("control-group scope-picker")], [
-      h.span([h.Class("control-label")], ["Scope"]),
-      h.div([h.Class("segmented")], [
-        h.button(
-          [
-            h.Type("button"),
-            h.Class(buttonClass(model.reviewScope === "file")),
-            h.OnClick(SelectedReviewScope({ value: "file" })),
-          ],
-          ["One file"],
-        ),
-        h.button(
-          [
-            h.Type("button"),
-            h.Class(buttonClass(model.reviewScope === "full")),
-            h.OnClick(SelectedReviewScope({ value: "full" })),
-          ],
-          ["Full diff"],
-        ),
-      ]),
-    ]),
+    scopePicker(model, true, h),
     h.div([h.Class("control-divider")], [""]),
-    h.div([h.Class("control-group view-picker")], [
-      h.span([h.Class("control-label")], ["View"]),
-      h.div([h.Class("segmented")], [
-        h.button(
-          [
-            h.Type("button"),
-            h.Class(buttonClass(model.viewMode === "unified")),
-            h.OnClick(SelectedViewMode({ value: "unified" })),
-          ],
-          ["Unified"],
-        ),
-        h.button(
-          [
-            h.Type("button"),
-            h.Class(buttonClass(model.viewMode === "split")),
-            h.OnClick(SelectedViewMode({ value: "split" })),
-          ],
-          ["Side by side"],
-        ),
-      ]),
-    ]),
+    viewPicker(model, true, h),
     h.div([h.Class("control-divider")], [""]),
     h.div([h.Class("control-group filters")], [
       h.span([h.Class("control-label")], ["Diff intelligence"]),
-      toggleButton("Ignore whitespace", model.ignoreWhitespace, ToggledWhitespace(), h),
-      toggleButton("Semantic", model.semantic, ToggledSemantic(), h),
-      toggleButton(
-        "Character diff",
-        model.characterDiff,
-        ToggledCharacterDiff(),
-        h,
-      ),
-      toggleButton(
-        "Syntax",
-        model.syntaxHighlighting,
-        ToggledSyntaxHighlighting(),
-        h,
-      ),
-      model.prUrl === "" || model.meta.number === "compare"
-        ? h.empty
-        : toggleButton(
-            model.githubReviews._tag === "Ready"
-              ? `GitHub reviews ${model.githubReviews.comments.filter(comment => comment.id === comment.rootId).length}`
-              : "GitHub reviews",
-            model.showGitHubReviews,
-            ToggledGitHubReviews(),
-            h,
-          ),
+      ...intelligenceControls(model, h),
     ]),
     h.div([h.Class("control-spacer")], [""]),
     h.div([h.Class("legend")], [
@@ -289,7 +377,13 @@ const fileSidebarView = (
   visibleFiles: ReadonlyArray<FileChange>,
   h: HtmlBuilder<Message>,
 ): Html =>
-  h.aside([h.Class("file-sidebar")], [
+  h.aside(
+    [
+      h.Class(
+        `file-sidebar${hasLoadedReview(model) ? " with-compact-toolbar" : ""}`,
+      ),
+    ],
+    [
     h.div([h.Class("sidebar-heading")], [
       h.strong([], ["Changed files"]),
       h.span([], [String(model.files.length)]),
@@ -331,7 +425,8 @@ const fileSidebarView = (
         " to move between files",
       ]),
     ]),
-  ]);
+    ],
+  );
 
 const semanticBannerView = (
   file: FileChange,
@@ -662,10 +757,14 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Html => {
       ? h.div([h.Class("error-banner"), h.Role("alert")], [model.error])
       : h.empty,
     reviewHeaderView(model, h),
-    controlsView(model, h),
+    hasLoadedReview(model) ? h.empty : controlsView(model, h),
     githubReviewStatusView(model, h),
     h.div(
-      [h.Class(`workspace${model.sidebarCollapsed ? " sidebar-collapsed" : ""}`)],
+      [
+        h.Class(
+          `workspace${hasLoadedReview(model) ? " with-compact-toolbar" : ""}${model.sidebarCollapsed ? " sidebar-collapsed" : ""}`,
+        ),
+      ],
       [
       fileSidebarView(model, visibleFiles, h),
       model.reviewScope === "full"

@@ -45,8 +45,12 @@ Loading a review replaces the local address with a shareable route such as
 tab or reloading it fetches the review automatically. The query string records
 the selected file, full/file scope, layout, whitespace, semantic, character-diff,
 syntax-highlighting, review, and sidebar settings, so copying the address restores the same review view. Use
-the Refresh button in the review header to discard cached semantic results and
+the Refresh button in the review toolbar to discard cached semantic results and
 pull the latest diff from GitHub without losing those settings.
+
+Once a review loads, Hunker replaces the separate loader and controls bars with
+a single 48px sticky toolbar. Scope and layout remain directly accessible;
+diff intelligence and opening another PR live in compact dropdowns.
 
 Files and individual hunks can be collapsed independently. The Full file action
 loads the base and head versions through the authenticated Effect backend and
