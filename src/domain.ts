@@ -350,12 +350,22 @@ export const RequestedNavigation = m("RequestedNavigation", {
 });
 export const CompletedNavigation = m("CompletedNavigation");
 export const LoadedReview = m("LoadedReview", {
+  requestedUrl: S.String,
   meta: ReviewMeta,
   files: S.Array(FileChange),
 });
-export const FailedReview = m("FailedReview", { error: S.String });
-export const LoadedCommits = m("LoadedCommits", { commits: S.Array(PullCommit) });
-export const FailedCommits = m("FailedCommits", { error: S.String });
+export const FailedReview = m("FailedReview", {
+  requestedUrl: S.String,
+  error: S.String,
+});
+export const LoadedCommits = m("LoadedCommits", {
+  requestedUrl: S.String,
+  commits: S.Array(PullCommit),
+});
+export const FailedCommits = m("FailedCommits", {
+  requestedUrl: S.String,
+  error: S.String,
+});
 export const LoadedCommitDiff = m("LoadedCommitDiff", {
   sha: S.String,
   files: S.Array(FileChange),
@@ -393,19 +403,29 @@ export const FailedRepositoryFile = m("FailedRepositoryFile", {
   error: S.String,
 });
 export const LoadedSemantic = m("LoadedSemantic", {
+  requestedUrl: S.String,
   path: S.String,
   result: SemanticResult,
 });
 export const FailedSemantic = m("FailedSemantic", {
+  requestedUrl: S.String,
   path: S.String,
   error: S.String,
 });
-export const LoadedMoves = m("LoadedMoves", { moves: S.Array(MovedBlock) });
-export const FailedMoves = m("FailedMoves", { error: S.String });
+export const LoadedMoves = m("LoadedMoves", {
+  requestedUrl: S.String,
+  moves: S.Array(MovedBlock),
+});
+export const FailedMoves = m("FailedMoves", {
+  requestedUrl: S.String,
+  error: S.String,
+});
 export const LoadedCharacterDiff = m("LoadedCharacterDiff", {
+  requestedUrl: S.String,
   result: CharacterDiffResult,
 });
 export const FailedCharacterDiff = m("FailedCharacterDiff", {
+  requestedUrl: S.String,
   path: S.String,
   ignoreWhitespace: S.Boolean,
   mode: S.Literals(["token", "character"]),
@@ -439,11 +459,13 @@ export const ToggledHunkCollapse = m("ToggledHunkCollapse", {
 });
 export const ToggledFullFile = m("ToggledFullFile", { path: S.String });
 export const LoadedFullFile = m("LoadedFullFile", {
+  requestedUrl: S.String,
   path: S.String,
   oldText: S.String,
   newText: S.String,
 });
 export const FailedFullFile = m("FailedFullFile", {
+  requestedUrl: S.String,
   path: S.String,
   error: S.String,
 });
@@ -452,9 +474,13 @@ export const ToggledReviewThreadCollapse = m("ToggledReviewThreadCollapse", {
   threadId: S.Number,
 });
 export const LoadedGitHubReviews = m("LoadedGitHubReviews", {
+  requestedUrl: S.String,
   comments: S.Array(GitHubReviewComment),
 });
-export const FailedGitHubReviews = m("FailedGitHubReviews", { error: S.String });
+export const FailedGitHubReviews = m("FailedGitHubReviews", {
+  requestedUrl: S.String,
+  error: S.String,
+});
 export const ChangedReplyDraft = m("ChangedReplyDraft", {
   commentId: S.Number,
   body: S.String,

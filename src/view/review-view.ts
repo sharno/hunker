@@ -48,7 +48,34 @@ const buttonClass = (active: boolean) =>
   `segmented-button${active ? " is-active" : ""}`;
 
 const hasLoadedReview = (model: Model) =>
-  model.prUrl !== "" && model.meta.url === model.prUrl;
+  model.phase === "ready" && model.prUrl !== "" && model.meta.url === model.prUrl;
+
+const reviewTarget = (url: string) => {
+  try {
+    const parsed = new URL(url);
+    return parsed.pathname.replace(/^\//, "");
+  } catch {
+    return url;
+  }
+};
+
+const reviewLoadingView = (model: Model, h: HtmlBuilder<Message>) =>
+  h.section([h.Class("review-loading"), h.Role("status")], [
+    h.div([h.Class("review-loading-card")], [
+      h.span([h.Class("review-loading-spinner")], [""]),
+      h.div([h.Class("review-loading-copy")], [
+        h.strong([], ["Loading the latest change…"]),
+        h.code([], [reviewTarget(model.prUrl)]),
+        h.span([], ["Fetching metadata and the current diff from GitHub."]),
+      ]),
+    ]),
+  ]);
+
+const reviewErrorView = (model: Model, h: HtmlBuilder<Message>) =>
+  h.section([h.Class("review-load-error")], [
+    h.strong([], ["Could not load this change"]),
+    h.span([], ["No previous review data is being shown."]),
+  ]);
 
 const toggleButton = (
   label: string,
@@ -875,6 +902,19 @@ const diffPanelView = (
 
 export const view = (model: Model, h: HtmlBuilder<Message>): Html => {
   if (model.page === "repository") return repositoryView(model, h);
+  if (model.phase === "loading") {
+    return h.main([h.Class("app-shell")], [
+      topBarView(model, h),
+      reviewLoadingView(model, h),
+    ]);
+  }
+  if (model.phase === "error") {
+    return h.main([h.Class("app-shell")], [
+      topBarView(model, h),
+      h.div([h.Class("error-banner"), h.Role("alert")], [model.error]),
+      reviewErrorView(model, h),
+    ]);
+  }
   const selected =
     model.files.find(file => file.path === model.selectedPath) ?? model.files[0];
   const query = model.filter.trim().toLowerCase();
@@ -888,9 +928,6 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Html => {
 
   return h.main([h.Class("app-shell")], [
     topBarView(model, h),
-    model.phase === "error"
-      ? h.div([h.Class("error-banner"), h.Role("alert")], [model.error])
-      : h.empty,
     reviewHeaderView(model, h),
     hasLoadedReview(model) ? h.empty : controlsView(model, h),
     githubReviewStatusView(model, h),

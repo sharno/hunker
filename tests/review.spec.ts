@@ -32,6 +32,64 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+test("shows an empty loading state for initial loads and refreshes", async ({ page }) => {
+  let reviewRequests = 0;
+  let releaseReview: () => void = () => undefined;
+  let reviewGate = new Promise<void>(resolve => {
+    releaseReview = resolve;
+  });
+
+  await page.route("**/api/diff?**", async route => {
+    const revision = ++reviewRequests;
+    await reviewGate;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: { ...reviewResponse, title: `Loading test revision ${revision}` },
+    });
+  });
+  await page.route("**/api/semantic?**", route =>
+    route.fulfill({ status: 200, contentType: "application/json", json: semanticResponse }),
+  );
+  await page.route("**/api/reviews?**", route =>
+    route.fulfill({ status: 200, contentType: "application/json", json: { comments: [] } }),
+  );
+
+  await page.goto("/");
+  await page.getByPlaceholder("Paste a GitHub PR or compare URL").fill(reviewUrl);
+  await page.getByRole("button", { name: "Review", exact: true }).click();
+
+  await expect(page.locator(".review-loading")).toBeVisible();
+  await expect(page.locator(".review-loading")).toContainText(
+    "Loading the latest change",
+  );
+  await expect(page.locator(".review-header")).toHaveCount(0);
+  await expect(page.locator(".diff-panel")).toHaveCount(0);
+  await expect(page).toHaveTitle("Loading review · Hunker");
+
+  releaseReview();
+  await expect(
+    page.getByRole("heading", { name: "Loading test revision 1" }),
+  ).toBeVisible();
+
+  reviewGate = new Promise<void>(resolve => {
+    releaseReview = resolve;
+  });
+  await page.getByRole("button", { name: "Refresh diff from GitHub" }).click();
+
+  await expect(page.locator(".review-loading")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Loading test revision 1" }),
+  ).toHaveCount(0);
+  await expect(page.locator(".diff-panel")).toHaveCount(0);
+
+  releaseReview();
+  await expect(
+    page.getByRole("heading", { name: "Loading test revision 2" }),
+  ).toBeVisible();
+  await expect(page.locator(".review-loading")).toHaveCount(0);
+});
+
 test("loads a PR and renders ast-grep intelligence in both review layouts", async ({ page }) => {
   await page.route("**/api/diff?**", route =>
     route.fulfill({ status: 200, contentType: "application/json", json: reviewResponse }),

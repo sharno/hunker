@@ -51,11 +51,12 @@ export const FetchCommits = Command.define("FetchCommits", {
         );
       }
       const decoded = yield* S.decodeUnknownEffect(commitsResponse)(data);
-      return LoadedCommits({ commits: decoded.commits });
+      return LoadedCommits({ requestedUrl: url, commits: decoded.commits });
     }).pipe(
       Effect.catch(error =>
         Effect.succeed(
           FailedCommits({
+            requestedUrl: url,
             error: error instanceof Error ? error.message : "Could not load commits.",
           }),
         ),

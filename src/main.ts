@@ -18,7 +18,14 @@ export const makeReviewApplication = (container: HTMLElement) =>
     view: (model, h) => {
       const styled = withTailwind(h);
       return {
-        title: model.prUrl === "" ? "Hunker" : `${model.meta.repository} #${model.meta.number} · Hunker`,
+        title:
+          model.phase === "loading" && model.prUrl !== ""
+            ? "Loading review · Hunker"
+            : model.phase === "ready" &&
+                model.prUrl !== "" &&
+                model.meta.url === model.prUrl
+              ? `${model.meta.repository} #${model.meta.number} · Hunker`
+              : "Hunker",
         body: view(model, styled),
       };
     },

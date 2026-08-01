@@ -179,10 +179,10 @@ const FetchReview = Command.define("FetchReview", {
       if (files.length === 0) {
         return yield* Effect.fail(new Error("This change has no reviewable text diff."));
       }
-      return LoadedReview({ meta, files });
+      return LoadedReview({ requestedUrl: url, meta, files });
     }).pipe(
       Effect.catch(error =>
-        Effect.succeed(FailedReview({ error: fetchErrorMessage(error) })),
+        Effect.succeed(FailedReview({ requestedUrl: url, error: fetchErrorMessage(error) })),
       ),
       Effect.provide(Http.layer),
     ),
@@ -227,10 +227,12 @@ const FetchSemantic = Command.define("FetchSemantic", {
         );
       }
       const result = yield* S.decodeUnknownEffect(SemanticResult)(data);
-      return LoadedSemantic({ path, result });
+      return LoadedSemantic({ requestedUrl: url, path, result });
     }).pipe(
       Effect.catch(error =>
-        Effect.succeed(FailedSemantic({ path, error: fetchErrorMessage(error) })),
+        Effect.succeed(
+          FailedSemantic({ requestedUrl: url, path, error: fetchErrorMessage(error) }),
+        ),
       ),
       Effect.provide(Http.layer),
     ),
@@ -272,11 +274,12 @@ const FetchCharacterDiff = Command.define("FetchCharacterDiff", {
         );
       }
       const result = yield* S.decodeUnknownEffect(CharacterDiffResult)(data);
-      return LoadedCharacterDiff({ result });
+      return LoadedCharacterDiff({ requestedUrl: url, result });
     }).pipe(
       Effect.catch(error =>
         Effect.succeed(
           FailedCharacterDiff({
+            requestedUrl: url,
             path,
             ignoreWhitespace,
             mode,
@@ -310,10 +313,12 @@ const FetchFullFile = Command.define("FetchFullFile", {
         );
       }
       const pair = yield* S.decodeUnknownEffect(FullFileResponse)(data);
-      return LoadedFullFile({ path, ...pair });
+      return LoadedFullFile({ requestedUrl: url, path, ...pair });
     }).pipe(
       Effect.catch(error =>
-        Effect.succeed(FailedFullFile({ path, error: fetchErrorMessage(error) })),
+        Effect.succeed(
+          FailedFullFile({ requestedUrl: url, path, error: fetchErrorMessage(error) }),
+        ),
       ),
       Effect.provide(Http.layer),
     ),
@@ -335,10 +340,12 @@ const FetchGitHubReviews = Command.define("FetchGitHubReviews", {
         );
       }
       const decoded = yield* S.decodeUnknownEffect(GitHubReviewsResponse)(data);
-      return LoadedGitHubReviews({ comments: decoded.comments });
+      return LoadedGitHubReviews({ requestedUrl: url, comments: decoded.comments });
     }).pipe(
       Effect.catch(error =>
-        Effect.succeed(FailedGitHubReviews({ error: fetchErrorMessage(error) })),
+        Effect.succeed(
+          FailedGitHubReviews({ requestedUrl: url, error: fetchErrorMessage(error) }),
+        ),
       ),
       Effect.provide(Http.layer),
     ),
@@ -413,10 +420,10 @@ const FetchMoves = Command.define("FetchMoves", {
         );
       }
       const decoded = yield* S.decodeUnknownEffect(MoveResponse)(data);
-      return LoadedMoves({ moves: decoded.moves });
+      return LoadedMoves({ requestedUrl: url, moves: decoded.moves });
     }).pipe(
       Effect.catch(error =>
-        Effect.succeed(FailedMoves({ error: fetchErrorMessage(error) })),
+        Effect.succeed(FailedMoves({ requestedUrl: url, error: fetchErrorMessage(error) })),
       ),
       Effect.provide(Http.layer),
     ),
@@ -427,11 +434,23 @@ const activeDiffUrl = (model: ModelType) =>
     ? commitGitHubUrl(model.meta, model.selectedCommit)
     : model.meta.url;
 
+const isCurrentReviewRequest = (model: ModelType, requestedUrl: string) =>
+  model.phase === "loading" && model.prUrl === requestedUrl;
+
+const isCurrentPullRequest = (model: ModelType, requestedUrl: string) =>
+  model.phase === "ready" &&
+  model.prUrl === requestedUrl &&
+  model.meta.url === requestedUrl;
+
+const isCurrentDiffRequest = (model: ModelType, requestedUrl: string) =>
+  model.phase === "ready" && activeDiffUrl(model) === requestedUrl;
+
 const requestSemantic = (model: ModelType, file: FileChange): UpdateReturn => {
   const alreadyLoaded = model.semanticResults.some(result => result.path === file.path);
   const alreadyLoading =
     model.semanticRequest._tag === "Loading" && model.semanticRequest.path === file.path;
   if (
+    model.phase !== "ready" ||
     !model.semantic ||
     model.prUrl.trim() === "" ||
     alreadyLoaded ||
@@ -456,6 +475,7 @@ const requestSemantic = (model: ModelType, file: FileChange): UpdateReturn => {
 
 const requestMoves = (model: ModelType): UpdateReturn => {
   if (
+    model.phase !== "ready" ||
     !model.semantic ||
     model.reviewScope !== "full" ||
     model.prUrl.trim() === "" ||
@@ -472,6 +492,7 @@ const requestMoves = (model: ModelType): UpdateReturn => {
 
 const requestGitHubReviews = (model: ModelType): UpdateReturn => {
   if (
+    model.phase !== "ready" ||
     !model.showGitHubReviews ||
     model.reviewTab !== "files" ||
     model.meta.number === "compare" ||
@@ -491,7 +512,11 @@ const requestCharacterDiff = (
   model: ModelType,
   file: FileChange,
 ): UpdateReturn => {
-  if (model.inlineDiffMode === "off" || model.prUrl.trim() === "") {
+  if (
+    model.phase !== "ready" ||
+    model.inlineDiffMode === "off" ||
+    model.prUrl.trim() === ""
+  ) {
     return [model, []];
   }
   const mode = model.inlineDiffMode;
@@ -571,6 +596,7 @@ const resetDiffAnalysis = (model: ModelType): ModelType =>
 
 const requestCommits = (model: ModelType): UpdateReturn => {
   if (
+    model.phase !== "ready" ||
     model.meta.number === "compare" ||
     model.commits._tag === "Loading" ||
     model.commits._tag === "Ready"
@@ -636,6 +662,9 @@ const beginReviewLoad = (model: ModelType, url: string): ModelType =>
     phase: () => "loading" as const,
     error: () => "",
     prUrl: () => url,
+    filter: () => "",
+    files: () => [],
+    pullRequestFiles: () => [],
     semanticResults: () => [],
     semanticRequest: () => ({ _tag: "Idle" as const }),
     reviewMoves: () => ({ _tag: "Idle" as const }),
@@ -801,6 +830,9 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         const options = reviewOptionsFromSearch(search);
         const tabChanged = options.reviewTab !== model.reviewTab;
         const withOptions = applyReviewOptions(model, options);
+        if (url === model.prUrl && model.phase === "loading") {
+          return [withOptions, []];
+        }
         if (url === model.prUrl || url === model.meta.url) {
           const located =
             tabChanged && options.reviewTab === "files"
@@ -820,7 +852,8 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         [Navigate({ href, method: external ? "load" : "push" })],
       ],
       CompletedNavigation: () => [model, []],
-      LoadedReview: ({ meta, files }) => {
+      LoadedReview: ({ requestedUrl, meta, files }) => {
+        if (!isCurrentReviewRequest(model, requestedUrl)) return [model, []];
         const next = evo(model, {
           page: () => "review" as const,
           phase: () => "ready" as const,
@@ -833,6 +866,7 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
               ? selectedPath
               : (files[0]?.path ?? ""),
           reviewedPaths: () => [],
+          semanticResults: () => [],
           semanticRequest: () => ({ _tag: "Idle" as const }),
           reviewMoves: () => ({ _tag: "Idle" as const }),
           characterDiffStates: () => [],
@@ -849,11 +883,15 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         const [loaded, commands] = requestReviewLocation(next);
         return synchronizeReviewUrl(loaded, commands);
       },
-      FailedReview: ({ error }) => [
-        evo(model, { phase: () => "error" as const, error: () => error }),
-        [],
-      ],
-      LoadedCommits: ({ commits }) => {
+      FailedReview: ({ requestedUrl, error }) =>
+        isCurrentReviewRequest(model, requestedUrl)
+          ? [
+              evo(model, { phase: () => "error" as const, error: () => error }),
+              [],
+            ]
+          : [model, []],
+      LoadedCommits: ({ requestedUrl, commits }) => {
+        if (!isCurrentPullRequest(model, requestedUrl)) return [model, []];
         const loaded = evo(model, {
           commits: () => ({ _tag: "Ready" as const, commits }),
         });
@@ -875,12 +913,15 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         );
         return synchronizeReviewUrl(withDiff, commands);
       },
-      FailedCommits: ({ error }) => [
-        evo(model, {
-          commits: () => ({ _tag: "Failed" as const, error }),
-        }),
-        [],
-      ],
+      FailedCommits: ({ requestedUrl, error }) =>
+        isCurrentPullRequest(model, requestedUrl)
+          ? [
+              evo(model, {
+                commits: () => ({ _tag: "Failed" as const, error }),
+              }),
+              [],
+            ]
+          : [model, []],
       LoadedCommitDiff: ({ sha, files }) => {
         if (
           model.reviewTab !== "commits" ||
@@ -922,77 +963,100 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
       LoadedRepositoryFile: input => repositoryFileLoaded(model, input),
       FailedRepositoryFile: ({ path, error }) =>
         repositoryFileFailed(model, path, error),
-      LoadedSemantic: ({ path, result }) => [
-        evo(model, {
-          semanticResults: results => [
-            ...results.filter(item => item.path !== path),
-            result,
-          ],
-          semanticRequest: request =>
-            request._tag === "Loading" && request.path === path
-              ? ({ _tag: "Idle" as const })
-              : request,
-        }),
-        [],
-      ],
-      FailedSemantic: ({ path, error }) => [
-        evo(model, {
-          semanticRequest: request =>
-            request._tag === "Loading" && request.path === path
-              ? ({ _tag: "Failed" as const, path, error })
-              : request,
-        }),
-        [],
-      ],
-      LoadedMoves: ({ moves }) => [
-        evo(model, { reviewMoves: () => ({ _tag: "Ready" as const, moves }) }),
-        [],
-      ],
-      FailedMoves: ({ error }) => [
-        evo(model, { reviewMoves: () => ({ _tag: "Failed" as const, error }) }),
-        [],
-      ],
-      LoadedCharacterDiff: ({ result }) => [
-        evo(model, {
-          characterDiffStates: states => [
-            ...states.filter(state =>
-              state._tag === "Ready"
-                ? state.result.path !== result.path ||
-                  state.result.ignoreWhitespace !== result.ignoreWhitespace ||
-                  state.result.mode !== result.mode
-                : state.path !== result.path ||
-                  state.ignoreWhitespace !== result.ignoreWhitespace ||
-                  state.mode !== result.mode,
-            ),
-            { _tag: "Ready" as const, result },
-          ],
-        }),
-        [],
-      ],
-      FailedCharacterDiff: ({ path, ignoreWhitespace, mode, error }) => [
-        evo(model, {
-          characterDiffStates: states => [
-            ...states.filter(state =>
-              state._tag === "Ready"
-                ? state.result.path !== path ||
-                  state.result.ignoreWhitespace !== ignoreWhitespace ||
-                  state.result.mode !== mode
-                : state.path !== path ||
-                  state.ignoreWhitespace !== ignoreWhitespace ||
-                  state.mode !== mode,
-            ),
-            {
-              _tag: "Failed" as const,
-              path,
-              ignoreWhitespace,
-              mode,
-              error,
-            },
-          ],
-        }),
-        [],
-      ],
-      LoadedFullFile: ({ path, oldText, newText }) => {
+      LoadedSemantic: ({ requestedUrl, path, result }) =>
+        isCurrentDiffRequest(model, requestedUrl)
+          ? [
+              evo(model, {
+                semanticResults: results => [
+                  ...results.filter(item => item.path !== path),
+                  result,
+                ],
+                semanticRequest: request =>
+                  request._tag === "Loading" && request.path === path
+                    ? ({ _tag: "Idle" as const })
+                    : request,
+              }),
+              [],
+            ]
+          : [model, []],
+      FailedSemantic: ({ requestedUrl, path, error }) =>
+        isCurrentDiffRequest(model, requestedUrl)
+          ? [
+              evo(model, {
+                semanticRequest: request =>
+                  request._tag === "Loading" && request.path === path
+                    ? ({ _tag: "Failed" as const, path, error })
+                    : request,
+              }),
+              [],
+            ]
+          : [model, []],
+      LoadedMoves: ({ requestedUrl, moves }) =>
+        isCurrentDiffRequest(model, requestedUrl)
+          ? [
+              evo(model, {
+                reviewMoves: () => ({ _tag: "Ready" as const, moves }),
+              }),
+              [],
+            ]
+          : [model, []],
+      FailedMoves: ({ requestedUrl, error }) =>
+        isCurrentDiffRequest(model, requestedUrl)
+          ? [
+              evo(model, {
+                reviewMoves: () => ({ _tag: "Failed" as const, error }),
+              }),
+              [],
+            ]
+          : [model, []],
+      LoadedCharacterDiff: ({ requestedUrl, result }) =>
+        isCurrentDiffRequest(model, requestedUrl)
+          ? [
+              evo(model, {
+                characterDiffStates: states => [
+                  ...states.filter(state =>
+                    state._tag === "Ready"
+                      ? state.result.path !== result.path ||
+                        state.result.ignoreWhitespace !== result.ignoreWhitespace ||
+                        state.result.mode !== result.mode
+                      : state.path !== result.path ||
+                        state.ignoreWhitespace !== result.ignoreWhitespace ||
+                        state.mode !== result.mode,
+                  ),
+                  { _tag: "Ready" as const, result },
+                ],
+              }),
+              [],
+            ]
+          : [model, []],
+      FailedCharacterDiff: ({ requestedUrl, path, ignoreWhitespace, mode, error }) =>
+        isCurrentDiffRequest(model, requestedUrl)
+          ? [
+              evo(model, {
+                characterDiffStates: states => [
+                  ...states.filter(state =>
+                    state._tag === "Ready"
+                      ? state.result.path !== path ||
+                        state.result.ignoreWhitespace !== ignoreWhitespace ||
+                        state.result.mode !== mode
+                      : state.path !== path ||
+                        state.ignoreWhitespace !== ignoreWhitespace ||
+                        state.mode !== mode,
+                  ),
+                  {
+                    _tag: "Failed" as const,
+                    path,
+                    ignoreWhitespace,
+                    mode,
+                    error,
+                  },
+                ],
+              }),
+              [],
+            ]
+          : [model, []],
+      LoadedFullFile: ({ requestedUrl, path, oldText, newText }) => {
+        if (!isCurrentDiffRequest(model, requestedUrl)) return [model, []];
         const requested = model.fullFileStates.some(
           state => state.path === path && state._tag === "Loading",
         );
@@ -1008,7 +1072,8 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
             ]
           : [model, []];
       },
-      FailedFullFile: ({ path, error }) => {
+      FailedFullFile: ({ requestedUrl, path, error }) => {
+        if (!isCurrentDiffRequest(model, requestedUrl)) return [model, []];
         const requested = model.fullFileStates.some(
           state => state.path === path && state._tag === "Loading",
         );
@@ -1024,22 +1089,28 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
             ]
           : [model, []];
       },
-      LoadedGitHubReviews: ({ comments }) => [
-        evo(model, {
-          githubReviews: () => ({ _tag: "Ready" as const, comments }),
-          collapsedReviewThreads: () =>
-            comments
-              .filter(comment => comment.id === comment.rootId && comment.resolved)
-              .map(comment => comment.id),
-        }),
-        [],
-      ],
-      FailedGitHubReviews: ({ error }) => [
-        evo(model, {
-          githubReviews: () => ({ _tag: "Failed" as const, error }),
-        }),
-        [],
-      ],
+      LoadedGitHubReviews: ({ requestedUrl, comments }) =>
+        isCurrentPullRequest(model, requestedUrl)
+          ? [
+              evo(model, {
+                githubReviews: () => ({ _tag: "Ready" as const, comments }),
+                collapsedReviewThreads: () =>
+                  comments
+                    .filter(comment => comment.id === comment.rootId && comment.resolved)
+                    .map(comment => comment.id),
+              }),
+              [],
+            ]
+          : [model, []],
+      FailedGitHubReviews: ({ requestedUrl, error }) =>
+        isCurrentPullRequest(model, requestedUrl)
+          ? [
+              evo(model, {
+                githubReviews: () => ({ _tag: "Failed" as const, error }),
+              }),
+              [],
+            ]
+          : [model, []],
       ChangedReplyDraft: ({ commentId, body }) => [
         evo(model, {
           replyDrafts: drafts => [
