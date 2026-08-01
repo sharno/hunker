@@ -752,6 +752,7 @@ kbd {
 }
 
 .file-header {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -759,6 +760,10 @@ kbd {
   padding: 9px 13px;
   background: #f8f7f2;
   border-bottom: 1px solid var(--line);
+}
+
+.file-header:has(.file-header-collapse-target:hover) {
+  background: #f2f1eb;
 }
 
 .diff-panel.is-collapsed .file-header {
@@ -771,29 +776,48 @@ kbd {
 
 .file-path,
 .file-actions {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 9px;
 }
 
-.file-collapse-button {
+.file-path {
+  pointer-events: none;
+}
+
+.file-actions {
+  z-index: 2;
+  pointer-events: none;
+}
+
+.file-actions button {
+  pointer-events: auto;
+}
+
+.file-header-collapse-target {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.file-header-collapse-target:focus-visible {
+  outline-offset: -4px;
+}
+
+.file-collapse-chevron {
   display: grid;
   place-items: center;
   width: 25px;
   height: 25px;
   padding: 0;
   color: #667068;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 5px;
-  cursor: pointer;
   font-size: 16px;
-}
-
-.file-collapse-button:hover {
-  color: var(--ink);
-  background: white;
-  border-color: #d2d3cc;
 }
 
 .semantic-engine-badge {

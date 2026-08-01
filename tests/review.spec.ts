@@ -307,7 +307,7 @@ export const untouchedFooter = true;
   const panel = page.locator(".diff-panel");
   await expect(panel).toHaveCount(1);
 
-  await page.getByRole("button", { name: "Collapse src/greet.ts" }).click();
+  await panel.locator(".file-header").click({ position: { x: 180, y: 27 } });
   await expect(panel).toHaveClass(/is-collapsed/);
   await expect(panel.locator(".diff-lines")).toHaveCount(0);
   await page.getByRole("button", { name: "Expand src/greet.ts", exact: true }).click();

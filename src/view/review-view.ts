@@ -502,18 +502,19 @@ const diffPanelView = (
 
   return h.section([h.Class(`diff-panel${collapsed ? " is-collapsed" : ""}`)], [
     h.div([h.Class("file-header")], [
+      h.button(
+        [
+          h.Type("button"),
+          h.Class("file-header-collapse-target"),
+          h.AriaExpanded(!collapsed),
+          h.AriaLabel(`${collapsed ? "Expand" : "Collapse"} ${file.path}`),
+          h.Title(`${collapsed ? "Expand" : "Collapse"} file diff`),
+          h.OnClick(ToggledFileCollapse({ path: file.path })),
+        ],
+        [],
+      ),
       h.div([h.Class("file-path")], [
-        h.button(
-          [
-            h.Type("button"),
-            h.Class("file-collapse-button"),
-            h.AriaExpanded(!collapsed),
-            h.AriaLabel(`${collapsed ? "Expand" : "Collapse"} ${file.path}`),
-            h.Title(`${collapsed ? "Expand" : "Collapse"} file diff`),
-            h.OnClick(ToggledFileCollapse({ path: file.path })),
-          ],
-          [collapsed ? "›" : "⌄"],
-        ),
+        h.span([h.Class("file-collapse-chevron")], [collapsed ? "›" : "⌄"]),
         h.span([h.Class(`file-status status-${file.status}`)], [statusGlyph(file.status)]),
         h.span([], [
           h.span([h.Class("path-dir")], [
