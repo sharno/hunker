@@ -165,6 +165,7 @@ export const GitHubReviewComment = S.Struct({
   createdAt: S.String,
   line: S.NullOr(S.Number),
   side: S.Literals(["LEFT", "RIGHT"]),
+  resolved: S.Boolean,
 });
 export type GitHubReviewComment = typeof GitHubReviewComment.Type;
 
@@ -221,6 +222,7 @@ export const Model = S.Struct({
   fullFileStates: S.Array(FullFileState),
   showGitHubReviews: S.Boolean,
   githubReviews: GitHubReviews,
+  collapsedReviewThreads: S.Array(S.Number),
   replyDrafts: S.Array(ReplyDraft),
   replyStates: S.Array(ReplyState),
   reviewBody: S.String,
@@ -293,6 +295,9 @@ export const FailedFullFile = m("FailedFullFile", {
   error: S.String,
 });
 export const ToggledGitHubReviews = m("ToggledGitHubReviews");
+export const ToggledReviewThreadCollapse = m("ToggledReviewThreadCollapse", {
+  threadId: S.Number,
+});
 export const LoadedGitHubReviews = m("LoadedGitHubReviews", {
   comments: S.Array(GitHubReviewComment),
 });
@@ -347,6 +352,7 @@ export const Message = S.Union([
   LoadedFullFile,
   FailedFullFile,
   ToggledGitHubReviews,
+  ToggledReviewThreadCollapse,
   LoadedGitHubReviews,
   FailedGitHubReviews,
   ChangedReplyDraft,

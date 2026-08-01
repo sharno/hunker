@@ -236,27 +236,50 @@ test("shows and hides inline GitHub reviews and posts replies and review decisio
   await page.goto(
     "/example/hunker-demo/pull/42?scope=file&view=unified&whitespace=ignore&semantic=off&characters=on&syntax=on&sidebar=expanded&reviews=show&file=src%2Fgreet.ts",
   );
-  await expect(page.locator(".github-review-thread")).toHaveCount(1);
-  await expect(page.locator(".github-review-thread")).toContainText(
+  await expect(page.locator(".github-review-thread")).toHaveCount(2);
+  const openThread = page.locator(".github-review-thread").filter({
+    hasText: "alice-reviewer",
+  });
+  await expect(openThread).toContainText(
     "Could this keep the original parameter name?",
   );
-  await expect(page.locator(".github-review-thread")).toContainText(
+  await expect(openThread).toContainText(
     "The rename makes the template clearer.",
   );
+  const resolvedThread = page.locator(".github-review-thread").filter({
+    hasText: "bob-reviewer",
+  });
+  await expect(resolvedThread).toHaveClass(classToken("is-collapsed"));
+  await expect(resolvedThread.locator(".github-review-resolved")).toHaveText("Resolved");
+  await resolvedThread.getByRole("button", {
+    name: "Expand review thread from bob-reviewer",
+  }).click();
+  await expect(resolvedThread).not.toHaveClass(classToken("is-collapsed"));
+  await expect(resolvedThread).toContainText(
+    "This thread has already been handled and can stay out of the way.",
+  );
 
-  const reviewsToggle = page.getByRole("button", { name: "GitHub reviews 1" });
+  await openThread.getByRole("button", {
+    name: "Collapse review thread from alice-reviewer",
+  }).click();
+  await expect(openThread).toHaveClass(classToken("is-collapsed"));
+  await openThread.getByRole("button", {
+    name: "Expand review thread from alice-reviewer",
+  }).click();
+
+  const reviewsToggle = page.getByRole("button", { name: "GitHub reviews 2" });
   await reviewsToggle.click();
   await expect(page.locator(".github-review-thread")).toHaveCount(0);
   await expect(page).toHaveURL(url => url.searchParams.get("reviews") === "hide");
   await reviewsToggle.click();
-  await expect(page.locator(".github-review-thread")).toHaveCount(1);
+  await expect(page.locator(".github-review-thread")).toHaveCount(2);
   expect(reviewLoads).toBe(1);
 
   await page.getByRole("textbox", { name: "Reply to review from alice-reviewer" }).fill(
     "Yes, the rename is intentional.",
   );
-  await page.getByRole("button", { name: "Reply", exact: true }).click();
-  await expect(page.locator(".github-review-thread")).toContainText(
+  await openThread.getByRole("button", { name: "Reply", exact: true }).click();
+  await expect(openThread).toContainText(
     "Yes, the rename is intentional.",
   );
 

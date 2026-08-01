@@ -46,6 +46,7 @@ import {
   ToggledFileCollapse,
   ToggledFullFile,
   ToggledGitHubReviews,
+  ToggledReviewThreadCollapse,
   ToggledHunkCollapse,
   ToggledReviewed,
   ToggledSemantic,
@@ -72,8 +73,8 @@ import { sampleFiles, sampleMeta } from "./sample";
 type UpdateReturn = readonly [ModelType, ReadonlyArray<Command.Command<Message>>];
 type ApiReview = Readonly<ReviewMeta & { diff: string }>;
 
-const toggleMembership = (paths: ReadonlyArray<string>, path: string) =>
-  paths.includes(path) ? paths.filter(item => item !== path) : [...paths, path];
+const toggleMembership = <A>(values: ReadonlyArray<A>, value: A) =>
+  values.includes(value) ? values.filter(item => item !== value) : [...values, value];
 
 const isApiReview = (value: unknown): value is ApiReview => {
   if (typeof value !== "object" || value === null) return false;
@@ -502,6 +503,7 @@ const beginReviewLoad = (model: ModelType, url: string): ModelType =>
     collapsedHunks: () => [],
     fullFileStates: () => [],
     githubReviews: () => ({ _tag: "Idle" as const }),
+    collapsedReviewThreads: () => [],
     replyDrafts: () => [],
     replyStates: () => [],
     reviewBody: () => "",
@@ -525,6 +527,7 @@ const sampleModel = (model: ModelType): ModelType =>
     collapsedHunks: () => [],
     fullFileStates: () => [],
     githubReviews: () => ({ _tag: "Idle" as const }),
+    collapsedReviewThreads: () => [],
     replyDrafts: () => [],
     replyStates: () => [],
     reviewBody: () => "",
@@ -640,6 +643,7 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
           collapsedHunks: () => [],
           fullFileStates: () => [],
           githubReviews: () => ({ _tag: "Idle" as const }),
+          collapsedReviewThreads: () => [],
           replyDrafts: () => [],
           replyStates: () => [],
           reviewBody: () => "",
@@ -751,6 +755,10 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
       LoadedGitHubReviews: ({ comments }) => [
         evo(model, {
           githubReviews: () => ({ _tag: "Ready" as const, comments }),
+          collapsedReviewThreads: () =>
+            comments
+              .filter(comment => comment.id === comment.rootId && comment.resolved)
+              .map(comment => comment.id),
         }),
         [],
       ],
@@ -895,6 +903,12 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         const [updated, commands] = requestGitHubReviews(next);
         return synchronizeReviewUrl(updated, commands);
       },
+      ToggledReviewThreadCollapse: ({ threadId }) => [
+        evo(model, {
+          collapsedReviewThreads: threads => toggleMembership(threads, threadId),
+        }),
+        [],
+      ],
       ToggledReviewed: ({ path }) => [
         evo(model, { reviewedPaths: paths => toggleMembership(paths, path) }),
         [],
@@ -968,6 +982,7 @@ const initialModel = (prUrl: string, options: ReviewOptions) =>
     fullFileStates: [],
     showGitHubReviews: options.showGitHubReviews,
     githubReviews: { _tag: "Idle" },
+    collapsedReviewThreads: [],
     replyDrafts: [],
     replyStates: [],
     reviewBody: "",

@@ -118,6 +118,7 @@ export const reviewCommentsResponse = {
       createdAt: "2026-07-30T12:00:00Z",
       line: 1,
       side: "RIGHT",
+      resolved: false,
     },
     {
       id: 101,
@@ -129,6 +130,19 @@ export const reviewCommentsResponse = {
       createdAt: "2026-07-30T12:05:00Z",
       line: 1,
       side: "RIGHT",
+      resolved: false,
+    },
+    {
+      id: 200,
+      rootId: 200,
+      path: "src/greet.ts",
+      body: "This thread has already been handled and can stay out of the way.",
+      author: "bob-reviewer",
+      htmlUrl: "https://github.com/example/hunker-demo/pull/42#discussion_r200",
+      createdAt: "2026-07-30T13:00:00Z",
+      line: 2,
+      side: "RIGHT",
+      resolved: true,
     },
   ],
 } as const;

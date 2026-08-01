@@ -505,6 +505,7 @@ const diffPanelView = (
           : [],
       replyDrafts: model.replyDrafts,
       replyStates: model.replyStates,
+      collapsedThreads: model.collapsedReviewThreads,
     },
   };
   const semanticOnly =

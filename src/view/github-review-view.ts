@@ -5,6 +5,7 @@ import {
   ChangedReviewBody,
   SubmittedReply,
   SubmittedReview,
+  ToggledReviewThreadCollapse,
 } from "../domain";
 import type {
   GitHubReviewComment,
@@ -19,6 +20,7 @@ export type GitHubReviewInteraction = Readonly<{
   comments: ReadonlyArray<GitHubReviewComment>;
   replyDrafts: ReadonlyArray<ReplyDraft>;
   replyStates: ReadonlyArray<ReplyState>;
+  collapsedThreads: ReadonlyArray<number>;
 }>;
 
 const rootComments = (comments: ReadonlyArray<GitHubReviewComment>) =>
@@ -52,20 +54,22 @@ const commentView = (
   h: HtmlBuilder<Message>,
 ): Html =>
   h.article([h.Class(`github-review-comment${reply ? " is-reply" : ""}`)], [
-    h.div([h.Class("github-review-comment-header")], [
-      h.strong([], [commentMeta(comment)]),
-      comment.htmlUrl === ""
-        ? h.empty
-        : h.a(
-            [
-              h.Href(comment.htmlUrl),
-              h.Target("_blank"),
-              h.Rel("noreferrer"),
-              h.Class("github-review-link"),
-            ],
-            ["Open on GitHub ↗"],
-          ),
-    ]),
+    reply
+      ? h.div([h.Class("github-review-comment-header")], [
+          h.strong([], [commentMeta(comment)]),
+          comment.htmlUrl === ""
+            ? h.empty
+            : h.a(
+                [
+                  h.Href(comment.htmlUrl),
+                  h.Target("_blank"),
+                  h.Rel("noreferrer"),
+                  h.Class("github-review-link"),
+                ],
+                ["Open on GitHub ↗"],
+              ),
+        ])
+      : h.empty,
     h.p([], [comment.body]),
   ]);
 
@@ -77,34 +81,91 @@ const threadView = (
   const draft = interaction.replyDrafts.find(item => item.commentId === root.id)?.body ?? "";
   const replyState = interaction.replyStates.find(item => item.commentId === root.id);
   const loading = replyState?._tag === "Loading";
-  return h.section([h.Key(`review-thread-${root.id}`), h.Class("github-review-thread")], [
-    commentView(root, false, h),
-    ...repliesFor(root, interaction.comments).map(comment =>
-      commentView(comment, true, h),
-    ),
-    h.form([h.Class("github-reply-form"), h.OnSubmit(SubmittedReply({ commentId: root.id }))], [
-      h.textarea([
-        h.Value(draft),
-        h.Rows(2),
-        h.Placeholder(`Reply to @${root.author}`),
-        h.AriaLabel(`Reply to review from ${root.author}`),
-        h.OnInput(body => ChangedReplyDraft({ commentId: root.id, body })),
-      ], []),
-      h.div([h.Class("github-reply-actions")], [
-        replyState?._tag === "Failed"
-          ? h.span([h.Class("github-review-error"), h.Role("alert")], [replyState.error])
-          : h.empty,
+  const collapsed = interaction.collapsedThreads.includes(root.id);
+  const summary = root.body.split("\n")[0] ?? "";
+  return h.section(
+    [
+      h.Key(`review-thread-${root.id}`),
+      h.Class(`github-review-thread${collapsed ? " is-collapsed" : ""}`),
+    ],
+    [
+      h.div([h.Class("github-review-thread-heading")], [
         h.button(
           [
-            h.Type("submit"),
-            h.Class("github-reply-button"),
-            h.Disabled(loading || draft.trim() === ""),
+            h.Type("button"),
+            h.Class("github-review-thread-toggle"),
+            h.AriaExpanded(!collapsed),
+            h.AriaLabel(
+              `${collapsed ? "Expand" : "Collapse"} review thread from ${root.author}`,
+            ),
+            h.OnClick(ToggledReviewThreadCollapse({ threadId: root.id })),
           ],
-          [loading ? "Posting…" : "Reply"],
+          [
+            h.span([h.Class("collapse-chevron")], [collapsed ? "›" : "⌄"]),
+            h.strong([], [commentMeta(root)]),
+            root.resolved
+              ? h.span([h.Class("github-review-resolved")], ["Resolved"])
+              : h.empty,
+            collapsed
+              ? h.span([h.Class("github-review-summary")], [summary])
+              : h.empty,
+          ],
         ),
+        root.htmlUrl === ""
+          ? h.empty
+          : h.a(
+              [
+                h.Href(root.htmlUrl),
+                h.Target("_blank"),
+                h.Rel("noreferrer"),
+                h.Class("github-review-link"),
+              ],
+              ["Open on GitHub ↗"],
+            ),
       ]),
-    ]),
-  ]);
+      ...(collapsed
+        ? []
+        : [
+            commentView(root, false, h),
+            ...repliesFor(root, interaction.comments).map(comment =>
+              commentView(comment, true, h),
+            ),
+            h.form(
+              [
+                h.Class("github-reply-form"),
+                h.OnSubmit(SubmittedReply({ commentId: root.id })),
+              ],
+              [
+                h.textarea(
+                  [
+                    h.Value(draft),
+                    h.Rows(2),
+                    h.Placeholder(`Reply to @${root.author}`),
+                    h.AriaLabel(`Reply to review from ${root.author}`),
+                    h.OnInput(body => ChangedReplyDraft({ commentId: root.id, body })),
+                  ],
+                  [],
+                ),
+                h.div([h.Class("github-reply-actions")], [
+                  replyState?._tag === "Failed"
+                    ? h.span([h.Class("github-review-error"), h.Role("alert")], [
+                        replyState.error,
+                      ])
+                    : h.empty,
+                  h.button(
+                    [
+                      h.Type("submit"),
+                      h.Class("github-reply-button"),
+                      h.Disabled(loading || draft.trim() === ""),
+                    ],
+                    [loading ? "Posting…" : "Reply"],
+                  ),
+                ]),
+              ],
+            ),
+          ]),
+    ],
+  );
 };
 
 const threadGroup = (
