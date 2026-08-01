@@ -11,6 +11,8 @@
     "dev:web": "vite",
     "build": "bun run typecheck && vite build",
     "typecheck": "tsc --noEmit",
+    "test:integration": "playwright test",
+    "test:integration:ui": "playwright test --ui",
     "start:api": "tsx backend/server.ts",
     "preview": "vite preview"
   },
@@ -23,6 +25,7 @@
   },
   "devDependencies": {
     "@foldkit/vite-plugin": "0.11.3",
+    "@playwright/test": "1.62.1",
     "@types/node": "22.19.19",
     "tsx": "4.22.4",
     "typescript": "5.9.3",

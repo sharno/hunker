@@ -39,6 +39,7 @@ Open [http://localhost:5173](http://localhost:5173). The API runs on port `8787`
 ```bash
 bun run build       # strict typecheck and production frontend build
 bun run typecheck   # TypeScript only
+bun run test:integration # Playwright UI and real Difftastic process tests
 bun run dev:web     # Foldkit frontend only
 bun run dev:api     # Effect backend only
 ```
