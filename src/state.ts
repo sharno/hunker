@@ -1,4 +1,4 @@
-import { Effect, Match as M, Schema as S } from "effect";
+import { Effect, Match as M, Option, Schema as S } from "effect";
 import {
   HttpClient,
   HttpClientError,
@@ -39,7 +39,13 @@ import type {
   ReviewMeta,
 } from "./domain";
 import { parseGitDiff } from "./diff";
-import { githubUrlFromPathname, localPathFromGitHubUrl } from "./review-route";
+import {
+  defaultReviewOptions,
+  githubUrlFromPathname,
+  localReviewUrl,
+  reviewOptionsFromSearch,
+  type ReviewOptions,
+} from "./review-route";
 import { sampleFiles, sampleMeta } from "./sample";
 
 type UpdateReturn = readonly [ModelType, ReadonlyArray<Command.Command<Message>>];
@@ -110,10 +116,18 @@ const FetchReview = Command.define("FetchReview", {
 });
 
 const Navigate = Command.define("Navigate", {
-  args: { href: S.String, external: S.Boolean },
+  args: {
+    href: S.String,
+    method: S.Literals(["push", "replace", "load"]),
+  },
   messages: [CompletedNavigation],
-  execute: ({ href, external }) =>
-    (external ? Navigation.load(href) : Navigation.pushUrl(href)).pipe(
+  execute: ({ href, method }) =>
+    (method === "load"
+      ? Navigation.load(href)
+      : method === "replace"
+        ? Navigation.replaceUrl(href)
+        : Navigation.pushUrl(href)
+    ).pipe(
       Effect.as(CompletedNavigation()),
     ),
 });
@@ -252,6 +266,43 @@ const sampleModel = (model: ModelType): ModelType =>
     reviewMoves: () => ({ _tag: "Idle" as const }),
   });
 
+const reviewOptions = (model: ModelType): ReviewOptions => ({
+  reviewScope: model.reviewScope,
+  viewMode: model.viewMode,
+  ignoreWhitespace: model.ignoreWhitespace,
+  semantic: model.semantic,
+  characterDiff: model.characterDiff,
+  sidebarCollapsed: model.sidebarCollapsed,
+  selectedPath: model.selectedPath,
+});
+
+const applyReviewOptions = (
+  model: ModelType,
+  options: ReviewOptions,
+): ModelType =>
+  evo(model, {
+    reviewScope: () => options.reviewScope,
+    viewMode: () => options.viewMode,
+    ignoreWhitespace: () => options.ignoreWhitespace,
+    semantic: () => options.semantic,
+    characterDiff: () => options.characterDiff,
+    sidebarCollapsed: () => options.sidebarCollapsed,
+    selectedPath: () => options.selectedPath,
+  });
+
+const synchronizeReviewUrl = (
+  model: ModelType,
+  commands: ReadonlyArray<Command.Command<Message>>,
+): UpdateReturn => {
+  if (model.phase !== "ready" || model.prUrl !== model.meta.url) {
+    return [model, commands];
+  }
+  const href = localReviewUrl(model.meta.url, reviewOptions(model));
+  return href === undefined
+    ? [model, commands]
+    : [model, [...commands, Navigate({ href, method: "replace" })]];
+};
+
 export const update = (model: ModelType, message: Message): UpdateReturn =>
   M.value(message).pipe(
     M.withReturnType<UpdateReturn>(),
@@ -260,12 +311,15 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
       SubmittedPrUrl: () => {
         if (model.phase === "loading" || model.prUrl.trim() === "") return [model, []];
         const url = model.prUrl.trim();
-        const path = localPathFromGitHubUrl(url);
+        const href = localReviewUrl(url, {
+          ...reviewOptions(model),
+          selectedPath: "",
+        });
         return [
           beginReviewLoad(model, url),
           [
             FetchReview({ url }),
-            ...(path === undefined ? [] : [Navigate({ href: path, external: false })]),
+            ...(href === undefined ? [] : [Navigate({ href, method: "push" })]),
           ],
         ];
       },
@@ -274,7 +328,7 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         const url = model.meta.url || model.prUrl.trim();
         return [beginReviewLoad(model, url), [FetchReview({ url })]];
       },
-      ChangedBrowserUrl: ({ pathname }) => {
+      ChangedBrowserUrl: ({ pathname, search }) => {
         if (pathname === "/") return [sampleModel(model), []];
         const url = githubUrlFromPathname(pathname);
         if (url === undefined) {
@@ -286,12 +340,15 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
             [],
           ];
         }
-        if (url === model.prUrl || url === model.meta.url) return [model, []];
-        return [beginReviewLoad(model, url), [FetchReview({ url })]];
+        const withOptions = applyReviewOptions(model, reviewOptionsFromSearch(search));
+        if (url === model.prUrl || url === model.meta.url) {
+          return requestSelectedIntelligence(withOptions);
+        }
+        return [beginReviewLoad(withOptions, url), [FetchReview({ url })]];
       },
       RequestedNavigation: ({ href, external }) => [
         model,
-        [Navigate({ href, external })],
+        [Navigate({ href, method: external ? "load" : "push" })],
       ],
       CompletedNavigation: () => [model, []],
       LoadedReview: ({ meta, files }) => {
@@ -308,7 +365,8 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
           semanticRequest: () => ({ _tag: "Idle" as const }),
           reviewMoves: () => ({ _tag: "Idle" as const }),
         });
-        return requestSelectedIntelligence(next);
+        const [loaded, commands] = requestSelectedIntelligence(next);
+        return synchronizeReviewUrl(loaded, commands);
       },
       FailedReview: ({ error }) => [
         evo(model, { phase: () => "error" as const, error: () => error }),
@@ -351,29 +409,36 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
           reviewScope: () => "file" as const,
         });
         const file = next.files.find(item => item.path === path);
-        return file === undefined ? [next, []] : requestSemantic(next, file);
+        const result = file === undefined ? ([next, []] as const) : requestSemantic(next, file);
+        return synchronizeReviewUrl(result[0], result[1]);
       },
       SelectedReviewScope: ({ value }) => {
         const next = evo(model, { reviewScope: () => value });
-        return value === "full" ? requestMoves(next) : [next, []];
+        const result = value === "full" ? requestMoves(next) : ([next, []] as const);
+        return synchronizeReviewUrl(result[0], result[1]);
       },
-      SelectedViewMode: ({ value }) => [evo(model, { viewMode: () => value }), []],
-      ToggledWhitespace: () => [
-        evo(model, { ignoreWhitespace: value => !value }),
-        [],
-      ],
+      SelectedViewMode: ({ value }) =>
+        synchronizeReviewUrl(evo(model, { viewMode: () => value }), []),
+      ToggledWhitespace: () =>
+        synchronizeReviewUrl(
+          evo(model, { ignoreWhitespace: value => !value }),
+          [],
+        ),
       ToggledSemantic: () => {
         const next = evo(model, { semantic: value => !value });
-        return requestSelectedIntelligence(next);
+        const [updated, commands] = requestSelectedIntelligence(next);
+        return synchronizeReviewUrl(updated, commands);
       },
-      ToggledCharacterDiff: () => [
-        evo(model, { characterDiff: value => !value }),
-        [],
-      ],
-      ToggledSidebar: () => [
-        evo(model, { sidebarCollapsed: value => !value }),
-        [],
-      ],
+      ToggledCharacterDiff: () =>
+        synchronizeReviewUrl(
+          evo(model, { characterDiff: value => !value }),
+          [],
+        ),
+      ToggledSidebar: () =>
+        synchronizeReviewUrl(
+          evo(model, { sidebarCollapsed: value => !value }),
+          [],
+        ),
       ToggledReviewed: ({ path }) => [
         evo(model, { reviewedPaths: paths => toggleReviewed(paths, path) }),
         [],
@@ -381,7 +446,7 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
     }),
   );
 
-const initialModel = (prUrl: string) =>
+const initialModel = (prUrl: string, options: ReviewOptions) =>
   Model.make({
     phase: prUrl === "" ? "ready" : "loading",
     error: "",
@@ -389,13 +454,13 @@ const initialModel = (prUrl: string) =>
     filter: "",
     meta: sampleMeta,
     files: sampleFiles,
-    selectedPath: sampleFiles[0]?.path ?? "",
-    sidebarCollapsed: false,
-    reviewScope: "file",
-    viewMode: "split",
-    ignoreWhitespace: true,
-    semantic: true,
-    characterDiff: true,
+    selectedPath: options.selectedPath || sampleFiles[0]?.path || "",
+    sidebarCollapsed: options.sidebarCollapsed,
+    reviewScope: options.reviewScope,
+    viewMode: options.viewMode,
+    ignoreWhitespace: options.ignoreWhitespace,
+    semantic: options.semantic,
+    characterDiff: options.characterDiff,
     reviewedPaths: [],
     semanticResults: [],
     semanticRequest: { _tag: "Idle" },
@@ -404,12 +469,20 @@ const initialModel = (prUrl: string) =>
 
 export const init: Runtime.RoutingApplicationInit<ModelType, Message> = url => {
   const prUrl = githubUrlFromPathname(url.pathname) ?? "";
-  const model = initialModel(prUrl);
+  const options =
+    prUrl === ""
+      ? defaultReviewOptions
+      : reviewOptionsFromSearch(Option.getOrElse(url.search, () => ""));
+  const model = initialModel(prUrl, options);
   return [model, prUrl === "" ? [] : [FetchReview({ url: prUrl })]];
 };
 
 export const routing: Runtime.RoutingConfig<Message> = {
-  onUrlChange: url => ChangedBrowserUrl({ pathname: url.pathname }),
+  onUrlChange: url =>
+    ChangedBrowserUrl({
+      pathname: url.pathname,
+      search: Option.getOrElse(url.search, () => ""),
+    }),
   onUrlRequest: request =>
     request._tag === "External"
       ? RequestedNavigation({ href: request.href, external: true })

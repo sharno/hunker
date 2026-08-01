@@ -35,9 +35,11 @@ Open [http://localhost:5173](http://localhost:5173). The API runs on port `8787`
 
 Loading a review replaces the local address with a shareable route such as
 `http://localhost:5173/radarlabs/server/pull/7848`. Opening that route in another
-tab or reloading it fetches the review automatically. Use the Refresh button in
-the review header to discard cached semantic results and pull the latest diff
-from GitHub without changing the route.
+tab or reloading it fetches the review automatically. The query string records
+the selected file, full/file scope, layout, whitespace, semantic, character-diff,
+and sidebar settings, so copying the address restores the same review view. Use
+the Refresh button in the review header to discard cached semantic results and
+pull the latest diff from GitHub without losing those settings.
 
 ## Useful commands
 

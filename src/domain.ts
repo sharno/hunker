@@ -133,7 +133,10 @@ export type Model = typeof Model.Type;
 export const ChangedPrUrl = m("ChangedPrUrl", { value: S.String });
 export const SubmittedPrUrl = m("SubmittedPrUrl");
 export const RefreshedReview = m("RefreshedReview");
-export const ChangedBrowserUrl = m("ChangedBrowserUrl", { pathname: S.String });
+export const ChangedBrowserUrl = m("ChangedBrowserUrl", {
+  pathname: S.String,
+  search: S.String,
+});
 export const RequestedNavigation = m("RequestedNavigation", {
   href: S.String,
   external: S.Boolean,

@@ -32,7 +32,12 @@ test("loads a PR and renders ast-grep intelligence in both review layouts", asyn
   await page.getByPlaceholder("Paste a GitHub PR or compare URL").fill(reviewUrl);
   await page.getByRole("button", { name: "Review", exact: true }).click();
 
-  await expect(page).toHaveURL(/\/example\/hunker-demo\/pull\/42$/);
+  await expect(page).toHaveURL(url =>
+    url.pathname === "/example/hunker-demo/pull/42" &&
+    url.searchParams.get("scope") === "file" &&
+    url.searchParams.get("view") === "split" &&
+    url.searchParams.get("file") === "src/greet.ts",
+  );
   await expect(page.getByRole("heading", { name: reviewResponse.title })).toBeVisible();
   await expect(page.locator(".semantic-banner")).toContainText(
     "ast-grep is analyzing this file",
@@ -63,10 +68,21 @@ test("loads a PR and renders ast-grep intelligence in both review layouts", asyn
   await expect(page.locator(".semantic-banner")).toHaveCount(0);
   await expect(page.locator(".semantic-findings")).toHaveCount(0);
   await expect(page.locator(".unified-lines")).toHaveCount(2);
+  await expect(page).toHaveURL(url =>
+    url.pathname === "/example/hunker-demo/pull/42" &&
+    url.searchParams.get("scope") === "full" &&
+    url.searchParams.get("view") === "unified" &&
+    url.searchParams.get("whitespace") === "ignore" &&
+    url.searchParams.get("semantic") === "off" &&
+    url.searchParams.get("characters") === "on" &&
+    url.searchParams.get("sidebar") === "expanded" &&
+    url.searchParams.get("file") === "src/greet.ts",
+  );
 });
 
 test("loads a copied review route and refreshes it from GitHub", async ({ page }) => {
   let reviewRequests = 0;
+  let semanticRequests = 0;
   await page.route("**/api/diff?**", route => {
     reviewRequests += 1;
     const requestUrl = new URL(route.request().url());
@@ -77,29 +93,58 @@ test("loads a copied review route and refreshes it from GitHub", async ({ page }
       json: { ...reviewResponse, title: `Review revision ${reviewRequests}` },
     });
   });
-  await page.route("**/api/semantic?**", route =>
-    route.fulfill({
+  await page.route("**/api/semantic?**", route => {
+    semanticRequests += 1;
+    return route.fulfill({
       status: 200,
       contentType: "application/json",
       json: semanticResponse,
-    }),
-  );
+    });
+  });
 
-  await page.goto("/example/hunker-demo/pull/42");
+  const sharedRoute =
+    "/example/hunker-demo/pull/42?scope=full&view=unified&whitespace=show&semantic=off&characters=off&sidebar=collapsed&file=src%2Fmessage.ts";
+  await page.goto(sharedRoute);
 
   await expect(page.getByRole("heading", { name: "Review revision 1" })).toBeVisible();
   await expect(page.getByPlaceholder("Paste a GitHub PR or compare URL")).toHaveValue(
     reviewUrl,
   );
-  await expect(page).toHaveURL(/\/example\/hunker-demo\/pull\/42$/);
+  await expect(page).toHaveURL(sharedRoute);
+  await expect(page.getByRole("button", { name: "Full diff" })).toHaveClass(/is-active/);
+  await expect(page.getByRole("button", { name: "Unified" })).toHaveClass(/is-active/);
+  await expect(page.getByRole("button", { name: "Ignore whitespace" })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  await expect(page.getByRole("button", { name: "Semantic", exact: true })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  await expect(page.getByRole("button", { name: "Character diff" })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  await expect(page.locator(".workspace")).toHaveClass(/sidebar-collapsed/);
+  await expect(page.locator(".full-diff .diff-panel")).toHaveCount(2);
+  await expect(page.locator(".unified-lines")).toHaveCount(2);
+
+  await page.getByRole("button", { name: "One file" }).click();
+  await expect(page.locator(".diff-panel")).toHaveCount(1);
+  await expect(page.locator(".diff-panel .file-path")).toContainText("message.ts");
+  await page.getByRole("button", { name: "Full diff" }).click();
+  await expect(page.locator(".full-diff .diff-panel")).toHaveCount(2);
+  await expect(page).toHaveURL(sharedRoute);
 
   await page.getByRole("button", { name: "Refresh diff from GitHub" }).click();
   await expect(page.getByRole("heading", { name: "Review revision 2" })).toBeVisible();
-  await expect(page).toHaveURL(/\/example\/hunker-demo\/pull\/42$/);
+  await expect(page).toHaveURL(sharedRoute);
 
   await page.reload();
   await expect(page.getByRole("heading", { name: "Review revision 3" })).toBeVisible();
+  await expect(page).toHaveURL(sharedRoute);
   expect(reviewRequests).toBe(3);
+  expect(semanticRequests).toBe(0);
 });
 
 test("reports a semantic backend failure without hiding the patch", async ({ page }) => {
