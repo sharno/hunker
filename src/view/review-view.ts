@@ -223,24 +223,30 @@ const compactReviewToolbar = (model: Model, h: HtmlBuilder<Message>): Html => {
       model.reviewTab === "files" &&
       model.showGitHubReviews,
   ].filter(Boolean).length;
-  return h.header([h.Class("compact-review-toolbar")], [
-    h.div([h.Class("compact-brand")], [
-      h.span([h.Class("brand-mark")], ["H"]),
-      h.span([h.Class("brand-name")], ["hunker"]),
-    ]),
-    h.a(
-      [
-        h.Class("toolbar-review-identity"),
-        h.Href(model.meta.url),
-        h.Target("_blank"),
-        h.Rel("noreferrer"),
-        h.Title("Open pull request on GitHub"),
-      ],
-      [
-        h.strong([], [`${model.meta.repository} #${model.meta.number}`]),
-        h.span([], [model.meta.title]),
-      ],
-    ),
+  return h.header(
+    [
+      h.Class(
+        `compact-review-toolbar ${model.toolbarCompact ? "is-compact" : "is-expanded"}`,
+      ),
+    ],
+    [
+      h.div([h.Class("compact-brand")], [
+        h.span([h.Class("brand-mark")], ["H"]),
+        h.span([h.Class("brand-name")], ["hunker"]),
+      ]),
+      h.a(
+        [
+          h.Class("toolbar-review-identity"),
+          h.Href(model.meta.url),
+          h.Target("_blank"),
+          h.Rel("noreferrer"),
+          h.Title("Open pull request on GitHub"),
+        ],
+        [
+          h.strong([], [`${model.meta.repository} #${model.meta.number}`]),
+          h.span([], [model.meta.title]),
+        ],
+      ),
     h.nav([h.Class("toolbar-primary-controls"), h.AriaLabel("Review display")], [
       model.reviewTab === "files" || model.selectedCommit !== ""
         ? scopePicker(model, false, h)
@@ -487,7 +493,7 @@ const fileSidebarView = (
   h.aside(
     [
       h.Class(
-        `file-sidebar${hasLoadedReview(model) ? " with-compact-toolbar" : ""}`,
+        `file-sidebar${hasLoadedReview(model) ? model.toolbarCompact ? " with-compact-toolbar" : " with-expanded-toolbar" : ""}`,
       ),
     ],
     [
@@ -906,7 +912,7 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Html => {
     h.div(
       [
         h.Class(
-          `workspace${hasLoadedReview(model) ? " with-compact-toolbar" : ""}${model.sidebarCollapsed ? " sidebar-collapsed" : ""}`,
+          `workspace${hasLoadedReview(model) ? model.toolbarCompact ? " with-compact-toolbar" : " with-expanded-toolbar" : ""}${model.sidebarCollapsed ? " sidebar-collapsed" : ""}`,
         ),
       ],
       [

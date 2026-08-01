@@ -67,6 +67,9 @@ test("loads a PR and renders ast-grep intelligence in both review layouts", asyn
     url.searchParams.get("file") === "src/greet.ts",
   );
   await expect(page.getByRole("heading", { name: reviewResponse.title })).toBeVisible();
+  await expect(page.locator(".compact-review-toolbar")).toHaveClass(
+    classToken("is-expanded"),
+  );
   await expect(page.locator(".semantic-banner")).toContainText(
     "ast-grep is analyzing this file",
   );
@@ -112,6 +115,7 @@ test("loads a PR and renders ast-grep intelligence in both review layouts", asyn
   await expect(page.locator(".unified-lines")).toHaveCount(2);
   await expect(page.locator(".unified-lines").first()).toContainText("hello ${person}");
 
+  await page.locator(".toolbar-options > .toolbar-menu-button").click();
   await page.getByRole("button", { name: "Semantic", exact: true }).click();
   await expect(page.locator(".semantic-banner")).toHaveCount(0);
   await expect(page.locator(".semantic-findings")).toHaveCount(0);
@@ -167,8 +171,15 @@ test("loads a copied review route and refreshes it from GitHub", async ({ page }
     "position",
     "sticky",
   );
-  const toolbarBounds = await page.locator(".compact-review-toolbar").boundingBox();
-  expect(toolbarBounds?.height).toBeLessThanOrEqual(48);
+  const toolbar = page.locator(".compact-review-toolbar");
+  await expect(toolbar).toHaveClass(classToken("is-expanded"));
+  await expect(toolbar).toHaveCSS("height", "68px");
+  await page.evaluate(() => window.scrollTo(0, 240));
+  await expect(toolbar).toHaveClass(classToken("is-compact"));
+  await expect(toolbar).toHaveCSS("height", "48px");
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await expect(toolbar).toHaveClass(classToken("is-expanded"));
+  await expect(toolbar).toHaveCSS("height", "68px");
   await expect(page.locator(".controlbar")).toHaveCount(0);
   await expect(page).toHaveURL(sharedRoute);
   await expect(page.getByRole("button", { name: "Full diff" })).toHaveClass(

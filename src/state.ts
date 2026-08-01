@@ -10,6 +10,7 @@ import { evo } from "foldkit/struct";
 import {
   ChangedFilter,
   ChangedBrowserUrl,
+  ChangedToolbarCompact,
   ChangedPrUrl,
   ChangedReplyDraft,
   ChangedRepositoryQuery,
@@ -773,6 +774,10 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         evo(model, { toolbarMenu: () => "none" as const }),
         [],
       ],
+      ChangedToolbarCompact: ({ value }) =>
+        value === model.toolbarCompact
+          ? [model, []]
+          : [evo(model, { toolbarCompact: () => value }), []],
       ChangedBrowserUrl: ({ pathname, search }) => {
         if (pathname === "/") return [sampleModel(model), []];
         const repositoryRoute = repositoryRouteFromPathname(pathname);
@@ -1295,6 +1300,7 @@ const initialModel = (prUrl: string, options: ReviewOptions) =>
       file: { _tag: "Idle" },
     },
     toolbarMenu: "none",
+    toolbarCompact: false,
     selectedPath: options.selectedPath || sampleFiles[0]?.path || "",
     sidebarCollapsed: options.sidebarCollapsed,
     reviewScope: options.reviewScope,

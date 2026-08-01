@@ -303,6 +303,7 @@ export const Model = S.Struct({
   commitDiff: CommitDiff,
   repositoryBrowser: RepositoryBrowser,
   toolbarMenu: S.Literals(["none", "options", "open-review"]),
+  toolbarCompact: S.Boolean,
   selectedPath: S.String,
   sidebarCollapsed: S.Boolean,
   reviewScope: S.Literals(["file", "full"]),
@@ -336,6 +337,9 @@ export const ToggledToolbarMenu = m("ToggledToolbarMenu", {
   value: S.Literals(["options", "open-review"]),
 });
 export const ClosedToolbarMenus = m("ClosedToolbarMenus");
+export const ChangedToolbarCompact = m("ChangedToolbarCompact", {
+  value: S.Boolean,
+});
 export const ChangedBrowserUrl = m("ChangedBrowserUrl", {
   pathname: S.String,
   search: S.String,
@@ -476,6 +480,7 @@ export const Message = S.Union([
   RefreshedReview,
   ToggledToolbarMenu,
   ClosedToolbarMenus,
+  ChangedToolbarCompact,
   ChangedBrowserUrl,
   RequestedNavigation,
   CompletedNavigation,
