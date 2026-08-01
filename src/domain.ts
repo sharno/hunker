@@ -109,6 +109,17 @@ export const ReviewMoves = S.Union([
 ]);
 export type ReviewMoves = typeof ReviewMoves.Type;
 
+export const FullFileState = S.Union([
+  S.TaggedStruct("Loading", { path: S.String }),
+  S.TaggedStruct("Ready", {
+    path: S.String,
+    oldText: S.String,
+    newText: S.String,
+  }),
+  S.TaggedStruct("Failed", { path: S.String, error: S.String }),
+]);
+export type FullFileState = typeof FullFileState.Type;
+
 export const Model = S.Struct({
   phase: S.Literals(["ready", "loading", "error"]),
   error: S.String,
@@ -127,6 +138,9 @@ export const Model = S.Struct({
   semanticResults: S.Array(SemanticResult),
   semanticRequest: SemanticRequest,
   reviewMoves: ReviewMoves,
+  collapsedPaths: S.Array(S.String),
+  collapsedHunks: S.Array(S.String),
+  fullFileStates: S.Array(FullFileState),
 });
 export type Model = typeof Model.Type;
 
@@ -170,6 +184,21 @@ export const ToggledSemantic = m("ToggledSemantic");
 export const ToggledCharacterDiff = m("ToggledCharacterDiff");
 export const ToggledSidebar = m("ToggledSidebar");
 export const ToggledReviewed = m("ToggledReviewed", { path: S.String });
+export const ToggledFileCollapse = m("ToggledFileCollapse", { path: S.String });
+export const ToggledHunkCollapse = m("ToggledHunkCollapse", {
+  path: S.String,
+  hunkId: S.String,
+});
+export const ToggledFullFile = m("ToggledFullFile", { path: S.String });
+export const LoadedFullFile = m("LoadedFullFile", {
+  path: S.String,
+  oldText: S.String,
+  newText: S.String,
+});
+export const FailedFullFile = m("FailedFullFile", {
+  path: S.String,
+  error: S.String,
+});
 
 export const Message = S.Union([
   ChangedPrUrl,
@@ -193,5 +222,10 @@ export const Message = S.Union([
   ToggledCharacterDiff,
   ToggledSidebar,
   ToggledReviewed,
+  ToggledFileCollapse,
+  ToggledHunkCollapse,
+  ToggledFullFile,
+  LoadedFullFile,
+  FailedFullFile,
 ]);
 export type Message = typeof Message.Type;

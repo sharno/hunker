@@ -9,6 +9,8 @@ import {
   SelectedViewMode,
   SubmittedPrUrl,
   ToggledCharacterDiff,
+  ToggledFileCollapse,
+  ToggledFullFile,
   ToggledReviewed,
   ToggledSemantic,
   ToggledSidebar,
@@ -22,7 +24,7 @@ import type {
   SemanticChange,
   SemanticResult,
 } from "../domain";
-import { toDiffLines } from "../diff";
+import { toDiffLines, toFullDiffLines } from "../diff";
 import { splitDiffView, unifiedDiffView } from "./diff-view";
 import type { MovedRanges } from "./diff-view";
 
@@ -400,7 +402,17 @@ const diffPanelView = (
   h: HtmlBuilder<Message>,
 ): Html => {
   const reviewed = model.reviewedPaths.includes(file.path);
-  const lines = toDiffLines(file.patch, model.ignoreWhitespace);
+  const collapsed = model.collapsedPaths.includes(file.path);
+  const fullFileState = model.fullFileStates.find(state => state.path === file.path);
+  const lines =
+    fullFileState?._tag === "Ready"
+      ? toFullDiffLines(
+          file.patch,
+          fullFileState.oldText,
+          fullFileState.newText,
+          model.ignoreWhitespace,
+        )
+      : toDiffLines(file.patch, model.ignoreWhitespace);
   const semanticResult = model.semanticResults.find(result => result.path === file.path);
   const parsedSemantic =
     semanticResult?._tag === "Parsed" ? semanticResult : undefined;
@@ -436,9 +448,25 @@ const diffPanelView = (
     return `${change._tag} ${kind} ${change.label}`;
   };
 
-  return h.section([h.Class("diff-panel")], [
+  const interaction = {
+    path: file.path,
+    collapsedHunks: model.collapsedHunks,
+  };
+
+  return h.section([h.Class(`diff-panel${collapsed ? " is-collapsed" : ""}`)], [
     h.div([h.Class("file-header")], [
       h.div([h.Class("file-path")], [
+        h.button(
+          [
+            h.Type("button"),
+            h.Class("file-collapse-button"),
+            h.AriaExpanded(!collapsed),
+            h.AriaLabel(`${collapsed ? "Expand" : "Collapse"} ${file.path}`),
+            h.Title(`${collapsed ? "Expand" : "Collapse"} file diff`),
+            h.OnClick(ToggledFileCollapse({ path: file.path })),
+          ],
+          [collapsed ? "›" : "⌄"],
+        ),
         h.span([h.Class(`file-status status-${file.status}`)], [statusGlyph(file.status)]),
         h.span([], [
           h.span([h.Class("path-dir")], [
@@ -450,6 +478,30 @@ const diffPanelView = (
         ]),
       ]),
       h.div([h.Class("file-actions")], [
+        h.button(
+          [
+            h.Type("button"),
+            h.Class("context-button"),
+            h.Disabled(fullFileState?._tag === "Loading"),
+            h.AriaLabel(
+              fullFileState?._tag === "Ready"
+                ? `Show patch only for ${file.path}`
+                : fullFileState?._tag === "Failed"
+                  ? `Retry full file for ${file.path}`
+                  : `Expand ${file.path} to full file`,
+            ),
+            h.OnClick(ToggledFullFile({ path: file.path })),
+          ],
+          [
+            fullFileState?._tag === "Ready"
+              ? "Patch only"
+              : fullFileState?._tag === "Loading"
+                ? "Loading file…"
+                : fullFileState?._tag === "Failed"
+                  ? "Retry full file"
+                  : "Full file",
+          ],
+        ),
         model.semantic && parsedSemantic !== undefined
           ? h.span([h.Class("semantic-engine-badge")], [
               `ast-grep · ${parsedSemantic.language}`,
@@ -473,39 +525,49 @@ const diffPanelView = (
         ),
       ]),
     ]),
-    moves.length === 0
+    collapsed
       ? h.empty
-      : h.div(
-          [h.Class("file-movements")],
-          moves.map((move, index) =>
-            h.span([h.Key(`file-move-${index}`)], [
-              `${move.lineCount} lines moved ${move.fromPath}:${move.fromLine} → ${move.toPath}:${move.toLine}`,
+      : h.div([h.Class("file-body")], [
+          moves.length === 0
+            ? h.empty
+            : h.div(
+                [h.Class("file-movements")],
+                moves.map((move, index) =>
+                  h.span([h.Key(`file-move-${index}`)], [
+                    `${move.lineCount} lines moved ${move.fromPath}:${move.fromLine} → ${move.toPath}:${move.toLine}`,
+                  ]),
+                ),
+              ),
+          fullFileState?._tag === "Failed"
+            ? h.div([h.Class("file-context-error"), h.Role("alert")], [
+                h.strong([], ["Could not load the complete file"]),
+                h.span([], [fullFileState.error]),
+              ])
+            : h.empty,
+          model.semantic ? semanticBannerView(file, model, semanticResult, h) : h.empty,
+          model.semantic && parsedSemantic !== undefined && parsedSemantic.changes.length > 0
+            ? h.div(
+                [h.Class("semantic-findings")],
+                parsedSemantic.changes.map((change, index) =>
+                  h.span([h.Key(`semantic-change-${index}`)], [semanticChangeText(change)]),
+                ),
+              )
+            : h.empty,
+          model.semantic && parsedSemantic?.semanticEqual && fullFileState?._tag !== "Ready"
+            ? h.div([h.Class("semantic-equal")], [
+                h.strong([], ["No syntax changes"]),
+                h.span([], ["Only formatting or comments changed in this file."]),
+              ])
+            : model.viewMode === "unified"
+              ? unifiedDiffView(lines, model.characterDiff, movedRanges, interaction, h)
+              : splitDiffView(lines, model.characterDiff, movedRanges, interaction, h),
+          h.div([h.Class("diff-footer")], [
+            h.span([], [fullFileState?._tag === "Ready" ? "End of file" : "End of patch"]),
+            h.button([h.Type("button"), h.Class("comment-button")], [
+              "＋ Add a review comment",
             ]),
-          ),
-        ),
-    model.semantic ? semanticBannerView(file, model, semanticResult, h) : h.empty,
-    model.semantic && parsedSemantic !== undefined && parsedSemantic.changes.length > 0
-      ? h.div(
-          [h.Class("semantic-findings")],
-          parsedSemantic.changes.map((change, index) =>
-            h.span([h.Key(`semantic-change-${index}`)], [semanticChangeText(change)]),
-          ),
-        )
-      : h.empty,
-    model.semantic && parsedSemantic?.semanticEqual
-      ? h.div([h.Class("semantic-equal")], [
-          h.strong([], ["No syntax changes"]),
-          h.span([], ["Only formatting or comments changed in this file."]),
-        ])
-      : model.viewMode === "unified"
-        ? unifiedDiffView(lines, model.characterDiff, movedRanges, h)
-        : splitDiffView(lines, model.characterDiff, movedRanges, h),
-    h.div([h.Class("diff-footer")], [
-      h.span([], ["End of file"]),
-      h.button([h.Type("button"), h.Class("comment-button")], [
-        "＋ Add a review comment",
-      ]),
-    ]),
+          ]),
+        ]),
   ]);
 };
 

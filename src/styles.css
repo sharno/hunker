@@ -745,11 +745,39 @@ kbd {
   border-bottom: 1px solid var(--line);
 }
 
+.diff-panel.is-collapsed .file-header {
+  border-bottom: 0;
+}
+
+.diff-panel.is-collapsed {
+  align-self: start;
+}
+
 .file-path,
 .file-actions {
   display: flex;
   align-items: center;
   gap: 9px;
+}
+
+.file-collapse-button {
+  display: grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  padding: 0;
+  color: #667068;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.file-collapse-button:hover {
+  color: var(--ink);
+  background: white;
+  border-color: #d2d3cc;
 }
 
 .semantic-engine-badge {
@@ -772,6 +800,7 @@ kbd {
 }
 
 .icon-button,
+.context-button,
 .reviewed-button,
 .comment-button {
   border: 1px solid #cfd0ca;
@@ -780,6 +809,17 @@ kbd {
   cursor: pointer;
   font-size: 11px;
   font-weight: 650;
+}
+
+.context-button {
+  min-height: 30px;
+  padding: 0 10px;
+  color: #4f5c55;
+}
+
+.context-button:disabled {
+  cursor: wait;
+  opacity: 0.62;
 }
 
 .icon-button {
@@ -845,6 +885,21 @@ kbd {
 }
 
 .semantic-banner.is-error div span {
+  color: #8d5e57;
+}
+
+.file-context-error {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 14px;
+  color: #6e3027;
+  background: #fff0ed;
+  border-bottom: 1px solid #edcbc5;
+  font-size: 10px;
+}
+
+.file-context-error span {
   color: #8d5e57;
 }
 
@@ -1085,6 +1140,42 @@ kbd {
 .line-hunk .line-number {
   color: transparent;
   background: #e6e0f4;
+}
+
+.hunk-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: max-content;
+  padding: 1px 14px 1px 2px;
+  color: #665d82;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.hunk-toggle:hover {
+  color: #403456;
+}
+
+.collapse-chevron {
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  font-size: 13px;
+}
+
+.collapsed-label {
+  padding: 1px 5px;
+  color: #756b92;
+  background: #e3ddf2;
+  border-radius: 4px;
+  font-size: 8px;
+  font-weight: 720;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .char-change {

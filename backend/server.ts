@@ -32,7 +32,7 @@ import {
   SemanticEngineFailed,
 } from "./semantic-engine";
 
-class InvalidSemanticRequest extends Data.TaggedError("InvalidSemanticRequest")<{
+class InvalidFileRequest extends Data.TaggedError("InvalidFileRequest")<{
   readonly message: string;
 }> {}
 
@@ -41,6 +41,21 @@ const isFileStatus = (value: string): value is FileStatus =>
   value === "added" ||
   value === "deleted" ||
   value === "renamed";
+
+const fileRequest = (request: HttpServerRequest.HttpServerRequest) =>
+  Effect.gen(function* () {
+    const requestUrl = new URL(request.url, "http://localhost:8787");
+    const target = yield* parseGitHubUrl(requestUrl.searchParams.get("url") ?? "");
+    const path = requestUrl.searchParams.get("path") ?? "";
+    const previousPath = requestUrl.searchParams.get("previousPath") ?? "";
+    const status = requestUrl.searchParams.get("status") ?? "";
+    if (path === "" || !isFileStatus(status)) {
+      return yield* new InvalidFileRequest({
+        message: "Choose a reviewable file before loading its revisions.",
+      });
+    }
+    return { target, path, previousPath, status };
+  });
 
 const handleDiff = (request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
@@ -63,17 +78,7 @@ const handleDiff = (request: HttpServerRequest.HttpServerRequest) =>
 
 const handleSemantic = (request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
-    const requestUrl = new URL(request.url, "http://localhost:8787");
-    const target = yield* parseGitHubUrl(requestUrl.searchParams.get("url") ?? "");
-    const path = requestUrl.searchParams.get("path") ?? "";
-    const previousPath = requestUrl.searchParams.get("previousPath") ?? "";
-    const status = requestUrl.searchParams.get("status") ?? "";
-    if (path === "" || !isFileStatus(status)) {
-      return yield* new InvalidSemanticRequest({
-        message: "Choose a reviewable file before requesting semantic analysis.",
-      });
-    }
-
+    const { target, path, previousPath, status } = yield* fileRequest(request);
     const pair = yield* loadFilePair(
       target,
       path,
@@ -94,7 +99,29 @@ const handleSemantic = (request: HttpServerRequest.HttpServerRequest) =>
         Effect.succeed(
           HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
         ),
-      InvalidSemanticRequest: error =>
+      InvalidFileRequest: error =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+        ),
+      GitHubFetchFailed: error =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
+        ),
+    }),
+  );
+
+const handleFile = (request: HttpServerRequest.HttpServerRequest) =>
+  Effect.gen(function* () {
+    const { target, path, previousPath, status } = yield* fileRequest(request);
+    const pair = yield* loadFilePair(target, path, previousPath, status);
+    return HttpServerResponse.jsonUnsafe(pair);
+  }).pipe(
+    Effect.catchTags({
+      InvalidGitHubUrl: error =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+        ),
+      InvalidFileRequest: error =>
         Effect.succeed(
           HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
         ),
@@ -136,6 +163,7 @@ const handleMoves = (request: HttpServerRequest.HttpServerRequest) =>
 
 const Routes = Layer.mergeAll(
   HttpRouter.add("GET", "/api/diff", handleDiff),
+  HttpRouter.add("GET", "/api/file", handleFile),
   HttpRouter.add("GET", "/api/semantic", handleSemantic),
   HttpRouter.add("GET", "/api/moves", handleMoves),
 ).pipe(

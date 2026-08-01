@@ -171,3 +171,64 @@ test("reports a semantic backend failure without hiding the patch", async ({ pag
   );
   await expect(page.locator(".diff-lines")).toContainText("greet(person");
 });
+
+test("collapses files and hunks and expands a patch to the full file", async ({ page }) => {
+  await page.route("**/api/diff?**", route =>
+    route.fulfill({ status: 200, contentType: "application/json", json: reviewResponse }),
+  );
+  await page.route("**/api/file?**", route => {
+    const requestUrl = new URL(route.request().url());
+    expect(requestUrl.searchParams.get("url")).toBe(reviewUrl);
+    expect(requestUrl.searchParams.get("path")).toBe("src/greet.ts");
+    expect(requestUrl.searchParams.get("status")).toBe("modified");
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: {
+        oldText: `export function greet(name: string) {
+  const message = "hello " + name;
+  return message;
+}
+export const untouchedFooter = true;
+`,
+        newText: `export function greet(person: string) {
+  return \`hello \${person}\`;
+}
+export const untouchedFooter = true;
+`,
+      },
+    });
+  });
+
+  await page.goto(
+    "/example/hunker-demo/pull/42?scope=file&view=unified&whitespace=ignore&semantic=off&characters=on&sidebar=expanded&file=src%2Fgreet.ts",
+  );
+  const panel = page.locator(".diff-panel");
+  await expect(panel).toHaveCount(1);
+
+  await page.getByRole("button", { name: "Collapse src/greet.ts" }).click();
+  await expect(panel).toHaveClass(/is-collapsed/);
+  await expect(panel.locator(".diff-lines")).toHaveCount(0);
+  await page.getByRole("button", { name: "Expand src/greet.ts", exact: true }).click();
+  await expect(panel).not.toHaveClass(/is-collapsed/);
+
+  const collapseHunk = panel.getByRole("button", { name: /Collapse hunk/ });
+  await collapseHunk.click();
+  await expect(panel.locator(".diff-line:not(.line-hunk)")).toHaveCount(0);
+  await panel.getByRole("button", { name: /Expand hunk/ }).click();
+  await expect(panel.locator(".diff-line:not(.line-hunk)")).not.toHaveCount(0);
+
+  await page.getByRole("button", { name: "Expand src/greet.ts to full file" }).click();
+  await expect(panel.locator(".diff-lines")).toContainText("untouchedFooter");
+  await expect(panel.locator(".diff-footer")).toContainText("End of file");
+
+  await page.getByRole("button", { name: "Show patch only for src/greet.ts" }).click();
+  await expect(panel.locator(".diff-lines")).not.toContainText("untouchedFooter");
+  await expect(panel.locator(".diff-footer")).toContainText("End of patch");
+
+  await page.getByRole("button", { name: "Side by side" }).click();
+  await panel.getByRole("button", { name: /Collapse hunk/ }).click();
+  await expect(panel.locator(".split-row")).toHaveCount(0);
+  await panel.getByRole("button", { name: /Expand hunk/ }).click();
+  await expect(panel.locator(".split-row")).not.toHaveCount(0);
+});

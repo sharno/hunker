@@ -12,8 +12,8 @@ The stack is Effect end to end:
 
 - `src/domain.ts` — schemas, model, and messages
 - `src/state.ts` — update function, initialization, and HTTP command
-- `src/diff.ts` — unified-diff parsing and patch fallback
-- `src/view/diff-view.ts` — unified and side-by-side line rendering
+- `src/diff.ts` — unified-diff parsing and full-file context stitching
+- `src/view/diff-view.ts` — unified/side-by-side rendering and hunk interaction
 - `src/view/review-view.ts` — review workspace composition
 - `src/sample.ts` — local demonstration fixture
 - `backend/github-auth.ts` — environment and `gh` credential discovery
@@ -40,6 +40,11 @@ the selected file, full/file scope, layout, whitespace, semantic, character-diff
 and sidebar settings, so copying the address restores the same review view. Use
 the Refresh button in the review header to discard cached semantic results and
 pull the latest diff from GitHub without losing those settings.
+
+Files and individual hunks can be collapsed independently. The Full file action
+loads the base and head versions through the authenticated Effect backend and
+fills in context omitted by GitHub's patch; Patch only returns to the compact
+review without another network request.
 
 ## Useful commands
 

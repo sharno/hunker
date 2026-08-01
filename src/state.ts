@@ -12,9 +12,11 @@ import {
   ChangedBrowserUrl,
   ChangedPrUrl,
   CompletedNavigation,
+  FailedFullFile,
   FailedMoves,
   FailedReview,
   FailedSemantic,
+  LoadedFullFile,
   LoadedMoves,
   LoadedReview,
   LoadedSemantic,
@@ -27,6 +29,9 @@ import {
   SelectedViewMode,
   SemanticResult,
   ToggledCharacterDiff,
+  ToggledFileCollapse,
+  ToggledFullFile,
+  ToggledHunkCollapse,
   ToggledReviewed,
   ToggledSemantic,
   ToggledSidebar,
@@ -38,7 +43,7 @@ import type {
   Model as ModelType,
   ReviewMeta,
 } from "./domain";
-import { parseGitDiff } from "./diff";
+import { hunkKey, parseGitDiff } from "./diff";
 import {
   defaultReviewOptions,
   githubUrlFromPathname,
@@ -51,7 +56,7 @@ import { sampleFiles, sampleMeta } from "./sample";
 type UpdateReturn = readonly [ModelType, ReadonlyArray<Command.Command<Message>>];
 type ApiReview = Readonly<ReviewMeta & { diff: string }>;
 
-const toggleReviewed = (paths: ReadonlyArray<string>, path: string) =>
+const toggleMembership = (paths: ReadonlyArray<string>, path: string) =>
   paths.includes(path) ? paths.filter(item => item !== path) : [...paths, path];
 
 const isApiReview = (value: unknown): value is ApiReview => {
@@ -164,6 +169,38 @@ const FetchSemantic = Command.define("FetchSemantic", {
 });
 
 const MoveResponse = S.Struct({ moves: S.Array(MovedBlock) });
+const FullFileResponse = S.Struct({ oldText: S.String, newText: S.String });
+
+const FetchFullFile = Command.define("FetchFullFile", {
+  args: {
+    url: S.String,
+    path: S.String,
+    previousPath: S.String,
+    status: S.Literals(["modified", "added", "deleted", "renamed"]),
+  },
+  messages: [LoadedFullFile, FailedFullFile],
+  execute: ({ url, path, previousPath, status }) =>
+    Effect.gen(function* () {
+      const client = yield* HttpClient.HttpClient;
+      const query = new URLSearchParams({ url, path, previousPath, status });
+      const response = yield* client.execute(
+        HttpClientRequest.get(`/api/file?${query.toString()}`),
+      );
+      const data: unknown = yield* response.json;
+      if (response.status < 200 || response.status >= 300) {
+        return yield* Effect.fail(
+          new Error(responseError(data, "Could not load the complete file.")),
+        );
+      }
+      const pair = yield* S.decodeUnknownEffect(FullFileResponse)(data);
+      return LoadedFullFile({ path, ...pair });
+    }).pipe(
+      Effect.catch(error =>
+        Effect.succeed(FailedFullFile({ path, error: fetchErrorMessage(error) })),
+      ),
+      Effect.provide(Http.layer),
+    ),
+});
 
 const FetchMoves = Command.define("FetchMoves", {
   args: { url: S.String },
@@ -250,6 +287,9 @@ const beginReviewLoad = (model: ModelType, url: string): ModelType =>
     semanticRequest: () => ({ _tag: "Idle" as const }),
     reviewMoves: () => ({ _tag: "Idle" as const }),
     reviewedPaths: () => [],
+    collapsedPaths: () => [],
+    collapsedHunks: () => [],
+    fullFileStates: () => [],
   });
 
 const sampleModel = (model: ModelType): ModelType =>
@@ -264,6 +304,9 @@ const sampleModel = (model: ModelType): ModelType =>
     semanticResults: () => [],
     semanticRequest: () => ({ _tag: "Idle" as const }),
     reviewMoves: () => ({ _tag: "Idle" as const }),
+    collapsedPaths: () => [],
+    collapsedHunks: () => [],
+    fullFileStates: () => [],
   });
 
 const reviewOptions = (model: ModelType): ReviewOptions => ({
@@ -364,6 +407,9 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
           reviewedPaths: () => [],
           semanticRequest: () => ({ _tag: "Idle" as const }),
           reviewMoves: () => ({ _tag: "Idle" as const }),
+          collapsedPaths: () => [],
+          collapsedHunks: () => [],
+          fullFileStates: () => [],
         });
         const [loaded, commands] = requestSelectedIntelligence(next);
         return synchronizeReviewUrl(loaded, commands);
@@ -402,6 +448,38 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         evo(model, { reviewMoves: () => ({ _tag: "Failed" as const, error }) }),
         [],
       ],
+      LoadedFullFile: ({ path, oldText, newText }) => {
+        const requested = model.fullFileStates.some(
+          state => state.path === path && state._tag === "Loading",
+        );
+        return requested
+          ? [
+              evo(model, {
+                fullFileStates: states => [
+                  ...states.filter(state => state.path !== path),
+                  { _tag: "Ready" as const, path, oldText, newText },
+                ],
+              }),
+              [],
+            ]
+          : [model, []];
+      },
+      FailedFullFile: ({ path, error }) => {
+        const requested = model.fullFileStates.some(
+          state => state.path === path && state._tag === "Loading",
+        );
+        return requested
+          ? [
+              evo(model, {
+                fullFileStates: states => [
+                  ...states.filter(state => state.path !== path),
+                  { _tag: "Failed" as const, path, error },
+                ],
+              }),
+              [],
+            ]
+          : [model, []];
+      },
       ChangedFilter: ({ value }) => [evo(model, { filter: () => value }), []],
       SelectedFile: ({ path }) => {
         const next = evo(model, {
@@ -440,9 +518,49 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
           [],
         ),
       ToggledReviewed: ({ path }) => [
-        evo(model, { reviewedPaths: paths => toggleReviewed(paths, path) }),
+        evo(model, { reviewedPaths: paths => toggleMembership(paths, path) }),
         [],
       ],
+      ToggledFileCollapse: ({ path }) => [
+        evo(model, { collapsedPaths: paths => toggleMembership(paths, path) }),
+        [],
+      ],
+      ToggledHunkCollapse: ({ path, hunkId }) => [
+        evo(model, {
+          collapsedHunks: hunks => toggleMembership(hunks, hunkKey(path, hunkId)),
+        }),
+        [],
+      ],
+      ToggledFullFile: ({ path }) => {
+        const state = model.fullFileStates.find(item => item.path === path);
+        if (state?._tag === "Ready" || state?._tag === "Loading") {
+          return [
+            evo(model, {
+              fullFileStates: states => states.filter(item => item.path !== path),
+            }),
+            [],
+          ];
+        }
+        const file = model.files.find(item => item.path === path);
+        if (file === undefined || model.meta.url === "") return [model, []];
+        const next = evo(model, {
+          fullFileStates: states => [
+            ...states.filter(item => item.path !== path),
+            { _tag: "Loading" as const, path },
+          ],
+        });
+        return [
+          next,
+          [
+            FetchFullFile({
+              url: model.meta.url,
+              path,
+              previousPath: file.previousPath,
+              status: file.status,
+            }),
+          ],
+        ];
+      },
     }),
   );
 
@@ -465,6 +583,9 @@ const initialModel = (prUrl: string, options: ReviewOptions) =>
     semanticResults: [],
     semanticRequest: { _tag: "Idle" },
     reviewMoves: { _tag: "Idle" },
+    collapsedPaths: [],
+    collapsedHunks: [],
+    fullFileStates: [],
   });
 
 export const init: Runtime.RoutingApplicationInit<ModelType, Message> = url => {

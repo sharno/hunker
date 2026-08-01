@@ -1,13 +1,20 @@
 import type { Html, HtmlBuilder } from "foldkit/html";
 
+import { ToggledHunkCollapse } from "../domain";
 import type { Message } from "../domain";
-import type { DiffLine } from "../diff";
+import { hunkKey } from "../diff";
+import type { DiffLine, HunkDiffLine } from "../diff";
 
 export type MovedRanges = Readonly<{
   old: ReadonlyArray<Readonly<{ start: number; count: number }>>;
   new: ReadonlyArray<Readonly<{ start: number; count: number }>>;
   semanticOld: ReadonlyArray<Readonly<{ start: number; count: number }>>;
   semanticNew: ReadonlyArray<Readonly<{ start: number; count: number }>>;
+}>;
+
+export type DiffInteraction = Readonly<{
+  path: string;
+  collapsedHunks: ReadonlyArray<string>;
 }>;
 
 const isInMovedRange = (
@@ -61,20 +68,71 @@ const codeContent = (
   ];
 };
 
+const isCollapsedHunk = (line: DiffLine, interaction: DiffInteraction) =>
+  line.hunkId !== null &&
+  interaction.collapsedHunks.includes(hunkKey(interaction.path, line.hunkId));
+
+const visibleLines = (
+  lines: ReadonlyArray<DiffLine>,
+  interaction: DiffInteraction,
+) =>
+  lines.filter(
+    line => line.kind === "hunk" || line.hunkId === null || !isCollapsedHunk(line, interaction),
+  );
+
+const hunkHeader = (
+  line: HunkDiffLine,
+  interaction: DiffInteraction,
+  h: HtmlBuilder<Message>,
+) => {
+  const collapsed = isCollapsedHunk(line, interaction);
+  return h.div(
+    [h.Key(`${interaction.path}-${line.hunkId}`), h.Class("diff-line line-hunk")],
+    [
+      h.span([h.Class("line-number old")], [""]),
+      h.span([h.Class("line-number new")], [""]),
+      h.span([h.Class("line-marker")], [""]),
+      h.button(
+        [
+          h.Type("button"),
+          h.Class("hunk-toggle"),
+          h.AriaExpanded(!collapsed),
+          h.AriaLabel(
+            `${collapsed ? "Expand" : "Collapse"} hunk ${line.content} in ${interaction.path}`,
+          ),
+          h.OnClick(
+            ToggledHunkCollapse({
+              path: interaction.path,
+              hunkId: line.hunkId,
+            }),
+          ),
+        ],
+        [
+          h.span([h.Class("collapse-chevron")], [collapsed ? "›" : "⌄"]),
+          h.code([], [line.content]),
+          collapsed ? h.span([h.Class("collapsed-label")], ["hunk collapsed"]) : h.empty,
+        ],
+      ),
+    ],
+  );
+};
+
 export const unifiedDiffView = (
   lines: ReadonlyArray<DiffLine>,
   characterDiff: boolean,
   moved: MovedRanges,
+  interaction: DiffInteraction,
   h: HtmlBuilder<Message>,
 ) =>
   h.div(
     [h.Class("diff-lines unified-lines")],
-    lines.map((line, index) => {
+    visibleLines(lines, interaction).map((line, index, renderedLines) => {
+      if (line.kind === "hunk") return hunkHeader(line, interaction, h);
       const paired =
-        line.kind === "remove" && lines[index + 1]?.kind === "add"
-          ? lines[index + 1]
-          : line.kind === "add" && lines[index - 1]?.kind === "remove"
-            ? lines[index - 1]
+        line.kind === "remove" && renderedLines[index + 1]?.kind === "add"
+          ? renderedLines[index + 1]
+          : line.kind === "add" && renderedLines[index - 1]?.kind === "remove"
+            ? renderedLines[index - 1]
             : undefined;
       return h.div(
         [
@@ -184,12 +242,14 @@ export const splitDiffView = (
   lines: ReadonlyArray<DiffLine>,
   characterDiff: boolean,
   moved: MovedRanges,
+  interaction: DiffInteraction,
   h: HtmlBuilder<Message>,
 ) =>
   h.div(
     [h.Class("diff-lines split-lines")],
-    splitRows(lines).map((row, index) =>
-      h.div(
+    splitRows(visibleLines(lines, interaction)).map((row, index) => {
+      if (row.left?.kind === "hunk") return hunkHeader(row.left, interaction, h);
+      return h.div(
         [h.Key(`split-${index}`), h.Class("split-row")],
         [
           splitCell(
@@ -209,6 +269,6 @@ export const splitDiffView = (
             h,
           ),
         ],
-      ),
-    ),
+      );
+    }),
   );
