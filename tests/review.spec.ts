@@ -418,4 +418,11 @@ export const untouchedFooter = true;
   await expect(panel.locator(".split-row")).toHaveCount(0);
   await panel.getByRole("button", { name: /Expand hunk/ }).click();
   await expect(panel.locator(".split-row")).not.toHaveCount(0);
+
+  await panel.getByRole("button", { name: "Mark reviewed" }).click();
+  await expect(panel).toHaveClass(classToken("is-collapsed"));
+  await expect(panel.locator(".diff-lines")).toHaveCount(0);
+  await panel.getByRole("button", { name: "✓ Reviewed" }).click();
+  await expect(panel).not.toHaveClass(classToken("is-collapsed"));
+  await expect(panel.getByRole("button", { name: "Mark reviewed" })).toBeVisible();
 });

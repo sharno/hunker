@@ -76,6 +76,17 @@ type ApiReview = Readonly<ReviewMeta & { diff: string }>;
 const toggleMembership = <A>(values: ReadonlyArray<A>, value: A) =>
   values.includes(value) ? values.filter(item => item !== value) : [...values, value];
 
+const setMembership = <A>(
+  values: ReadonlyArray<A>,
+  value: A,
+  included: boolean,
+) =>
+  included
+    ? values.includes(value)
+      ? values
+      : [...values, value]
+    : values.filter(item => item !== value);
+
 const isApiReview = (value: unknown): value is ApiReview => {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
@@ -927,10 +938,16 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         }),
         [],
       ],
-      ToggledReviewed: ({ path }) => [
-        evo(model, { reviewedPaths: paths => toggleMembership(paths, path) }),
-        [],
-      ],
+      ToggledReviewed: ({ path }) => {
+        const reviewed = model.reviewedPaths.includes(path);
+        return [
+          evo(model, {
+            reviewedPaths: paths => setMembership(paths, path, !reviewed),
+            collapsedPaths: paths => setMembership(paths, path, !reviewed),
+          }),
+          [],
+        ];
+      },
       ToggledFileCollapse: ({ path }) => [
         evo(model, { collapsedPaths: paths => toggleMembership(paths, path) }),
         [],
