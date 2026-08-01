@@ -22,6 +22,7 @@
     "@ast-grep/napi": "0.45.0",
     "@effect/platform-browser": "4.0.0-beta.102",
     "@effect/platform-node": "4.0.0-beta.102",
+    "@tree-sitter-grammars/tree-sitter-hcl": "1.2.0",
     "concurrently": "9.2.1",
     "effect": "4.0.0-beta.102",
     "foldkit": "0.137.0"

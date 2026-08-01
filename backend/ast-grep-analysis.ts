@@ -6,18 +6,40 @@ import {
   registerDynamicLanguage,
   type SgNode,
 } from "@ast-grep/napi";
+import { dirname, join, resolve } from "node:path";
+import { createRequire } from "node:module";
 
 import type { SourceRange } from "../src/domain";
 
 export type SupportedLanguage = Readonly<{
   ast: Parameters<typeof parse>[0];
-  name: "JavaScript" | "Python" | "Rust" | "TypeScript" | "TSX";
+  name: "JavaScript" | "OpenTofu / HCL" | "Python" | "Rust" | "TypeScript" | "TSX";
 }>;
 
+const HCL_LANGUAGE = "hcl";
 const PYTHON_LANGUAGE = "python";
 const RUST_LANGUAGE = "rust";
 
+const require = createRequire(import.meta.url);
+const hclPackageRoot = resolve(
+  dirname(require.resolve("@tree-sitter-grammars/tree-sitter-hcl")),
+  "../..",
+);
+// ast-grep needs a shared-library path. The grammar's Node prebuild also exports
+// tree_sitter_hcl, so one cross-platform binary can serve both APIs.
+const hclRegistration = {
+  libraryPath: join(
+    hclPackageRoot,
+    "prebuilds",
+    `${process.platform}-${process.arch}`,
+    "@tree-sitter-grammars+tree-sitter-hcl.node",
+  ),
+  extensions: ["hcl", "tf", "tfvars", "tofu"],
+  languageSymbol: "tree_sitter_hcl",
+};
+
 registerDynamicLanguage({
+  [HCL_LANGUAGE]: hclRegistration,
   [PYTHON_LANGUAGE]: pythonRegistration,
   [RUST_LANGUAGE]: rustRegistration,
 });
@@ -41,6 +63,14 @@ export const languageForPath = (path: string): SupportedLanguage | undefined => 
     return { ast: PYTHON_LANGUAGE, name: "Python" };
   }
   if (extension === "rs") return { ast: RUST_LANGUAGE, name: "Rust" };
+  if (
+    extension === "hcl" ||
+    extension === "tf" ||
+    extension === "tfvars" ||
+    extension === "tofu"
+  ) {
+    return { ast: HCL_LANGUAGE, name: "OpenTofu / HCL" };
+  }
   if (
     extension === "js" ||
     extension === "jsx" ||
@@ -77,6 +107,8 @@ const declarationKinds = new Set([
   "type_item",
   "union_item",
   "assignment",
+  "attribute",
+  "block",
 ]);
 
 const memberKinds = new Set([
@@ -90,6 +122,8 @@ const memberKinds = new Set([
   "function_signature_item",
   "function_definition",
   "type_item",
+  "attribute",
+  "block",
 ]);
 
 const containerKinds = new Set([
@@ -99,6 +133,7 @@ const containerKinds = new Set([
   "interface_declaration",
   "mod_item",
   "trait_item",
+  "block",
 ]);
 
 const identifierKinds = new Set([
@@ -111,7 +146,7 @@ const identifierKinds = new Set([
 ]);
 
 const literalKind =
-  /(?:boolean|char|float|integer|number|string|template|regex|true|false|null|undefined)/;
+  /(?:bool|boolean|char|float|integer|number|numeric|string|template|regex|true|false|null|undefined)/;
 
 const toSourceRange = (node: SgNode): SourceRange => {
   const range = node.range();
@@ -141,6 +176,18 @@ const leafTokens = (node: SgNode, shape: boolean): ReadonlyArray<string> => {
 };
 
 const nodeLabel = (node: SgNode): string => {
+  if (String(node.kind()) === "block") {
+    const labels = node
+      .children()
+      .filter(child => ["identifier", "string_lit"].includes(String(child.kind())))
+      .map(child => child.text().replace(/^"|"$/g, ""));
+    const [blockType, ...blockLabels] = labels;
+    if (blockType !== undefined) {
+      return blockLabels.length === 0
+        ? blockType
+        : `${blockType} ${blockLabels.join(".")}`;
+    }
+  }
   if (String(node.kind()) === "decorated_definition") {
     const definition = node.children().find(child =>
       ["class_definition", "function_definition"].includes(String(child.kind())),

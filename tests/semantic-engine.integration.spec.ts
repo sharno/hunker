@@ -336,3 +336,116 @@ test("detects a Python function moved between files", async () => {
     }),
   ]);
 });
+
+test("classifies changed and renamed OpenTofu blocks", async () => {
+  const updated = await runFile({
+    path: "infra/main.tofu",
+    previousPath: "",
+    status: "modified",
+    oldText: `resource "aws_s3_bucket" "logs" {
+  bucket = "logs-example"
+}
+`,
+    newText: `resource "aws_s3_bucket" "logs" {
+  bucket = "logs-production"
+}
+`,
+  });
+  expect(updated._tag).toBe("Parsed");
+  if (updated._tag !== "Parsed") return;
+  expect(updated.language).toBe("OpenTofu / HCL");
+  expect(updated.changes).toEqual([
+    expect.objectContaining({
+      _tag: "Updated",
+      kind: "block",
+      label: "resource aws_s3_bucket.logs",
+    }),
+  ]);
+
+  const renamed = await runFile({
+    path: "infra/main.tf",
+    previousPath: "",
+    status: "modified",
+    oldText: `module "api" {
+  source = "./service"
+}
+`,
+    newText: `module "server" {
+  source = "./service"
+}
+`,
+  });
+  expect(renamed._tag).toBe("Parsed");
+  if (renamed._tag !== "Parsed") return;
+  expect(renamed.changes).toEqual([
+    expect.objectContaining({
+      _tag: "Renamed",
+      kind: "block",
+      oldLabel: "module api",
+      newLabel: "module server",
+    }),
+  ]);
+});
+
+test("recognizes formatting-only OpenTofu changes as semantically equal", async () => {
+  const result = await runFile({
+    path: "infra/variables.tofu",
+    previousPath: "",
+    status: "modified",
+    oldText: `variable "region" {
+ type=string
+ default="us-east-1"
+}
+`,
+    newText: `variable "region" {
+  type    = string
+  default = "us-east-1"
+}
+`,
+  });
+
+  expect(result).toEqual(
+    expect.objectContaining({
+      _tag: "Parsed",
+      language: "OpenTofu / HCL",
+      semanticEqual: true,
+      changes: [],
+    }),
+  );
+});
+
+test("detects an OpenTofu resource moved between files", async () => {
+  const moved = `resource "aws_s3_bucket" "logs" {
+  bucket = "logs-example"
+}
+`;
+  const result = await runReview([
+    {
+      path: "infra/storage.tf",
+      previousPath: "",
+      status: "modified",
+      oldText: `locals {\n  retained = true\n}\n\n${moved}`,
+      newText: "locals {\n  retained = true\n}\n",
+    },
+    {
+      path: "infra/main.tofu",
+      previousPath: "",
+      status: "modified",
+      oldText: 'provider "aws" {\n  region = "us-east-1"\n}\n',
+      newText: `provider "aws" {\n  region = "us-east-1"\n}\n\n${moved}`,
+    },
+  ]);
+
+  expect(result).toEqual([
+    expect.objectContaining({
+      fromPath: "infra/storage.tf",
+      toPath: "infra/main.tofu",
+      fromLine: 5,
+      toLine: 5,
+      lineCount: 3,
+      kind: "block",
+      label: "resource aws_s3_bucket.logs",
+      changed: false,
+    }),
+  ]);
+});
