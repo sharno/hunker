@@ -8,6 +8,8 @@ import {
   semanticResponse,
 } from "./fixtures";
 
+const classToken = (token: string) => new RegExp(`(?:^|\\s)${token}(?:\\s|$)`);
+
 test("loads a PR and renders ast-grep intelligence in both review layouts", async ({ page }) => {
   await page.route("**/api/diff?**", route =>
     route.fulfill({ status: 200, contentType: "application/json", json: reviewResponse }),
@@ -29,10 +31,10 @@ test("loads a PR and renders ast-grep intelligence in both review layouts", asyn
 
   await page.goto("/");
   await page.getByRole("button", { name: "Collapse file sidebar" }).click();
-  await expect(page.locator(".workspace")).toHaveClass(/sidebar-collapsed/);
+  await expect(page.locator(".workspace")).toHaveClass(classToken("sidebar-collapsed"));
   await expect(page.getByRole("navigation", { name: "Changed files" })).toBeHidden();
   await page.getByRole("button", { name: "Expand file sidebar" }).click();
-  await expect(page.locator(".workspace")).not.toHaveClass(/sidebar-collapsed/);
+  await expect(page.locator(".workspace")).not.toHaveClass(classToken("sidebar-collapsed"));
   await page.getByPlaceholder("Paste a GitHub PR or compare URL").fill(reviewUrl);
   await page.getByRole("button", { name: "Review", exact: true }).click();
 
@@ -125,8 +127,12 @@ test("loads a copied review route and refreshes it from GitHub", async ({ page }
     reviewUrl,
   );
   await expect(page).toHaveURL(sharedRoute);
-  await expect(page.getByRole("button", { name: "Full diff" })).toHaveClass(/is-active/);
-  await expect(page.getByRole("button", { name: "Unified" })).toHaveClass(/is-active/);
+  await expect(page.getByRole("button", { name: "Full diff" })).toHaveClass(
+    classToken("is-active"),
+  );
+  await expect(page.getByRole("button", { name: "Unified" })).toHaveClass(
+    classToken("is-active"),
+  );
   await expect(page.getByRole("button", { name: "Ignore whitespace" })).toHaveAttribute(
     "aria-pressed",
     "false",
@@ -144,7 +150,7 @@ test("loads a copied review route and refreshes it from GitHub", async ({ page }
     "false",
   );
   await expect(page.locator('.diff-lines [class*="hljs-"]')).toHaveCount(0);
-  await expect(page.locator(".workspace")).toHaveClass(/sidebar-collapsed/);
+  await expect(page.locator(".workspace")).toHaveClass(classToken("sidebar-collapsed"));
   await expect(page.locator(".full-diff .diff-panel")).toHaveCount(2);
   await expect(page.locator(".unified-lines")).toHaveCount(2);
 
@@ -308,10 +314,10 @@ export const untouchedFooter = true;
   await expect(panel).toHaveCount(1);
 
   await panel.locator(".file-header").click({ position: { x: 180, y: 27 } });
-  await expect(panel).toHaveClass(/is-collapsed/);
+  await expect(panel).toHaveClass(classToken("is-collapsed"));
   await expect(panel.locator(".diff-lines")).toHaveCount(0);
   await page.getByRole("button", { name: "Expand src/greet.ts", exact: true }).click();
-  await expect(panel).not.toHaveClass(/is-collapsed/);
+  await expect(panel).not.toHaveClass(classToken("is-collapsed"));
 
   const collapseHunk = panel.getByRole("button", { name: /Collapse hunk/ });
   await collapseHunk.click();

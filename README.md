@@ -5,6 +5,7 @@ Hunker is a focused pull-request diff viewer for reviewing human- and agent-writ
 The stack is Effect end to end:
 
 - Foldkit owns the browser model, messages, update function, commands, and view.
+- Tailwind CSS v4 provides utility-first styling through its Vite plugin.
 - Effect HTTP powers the browser client and the local GitHub proxy.
 - Effect Platform Node serves the backend API.
 
@@ -15,6 +16,7 @@ The stack is Effect end to end:
 - `src/diff.ts` — unified-diff parsing and full-file context stitching
 - `src/view/diff-view.ts` — unified/side-by-side rendering and hunk interaction
 - `src/view/syntax-highlight.ts` — safe syntax tokenization and character-overlay composition
+- `src/view/tailwind.ts` — typed Foldkit adapter and component utility definitions
 - `src/view/review-view.ts` — review workspace composition
 - `src/sample.ts` — local demonstration fixture
 - `backend/github-auth.ts` — environment and `gh` credential discovery

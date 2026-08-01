@@ -3,6 +3,7 @@ import { Runtime } from "foldkit";
 import { Model } from "./domain";
 import { init, routing, update } from "./state";
 import { view } from "./view/review-view";
+import { withTailwind } from "./view/tailwind";
 
 export const makeReviewApplication = (container: HTMLElement) =>
   Runtime.makeApplication({
@@ -12,8 +13,11 @@ export const makeReviewApplication = (container: HTMLElement) =>
     routing,
     container,
     preserveScroll: true,
-    view: (model, h) => ({
-      title: model.prUrl === "" ? "Hunker" : `${model.meta.repository} #${model.meta.number} · Hunker`,
-      body: view(model, h),
-    }),
+    view: (model, h) => {
+      const styled = withTailwind(h);
+      return {
+        title: model.prUrl === "" ? "Hunker" : `${model.meta.repository} #${model.meta.number} · Hunker`,
+        body: view(model, styled),
+      };
+    },
   });
