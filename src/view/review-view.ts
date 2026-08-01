@@ -18,16 +18,11 @@ import type {
   Message,
   Model,
   MovedBlock,
+  SemanticChange,
   SemanticResult,
 } from "../domain";
 import { toDiffLines } from "../diff";
-import { toSemanticRows } from "../semantic";
-import {
-  semanticSplitDiffView,
-  semanticUnifiedDiffView,
-  splitDiffView,
-  unifiedDiffView,
-} from "./diff-view";
+import { splitDiffView, unifiedDiffView } from "./diff-view";
 import type { MovedRanges } from "./diff-view";
 
 const buttonClass = (active: boolean) =>
@@ -294,13 +289,25 @@ const semanticBannerView = (
   const request = model.semanticRequest;
   const loading = request._tag === "Loading" && request.path === file.path;
   const failed = request._tag === "Failed" && request.path === file.path;
-  if (result !== undefined || (!loading && !failed)) return h.empty;
+  if (result !== undefined) {
+    if (result._tag === "Parsed") return h.empty;
+    const parseFailed = result._tag === "ParseFailed";
+    return h.div([h.Class(`semantic-banner${parseFailed ? " is-error" : ""}`)], [
+      h.span([h.Class("semantic-icon")], [parseFailed ? "!" : "◎"]),
+      h.div([], [
+        h.strong([], [parseFailed ? "Syntax analysis unavailable" : "Syntax analysis skipped"]),
+        h.span([], [result.reason]),
+      ]),
+      h.span([h.Class("confidence")], ["patch fallback"]),
+    ]);
+  }
+  if (!loading && !failed) return h.empty;
   const title = loading
-    ? "Difftastic is analyzing this file…"
-    : "Difftastic analysis unavailable";
+    ? "ast-grep is analyzing this file…"
+    : "Syntax analysis unavailable";
   const detail = failed
     ? request.error
-    : "Fetching both revisions and aligning their syntax trees.";
+    : "Fetching both revisions and comparing their syntax trees.";
 
   return h.div([h.Class(`semantic-banner${failed ? " is-error" : ""}`)], [
     h.span([h.Class("semantic-icon")], [loading ? "◌" : failed ? "!" : "◎"]),
@@ -318,7 +325,7 @@ const movementSummaryView = (model: Model, h: HtmlBuilder<Message>): Html => {
       h.span([h.Class("semantic-icon")], ["◌"]),
       h.div([], [
         h.strong([], ["Scanning the full PR for moved code…"]),
-        h.span([], ["Git is matching removed blocks with additions across every changed file."]),
+        h.span([], ["ast-grep is matching declarations across the review's syntax forest."]),
       ]),
     ]);
   }
@@ -336,7 +343,7 @@ const movementSummaryView = (model: Model, h: HtmlBuilder<Message>): Html => {
       h.span([h.Class("semantic-icon")], ["✓"]),
       h.div([], [
         h.strong([], ["No moved code blocks found"]),
-        h.span([], ["Git found no removed block reintroduced elsewhere in this diff."]),
+        h.span([], ["No declaration was relocated across the changed syntax trees."]),
       ]),
     ]);
   }
@@ -347,18 +354,22 @@ const movementSummaryView = (model: Model, h: HtmlBuilder<Message>): Html => {
         h.strong([], [
           `${state.moves.length} moved code ${state.moves.length === 1 ? "block" : "blocks"}`,
         ]),
-        h.span([], ["These lines were removed in one location and added unchanged elsewhere."]),
+        h.span([], ["These declarations moved between syntax trees; edited moves are marked."]),
       ]),
     ]),
     h.div(
       [h.Class("movement-list")],
       state.moves.map((move, index) =>
         h.div([h.Key(`${move.fromPath}-${move.fromLine}-${index}`), h.Class("movement-row")], [
-          h.span([h.Class("movement-count")], [`${move.lineCount} lines`]),
+          h.span([h.Class("movement-count")], [
+            `${move.lineCount} lines${move.changed ? " · edited" : ""}`,
+          ]),
           h.code([], [`${move.fromPath}:${move.fromLine}`]),
           h.span([h.Class("movement-arrow")], ["→"]),
           h.code([], [`${move.toPath}:${move.toLine}`]),
-          h.span([h.Class("movement-preview")], [move.preview]),
+          h.span([h.Class("movement-preview")], [
+            `${move.label} · ${move.preview}`,
+          ]),
         ]),
       ),
     ),
@@ -374,11 +385,21 @@ const diffPanelView = (
   const reviewed = model.reviewedPaths.includes(file.path);
   const lines = toDiffLines(file.patch, model.ignoreWhitespace);
   const semanticResult = model.semanticResults.find(result => result.path === file.path);
-  const semanticRows =
-    semanticResult === undefined
-      ? []
-      : toSemanticRows(semanticResult, model.ignoreWhitespace);
-  const semanticDiff = semanticResult !== undefined && semanticRows.length > 0;
+  const parsedSemantic =
+    semanticResult?._tag === "Parsed" ? semanticResult : undefined;
+  const rangeFor = (side: "old" | "new") =>
+    parsedSemantic?.changes.flatMap(change => {
+      const range =
+        side === "old"
+          ? change._tag === "Inserted"
+            ? undefined
+            : change.oldRange
+          : change._tag === "Deleted"
+            ? undefined
+            : change.newRange;
+      if (range === undefined) return [];
+      return [{ start: range.startLine, count: range.endLine - range.startLine + 1 }];
+    }) ?? [];
   const movedRanges: MovedRanges = {
     old: moves
       .filter(move => move.fromPath === file.path)
@@ -386,6 +407,16 @@ const diffPanelView = (
     new: moves
       .filter(move => move.toPath === file.path)
       .map(move => ({ start: move.toLine, count: move.lineCount })),
+    semanticOld: rangeFor("old"),
+    semanticNew: rangeFor("new"),
+  };
+
+  const semanticChangeText = (change: SemanticChange) => {
+    const kind = change.kind.replaceAll("_", " ");
+    if (change._tag === "Renamed") {
+      return `Renamed ${kind} ${change.oldLabel} → ${change.newLabel}`;
+    }
+    return `${change._tag} ${kind} ${change.label}`;
   };
 
   return h.section([h.Class("diff-panel")], [
@@ -402,9 +433,9 @@ const diffPanelView = (
         ]),
       ]),
       h.div([h.Class("file-actions")], [
-        model.semantic && semanticResult !== undefined
+        model.semantic && parsedSemantic !== undefined
           ? h.span([h.Class("semantic-engine-badge")], [
-              `Difftastic · ${semanticResult.language}`,
+              `ast-grep · ${parsedSemantic.language}`,
             ])
           : h.empty,
         h.button(
@@ -436,10 +467,19 @@ const diffPanelView = (
           ),
         ),
     model.semantic ? semanticBannerView(file, model, semanticResult, h) : h.empty,
-    model.semantic && semanticDiff
-      ? model.viewMode === "unified"
-        ? semanticUnifiedDiffView(semanticRows, model.characterDiff, movedRanges, h)
-        : semanticSplitDiffView(semanticRows, model.characterDiff, movedRanges, h)
+    model.semantic && parsedSemantic !== undefined && parsedSemantic.changes.length > 0
+      ? h.div(
+          [h.Class("semantic-findings")],
+          parsedSemantic.changes.map((change, index) =>
+            h.span([h.Key(`semantic-change-${index}`)], [semanticChangeText(change)]),
+          ),
+        )
+      : h.empty,
+    model.semantic && parsedSemantic?.semanticEqual
+      ? h.div([h.Class("semantic-equal")], [
+          h.strong([], ["No syntax changes"]),
+          h.span([], ["Only formatting or comments changed in this file."]),
+        ])
       : model.viewMode === "unified"
         ? unifiedDiffView(lines, model.characterDiff, movedRanges, h)
         : splitDiffView(lines, model.characterDiff, movedRanges, h),

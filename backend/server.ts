@@ -15,7 +15,6 @@ import {
   NodeServices,
 } from "@effect/platform-node";
 
-import { DifftasticFailed, runDifftastic } from "./difftastic";
 import { isGeneratedDiffPath, parseGitDiff } from "../src/diff";
 import {
   GitHubFetchFailed,
@@ -27,7 +26,11 @@ import {
 } from "./github";
 import type { FileStatus } from "./github";
 import { GitHubAuthLive } from "./github-auth";
-import { MoveDetectionFailed, runMovedCodeDetection } from "./moved-code";
+import {
+  AstGrepSemanticLive,
+  SemanticDiffEngine,
+  SemanticEngineFailed,
+} from "./semantic-engine";
 
 class InvalidSemanticRequest extends Data.TaggedError("InvalidSemanticRequest")<{
   readonly message: string;
@@ -71,13 +74,19 @@ const handleSemantic = (request: HttpServerRequest.HttpServerRequest) =>
       });
     }
 
-    const { oldText, newText } = yield* loadFilePair(
+    const pair = yield* loadFilePair(
       target,
       path,
       previousPath,
       status,
     );
-    const result = yield* runDifftastic(path, oldText, newText);
+    const semantic = yield* SemanticDiffEngine;
+    const result = yield* semantic.analyzeFile({
+      path,
+      previousPath,
+      status,
+      ...pair,
+    });
     return HttpServerResponse.jsonUnsafe(result);
   }).pipe(
     Effect.catchTags({
@@ -93,10 +102,6 @@ const handleSemantic = (request: HttpServerRequest.HttpServerRequest) =>
         Effect.succeed(
           HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
         ),
-      DifftasticFailed: error =>
-        Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
-        ),
     }),
   );
 
@@ -109,7 +114,8 @@ const handleMoves = (request: HttpServerRequest.HttpServerRequest) =>
       file => file.patch.includes("@@") && !isGeneratedDiffPath(file.path),
     );
     const pairs = yield* loadFilePairs(target, files);
-    const moves = yield* runMovedCodeDetection(pairs);
+    const semantic = yield* SemanticDiffEngine;
+    const moves = yield* semantic.analyzeReview(pairs);
     return HttpServerResponse.jsonUnsafe({ moves });
   }).pipe(
     Effect.catchTags({
@@ -121,7 +127,7 @@ const handleMoves = (request: HttpServerRequest.HttpServerRequest) =>
         Effect.succeed(
           HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
         ),
-      MoveDetectionFailed: (error: MoveDetectionFailed) =>
+      SemanticEngineFailed: (error: SemanticEngineFailed) =>
         Effect.succeed(
           HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
         ),
@@ -136,6 +142,7 @@ const Routes = Layer.mergeAll(
   Layer.provide(NodeHttpClient.layerUndici),
   Layer.provide(NodeServices.layer),
   Layer.provide(GitHubAuthLive),
+  Layer.provide(AstGrepSemanticLive),
 );
 
 const HttpAppLive = Layer.unwrap(
@@ -150,6 +157,7 @@ const Main = HttpAppLive.pipe(
   Layer.provide(NodeHttpClient.layerUndici),
   Layer.provide(NodeServices.layer),
   Layer.provide(GitHubAuthLive),
+  Layer.provide(AstGrepSemanticLive),
 );
 
 NodeRuntime.runMain(Layer.launch(Main));

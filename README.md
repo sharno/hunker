@@ -1,6 +1,6 @@
 # Hunker
 
-Hunker is a focused pull-request diff viewer for reviewing human- and agent-written changes. It reduces visual noise with whitespace filtering, character-level highlighting, and syntax-aware structural diffs powered by Difftastic.
+Hunker is a focused pull-request diff viewer for reviewing human- and agent-written changes. It reduces visual noise with whitespace filtering, character-level highlighting, and syntax-aware structural diffs powered by ast-grep and tree-sitter.
 
 The stack is Effect end to end:
 
@@ -13,22 +13,20 @@ The stack is Effect end to end:
 - `src/domain.ts` — schemas, model, and messages
 - `src/state.ts` — update function, initialization, and HTTP command
 - `src/diff.ts` — unified-diff parsing and patch fallback
-- `src/semantic.ts` — Difftastic alignment and context-window projection
 - `src/view/diff-view.ts` — unified and side-by-side line rendering
 - `src/view/review-view.ts` — review workspace composition
 - `src/sample.ts` — local demonstration fixture
 - `backend/github-auth.ts` — environment and `gh` credential discovery
 - `backend/github.ts` — GitHub URL parsing, API calls, and base/head content loading
-- `backend/difftastic.ts` — scoped Difftastic process and JSON decoding
-- `backend/moved-code.ts` — review-wide Git moved-block detection
+- `backend/ast-grep-analysis.ts` — parser selection, AST units, and structural fingerprints
+- `backend/semantic-engine.ts` — Effect service, semantic matching, and review-wide move detection
 - `backend/server.ts` — Effect HTTP route composition
 
 ## Run locally
 
-Requires Bun, Node.js 22 or newer, and Difftastic 0.69 or newer.
+Requires Bun and Node.js 22 or newer. ast-grep runs in the server process through its native TypeScript package, so no separate diff binary is required.
 
 ```bash
-brew install difftastic
 bun install
 bun run dev
 ```
@@ -40,7 +38,7 @@ Open [http://localhost:5173](http://localhost:5173). The API runs on port `8787`
 ```bash
 bun run build       # strict typecheck and production frontend build
 bun run typecheck   # TypeScript only
-bun run test:integration # Playwright UI and real Difftastic process tests
+bun run test:integration # Playwright UI and ast-grep engine tests
 bun run dev:web     # Foldkit frontend only
 bun run dev:api     # Effect backend only
 ```
@@ -59,10 +57,10 @@ The token never enters the browser. Run `gh auth login` if private repositories 
 Semantic analysis is lazy and cached per file in the browser model. When you open a file with the Semantic toggle enabled, the Effect backend:
 
 1. Fetches that file at the PR base and head SHAs with the server-side GitHub credential.
-2. Writes both versions into an automatically cleaned-up temporary directory.
-3. Runs `difft --display json` through Effect's child-process service.
-4. Decodes the result into the typed Hunker domain and renders it in unified or side-by-side mode.
+2. Parses both versions in-process with ast-grep's tree-sitter grammars.
+3. Matches declarations by exact AST fingerprint, then by name and structural shape.
+4. Emits typed Inserted, Deleted, Updated, and Renamed changes while retaining GitHub's patch as the rendering source of truth.
 
-Difftastic's JSON output is currently marked unstable upstream, so `backend/difftastic.ts` is the compatibility boundary to update if its schema changes. If Difftastic cannot analyze a file, Hunker keeps the regular GitHub patch visible and shows the semantic error without failing the review.
+Formatting-only changes produce identical syntax fingerprints and collapse to a short “No syntax changes” result. Parse failures and unsupported languages are explicit result states; Hunker keeps the regular GitHub patch visible instead of failing the review. JavaScript, TypeScript, and TSX are currently supported.
 
-Full diff mode renders every changed file in one scroll and lazily scans the entire review with Git's `--color-moved=blocks` engine. Exact moved blocks are summarized with source and destination lines and highlighted in purple in both locations. Generated lockfiles and one-line positional noise are excluded from review-wide move results.
+Full diff mode renders every changed file in one scroll and lazily builds a virtual syntax forest from all changed JavaScript and TypeScript files. Unique declarations are matched across every old and new tree, including edited moves matched by structural shape. Moves are summarized with source and destination lines and highlighted in purple in both locations. Generated lockfiles are excluded from review-wide analysis.

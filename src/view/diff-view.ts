@@ -1,12 +1,13 @@
 import type { Html, HtmlBuilder } from "foldkit/html";
 
-import type { Message, SemanticChange } from "../domain";
+import type { Message } from "../domain";
 import type { DiffLine } from "../diff";
-import type { SemanticLine, SemanticRow } from "../semantic";
 
 export type MovedRanges = Readonly<{
   old: ReadonlyArray<Readonly<{ start: number; count: number }>>;
   new: ReadonlyArray<Readonly<{ start: number; count: number }>>;
+  semanticOld: ReadonlyArray<Readonly<{ start: number; count: number }>>;
+  semanticNew: ReadonlyArray<Readonly<{ start: number; count: number }>>;
 }>;
 
 const isInMovedRange = (
@@ -86,6 +87,13 @@ export const unifiedDiffView = (
               )
                 ? " line-move"
                 : ""
+            }${
+              isInMovedRange(
+                line.kind === "add" ? line.newNumber : line.oldNumber,
+                line.kind === "add" ? moved.semanticNew : moved.semanticOld,
+              )
+                ? " line-semantic"
+                : ""
             }`,
           ),
         ],
@@ -147,6 +155,13 @@ const splitCell = (
           )
             ? " line-move"
             : ""
+        }${
+          isInMovedRange(
+            side === "left" ? line.oldNumber : line.newNumber,
+            side === "left" ? moved.semanticOld : moved.semanticNew,
+          )
+            ? " line-semantic"
+            : ""
         }`,
       ),
     ],
@@ -195,161 +210,5 @@ export const splitDiffView = (
           ),
         ],
       ),
-    ),
-  );
-
-const semanticCodeContent = (
-  content: string,
-  changes: ReadonlyArray<SemanticChange>,
-  characterDiff: boolean,
-  h: HtmlBuilder<Message>,
-): ReadonlyArray<string | Html> => {
-  if (!characterDiff || changes.length === 0) return [content || " "];
-  const nodes: Array<string | Html> = [];
-  let cursor = 0;
-  for (const change of [...changes].sort((left, right) => left.start - right.start)) {
-    const start = Math.max(cursor, Math.min(content.length, change.start));
-    const end = Math.max(start, Math.min(content.length, change.end));
-    if (start > cursor) nodes.push(content.slice(cursor, start));
-    if (end > start) {
-      nodes.push(h.span([h.Class("char-change")], [content.slice(start, end)]));
-    }
-    cursor = end;
-  }
-  if (cursor < content.length) nodes.push(content.slice(cursor));
-  return nodes.length === 0 ? [content || " "] : nodes;
-};
-
-const semanticUnifiedLine = (
-  line: SemanticLine,
-  side: "old" | "new",
-  characterDiff: boolean,
-  moved: MovedRanges,
-  key: string,
-  h: HtmlBuilder<Message>,
-) => {
-  const isOld = side === "old";
-  const kind = line.kind === "context" ? "context" : isOld ? "remove" : "add";
-  const content = isOld ? line.oldContent : line.newContent;
-  const changes = isOld ? line.oldChanges : line.newChanges;
-  const movedLine = isInMovedRange(
-    isOld
-      ? line.oldNumber === null
-        ? null
-        : line.oldNumber + 1
-      : line.newNumber === null
-        ? null
-        : line.newNumber + 1,
-    isOld ? moved.old : moved.new,
-  );
-  return h.div(
-    [h.Key(key), h.Class(`diff-line line-${kind}${movedLine ? " line-move" : ""}`)],
-    [
-      h.span([h.Class("line-number old")], [
-        line.oldNumber === null ? "" : String(line.oldNumber + 1),
-      ]),
-      h.span([h.Class("line-number new")], [
-        line.newNumber === null ? "" : String(line.newNumber + 1),
-      ]),
-      h.span([h.Class("line-marker")], [
-        kind === "add" ? "+" : kind === "remove" ? "−" : "",
-      ]),
-      h.code(
-        [h.Class("line-code")],
-        semanticCodeContent(content, changes, characterDiff, h),
-      ),
-    ],
-  );
-};
-
-export const semanticUnifiedDiffView = (
-  rows: ReadonlyArray<SemanticRow>,
-  characterDiff: boolean,
-  moved: MovedRanges,
-  h: HtmlBuilder<Message>,
-) =>
-  h.div(
-    [h.Class("diff-lines unified-lines semantic-lines")],
-    rows.flatMap((row, index): ReadonlyArray<Html> => {
-      if (row._tag === "Gap") {
-        return [
-          h.div([h.Key(`gap-${index}`), h.Class("semantic-gap")], [
-            `⋯ ${row.count} unchanged ${row.count === 1 ? "line" : "lines"}`,
-          ]),
-        ];
-      }
-      if (row.kind === "change") {
-        return [
-          semanticUnifiedLine(row, "old", characterDiff, moved, `${index}-old`, h),
-          semanticUnifiedLine(row, "new", characterDiff, moved, `${index}-new`, h),
-        ];
-      }
-      return [
-        semanticUnifiedLine(
-          row,
-          row.kind === "add" ? "new" : "old",
-          characterDiff,
-          moved,
-          `${index}-${row.kind}`,
-          h,
-        ),
-      ];
-    }),
-  );
-
-const semanticSplitCell = (
-  line: SemanticLine,
-  side: "old" | "new",
-  characterDiff: boolean,
-  moved: MovedRanges,
-  h: HtmlBuilder<Message>,
-) => {
-  const isOld = side === "old";
-  const absent = isOld ? line.oldNumber === null : line.newNumber === null;
-  if (absent) return h.div([h.Class(`split-cell ${isOld ? "left" : "right"} empty-cell`)], []);
-  const kind = line.kind === "context" ? "context" : isOld ? "remove" : "add";
-  const content = isOld ? line.oldContent : line.newContent;
-  const changes = isOld ? line.oldChanges : line.newChanges;
-  const number = isOld ? line.oldNumber : line.newNumber;
-  const movedLine = isInMovedRange(
-    number === null ? null : number + 1,
-    isOld ? moved.old : moved.new,
-  );
-  return h.div(
-    [
-      h.Class(
-        `split-cell ${isOld ? "left" : "right"} line-${kind}${movedLine ? " line-move" : ""}`,
-      ),
-    ],
-    [
-      h.span([h.Class("line-number")], [number === null ? "" : String(number + 1)]),
-      h.span([h.Class("line-marker")], [
-        kind === "add" ? "+" : kind === "remove" ? "−" : "",
-      ]),
-      h.code(
-        [h.Class("line-code")],
-        semanticCodeContent(content, changes, characterDiff, h),
-      ),
-    ],
-  );
-};
-
-export const semanticSplitDiffView = (
-  rows: ReadonlyArray<SemanticRow>,
-  characterDiff: boolean,
-  moved: MovedRanges,
-  h: HtmlBuilder<Message>,
-) =>
-  h.div(
-    [h.Class("diff-lines split-lines semantic-lines")],
-    rows.map((row, index) =>
-      row._tag === "Gap"
-        ? h.div([h.Key(`gap-${index}`), h.Class("semantic-gap")], [
-            `⋯ ${row.count} unchanged ${row.count === 1 ? "line" : "lines"}`,
-          ])
-        : h.div([h.Key(`semantic-${index}`), h.Class("split-row")], [
-            semanticSplitCell(row, "old", characterDiff, moved, h),
-            semanticSplitCell(row, "new", characterDiff, moved, h),
-          ]),
     ),
   );

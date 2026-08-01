@@ -7,7 +7,7 @@ import {
   semanticResponse,
 } from "./fixtures";
 
-test("loads a PR and renders Difftastic in both review layouts", async ({ page }) => {
+test("loads a PR and renders ast-grep intelligence in both review layouts", async ({ page }) => {
   await page.route("**/api/diff?**", route =>
     route.fulfill({ status: 200, contentType: "application/json", json: reviewResponse }),
   );
@@ -34,14 +34,18 @@ test("loads a PR and renders Difftastic in both review layouts", async ({ page }
 
   await expect(page.getByRole("heading", { name: reviewResponse.title })).toBeVisible();
   await expect(page.locator(".semantic-banner")).toContainText(
-    "Difftastic is analyzing this file",
+    "ast-grep is analyzing this file",
   );
   await expect(page.locator(".semantic-banner")).toHaveCount(0);
   await expect(page.locator(".semantic-engine-badge")).toHaveText(
-    "Difftastic · TypeScript",
+    "ast-grep · TypeScript",
   );
-  await expect(page.locator(".semantic-lines.split-lines")).toBeVisible();
-  await expect(page.locator(".semantic-lines .char-change")).not.toHaveCount(0);
+  await expect(page.locator(".semantic-findings")).toContainText(
+    "Updated function declaration greet",
+  );
+  await expect(page.locator(".split-lines")).toBeVisible();
+  await expect(page.locator(".split-lines .char-change")).not.toHaveCount(0);
+  await expect(page.locator(".line-semantic")).not.toHaveCount(0);
 
   await page.getByRole("button", { name: "Full diff", exact: true }).click();
   await expect(page.locator(".full-diff .diff-panel")).toHaveCount(2);
@@ -51,12 +55,12 @@ test("loads a PR and renders Difftastic in both review layouts", async ({ page }
   await expect(page.locator(".line-move")).not.toHaveCount(0);
 
   await page.getByRole("button", { name: "Unified" }).click();
-  await expect(page.locator(".semantic-lines.unified-lines")).toBeVisible();
-  await expect(page.locator(".semantic-lines")).toContainText("hello ${person}");
+  await expect(page.locator(".unified-lines")).toHaveCount(2);
+  await expect(page.locator(".unified-lines").first()).toContainText("hello ${person}");
 
   await page.getByRole("button", { name: "Semantic", exact: true }).click();
   await expect(page.locator(".semantic-banner")).toHaveCount(0);
-  await expect(page.locator(".semantic-lines")).toHaveCount(0);
+  await expect(page.locator(".semantic-findings")).toHaveCount(0);
   await expect(page.locator(".unified-lines")).toHaveCount(2);
 });
 
@@ -68,7 +72,7 @@ test("reports a semantic backend failure without hiding the patch", async ({ pag
     route.fulfill({
       status: 503,
       contentType: "application/json",
-      json: { error: "Difftastic is not installed. Run `brew install difftastic`." },
+      json: { error: "The semantic engine could not analyze this file." },
     }),
   );
 
@@ -77,10 +81,10 @@ test("reports a semantic backend failure without hiding the patch", async ({ pag
   await page.getByRole("button", { name: "Review", exact: true }).click();
 
   await expect(page.locator(".semantic-banner.is-error")).toContainText(
-    "Difftastic analysis unavailable",
+    "Syntax analysis unavailable",
   );
   await expect(page.locator(".semantic-banner.is-error")).toContainText(
-    "brew install difftastic",
+    "semantic engine",
   );
   await expect(page.locator(".diff-lines")).toContainText("greet(person");
 });

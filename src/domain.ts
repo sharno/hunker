@@ -22,34 +22,62 @@ export const ReviewMeta = S.Struct({
 });
 export type ReviewMeta = typeof ReviewMeta.Type;
 
-export const SemanticChange = S.Struct({
-  start: S.Number,
-  end: S.Number,
-  content: S.String,
-  highlight: S.String,
+export const SourceRange = S.Struct({
+  startLine: S.Number,
+  endLine: S.Number,
+  startColumn: S.Number,
+  endColumn: S.Number,
 });
+export type SourceRange = typeof SourceRange.Type;
+
+export const SemanticChange = S.Union([
+  S.TaggedStruct("Inserted", {
+    kind: S.String,
+    label: S.String,
+    newRange: SourceRange,
+    confidence: S.Number,
+  }),
+  S.TaggedStruct("Deleted", {
+    kind: S.String,
+    label: S.String,
+    oldRange: SourceRange,
+    confidence: S.Number,
+  }),
+  S.TaggedStruct("Updated", {
+    kind: S.String,
+    label: S.String,
+    oldRange: SourceRange,
+    newRange: SourceRange,
+    confidence: S.Number,
+  }),
+  S.TaggedStruct("Renamed", {
+    kind: S.String,
+    oldLabel: S.String,
+    newLabel: S.String,
+    oldRange: SourceRange,
+    newRange: SourceRange,
+    confidence: S.Number,
+  }),
+]);
 export type SemanticChange = typeof SemanticChange.Type;
 
-export const SemanticSide = S.Struct({
-  lineNumber: S.Number,
-  changes: S.Array(SemanticChange),
-});
-export type SemanticSide = typeof SemanticSide.Type;
-
-export const SemanticChunkLine = S.Struct({
-  lhs: S.optional(SemanticSide),
-  rhs: S.optional(SemanticSide),
-});
-
-export const SemanticResult = S.Struct({
-  path: S.String,
-  language: S.String,
-  status: S.String,
-  oldText: S.String,
-  newText: S.String,
-  alignedLines: S.Array(S.Tuple([S.NullOr(S.Number), S.NullOr(S.Number)])),
-  chunks: S.Array(S.Array(SemanticChunkLine)),
-});
+export const SemanticResult = S.Union([
+  S.TaggedStruct("Parsed", {
+    path: S.String,
+    language: S.String,
+    semanticEqual: S.Boolean,
+    changes: S.Array(SemanticChange),
+  }),
+  S.TaggedStruct("Unsupported", {
+    path: S.String,
+    reason: S.String,
+  }),
+  S.TaggedStruct("ParseFailed", {
+    path: S.String,
+    language: S.String,
+    reason: S.String,
+  }),
+]);
 export type SemanticResult = typeof SemanticResult.Type;
 
 export const SemanticRequest = S.Union([
@@ -66,6 +94,10 @@ export const MovedBlock = S.Struct({
   toLine: S.Number,
   lineCount: S.Number,
   preview: S.String,
+  kind: S.String,
+  label: S.String,
+  confidence: S.Number,
+  changed: S.Boolean,
 });
 export type MovedBlock = typeof MovedBlock.Type;
 
