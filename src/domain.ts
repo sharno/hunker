@@ -85,6 +85,7 @@ export const Model = S.Struct({
   meta: ReviewMeta,
   files: S.Array(FileChange),
   selectedPath: S.String,
+  sidebarCollapsed: S.Boolean,
   reviewScope: S.Literals(["file", "full"]),
   viewMode: S.Literals(["unified", "split"]),
   ignoreWhitespace: S.Boolean,
@@ -125,6 +126,7 @@ export const SelectedReviewScope = m("SelectedReviewScope", {
 export const ToggledWhitespace = m("ToggledWhitespace");
 export const ToggledSemantic = m("ToggledSemantic");
 export const ToggledCharacterDiff = m("ToggledCharacterDiff");
+export const ToggledSidebar = m("ToggledSidebar");
 export const ToggledReviewed = m("ToggledReviewed", { path: S.String });
 
 export const Message = S.Union([
@@ -143,6 +145,7 @@ export const Message = S.Union([
   ToggledWhitespace,
   ToggledSemantic,
   ToggledCharacterDiff,
+  ToggledSidebar,
   ToggledReviewed,
 ]);
 export type Message = typeof Message.Type;

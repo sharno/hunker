@@ -25,6 +25,7 @@ import {
   ToggledCharacterDiff,
   ToggledReviewed,
   ToggledSemantic,
+  ToggledSidebar,
   ToggledWhitespace,
 } from "./domain";
 import type {
@@ -299,6 +300,10 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         evo(model, { characterDiff: value => !value }),
         [],
       ],
+      ToggledSidebar: () => [
+        evo(model, { sidebarCollapsed: value => !value }),
+        [],
+      ],
       ToggledReviewed: ({ path }) => [
         evo(model, { reviewedPaths: paths => toggleReviewed(paths, path) }),
         [],
@@ -315,6 +320,7 @@ export const init: Runtime.ElementInit<ModelType, Message> = () => [
     meta: sampleMeta,
     files: sampleFiles,
     selectedPath: sampleFiles[0]?.path ?? "",
+    sidebarCollapsed: false,
     reviewScope: "file",
     viewMode: "split",
     ignoreWhitespace: true,

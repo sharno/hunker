@@ -467,6 +467,11 @@ kbd {
   display: grid;
   grid-template-columns: 278px minmax(0, 1fr);
   min-height: calc(100vh - 235px);
+  transition: grid-template-columns 160ms ease;
+}
+
+.workspace.sidebar-collapsed {
+  grid-template-columns: 48px minmax(0, 1fr);
 }
 
 .review-content {
@@ -498,6 +503,43 @@ kbd {
   justify-content: space-between;
   padding: 17px 18px 10px;
   font-size: 12px;
+}
+
+.sidebar-toggle {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  color: #626961;
+  background: #f8f7f3;
+  border: 1px solid #c9cac3;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 17px;
+  line-height: 1;
+}
+
+.sidebar-toggle:hover {
+  color: var(--ink);
+  border-color: #aeb29f;
+}
+
+.sidebar-collapsed .file-sidebar {
+  overflow: hidden;
+}
+
+.sidebar-collapsed .sidebar-heading {
+  justify-content: center;
+  padding: 12px 0;
+}
+
+.sidebar-collapsed .sidebar-heading > strong,
+.sidebar-collapsed .sidebar-heading > span,
+.sidebar-collapsed .file-search,
+.sidebar-collapsed .file-list,
+.sidebar-collapsed .sidebar-tip {
+  display: none;
 }
 
 .sidebar-heading span {
@@ -1114,6 +1156,10 @@ kbd {
 
   .workspace {
     display: block;
+  }
+
+  .workspace.sidebar-collapsed .file-sidebar {
+    height: 50px;
   }
 
   .file-sidebar {

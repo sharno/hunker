@@ -10,6 +10,7 @@ import {
   ToggledCharacterDiff,
   ToggledReviewed,
   ToggledSemantic,
+  ToggledSidebar,
   ToggledWhitespace,
 } from "../domain";
 import type {
@@ -244,6 +245,19 @@ const fileSidebarView = (
     h.div([h.Class("sidebar-heading")], [
       h.strong([], ["Changed files"]),
       h.span([], [String(model.files.length)]),
+      h.button(
+        [
+          h.Type("button"),
+          h.Class("sidebar-toggle"),
+          h.AriaLabel(
+            model.sidebarCollapsed ? "Expand file sidebar" : "Collapse file sidebar",
+          ),
+          h.AriaExpanded(!model.sidebarCollapsed),
+          h.Title(model.sidebarCollapsed ? "Expand file sidebar" : "Collapse file sidebar"),
+          h.OnClick(ToggledSidebar()),
+        ],
+        [model.sidebarCollapsed ? "›" : "‹"],
+      ),
     ]),
     h.div([h.Class("file-search")], [
       h.span([], ["⌕"]),
@@ -457,7 +471,9 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Html => {
       : h.empty,
     reviewHeaderView(model, h),
     controlsView(model, h),
-    h.div([h.Class("workspace")], [
+    h.div(
+      [h.Class(`workspace${model.sidebarCollapsed ? " sidebar-collapsed" : ""}`)],
+      [
       fileSidebarView(model, visibleFiles, h),
       model.reviewScope === "full"
         ? h.div([h.Class("review-content full-diff")], [
@@ -467,6 +483,7 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Html => {
         : selected === undefined
           ? h.section([h.Class("empty-state")], ["No text files to review."])
           : diffPanelView(selected, model, movesFor(selected), h),
-    ]),
+      ],
+    ),
   ]);
 };

@@ -24,6 +24,11 @@ test("loads a PR and renders Difftastic in both review layouts", async ({ page }
   );
 
   await page.goto("/");
+  await page.getByRole("button", { name: "Collapse file sidebar" }).click();
+  await expect(page.locator(".workspace")).toHaveClass(/sidebar-collapsed/);
+  await expect(page.getByRole("navigation", { name: "Changed files" })).toBeHidden();
+  await page.getByRole("button", { name: "Expand file sidebar" }).click();
+  await expect(page.locator(".workspace")).not.toHaveClass(/sidebar-collapsed/);
   await page.getByPlaceholder("Paste a GitHub PR or compare URL").fill(reviewUrl);
   await page.getByRole("button", { name: "Review", exact: true }).click();
 
