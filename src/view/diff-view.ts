@@ -4,6 +4,8 @@ import { ToggledHunkCollapse } from "../domain";
 import type { Message } from "../domain";
 import { hunkKey } from "../diff";
 import type { DiffLine, HunkDiffLine } from "../diff";
+import { inlineReviewThreads } from "./github-review-view";
+import type { GitHubReviewInteraction } from "./github-review-view";
 
 export type MovedRanges = Readonly<{
   old: ReadonlyArray<Readonly<{ start: number; count: number }>>;
@@ -15,6 +17,7 @@ export type MovedRanges = Readonly<{
 export type DiffInteraction = Readonly<{
   path: string;
   collapsedHunks: ReadonlyArray<string>;
+  reviews: GitHubReviewInteraction;
 }>;
 
 const isInMovedRange = (
@@ -126,15 +129,15 @@ export const unifiedDiffView = (
 ) =>
   h.div(
     [h.Class("diff-lines unified-lines")],
-    visibleLines(lines, interaction).map((line, index, renderedLines) => {
-      if (line.kind === "hunk") return hunkHeader(line, interaction, h);
+    visibleLines(lines, interaction).flatMap((line, index, renderedLines) => {
+      if (line.kind === "hunk") return [hunkHeader(line, interaction, h)];
       const paired =
         line.kind === "remove" && renderedLines[index + 1]?.kind === "add"
           ? renderedLines[index + 1]
           : line.kind === "add" && renderedLines[index - 1]?.kind === "remove"
             ? renderedLines[index - 1]
             : undefined;
-      return h.div(
+      const diffLine = h.div(
         [
           h.Key(`${index}-${line.kind}`),
           h.Class(
@@ -167,6 +170,16 @@ export const unifiedDiffView = (
           ),
         ],
       );
+      return [
+        diffLine,
+        ...inlineReviewThreads(
+          interaction.path,
+          line.oldNumber,
+          line.newNumber,
+          interaction.reviews,
+          h,
+        ),
+      ];
     }),
   );
 
@@ -247,9 +260,9 @@ export const splitDiffView = (
 ) =>
   h.div(
     [h.Class("diff-lines split-lines")],
-    splitRows(visibleLines(lines, interaction)).map((row, index) => {
-      if (row.left?.kind === "hunk") return hunkHeader(row.left, interaction, h);
-      return h.div(
+    splitRows(visibleLines(lines, interaction)).flatMap((row, index) => {
+      if (row.left?.kind === "hunk") return [hunkHeader(row.left, interaction, h)];
+      const splitRow = h.div(
         [h.Key(`split-${index}`), h.Class("split-row")],
         [
           splitCell(
@@ -270,5 +283,15 @@ export const splitDiffView = (
           ),
         ],
       );
+      return [
+        splitRow,
+        ...inlineReviewThreads(
+          interaction.path,
+          row.left?.oldNumber ?? null,
+          row.right?.newNumber ?? null,
+          interaction.reviews,
+          h,
+        ),
+      ];
     }),
   );

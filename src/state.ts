@@ -11,26 +11,38 @@ import {
   ChangedFilter,
   ChangedBrowserUrl,
   ChangedPrUrl,
+  ChangedReplyDraft,
+  ChangedReviewBody,
   CompletedNavigation,
   FailedFullFile,
+  FailedGitHubReviews,
   FailedMoves,
+  FailedReply,
   FailedReview,
+  FailedReviewSubmission,
   FailedSemantic,
+  GitHubReviewComment,
   LoadedFullFile,
+  LoadedGitHubReviews,
   LoadedMoves,
   LoadedReview,
   LoadedSemantic,
   Model,
   MovedBlock,
+  PostedReply,
+  PostedReview,
   RefreshedReview,
   RequestedNavigation,
   SelectedFile,
   SelectedReviewScope,
   SelectedViewMode,
   SemanticResult,
+  SubmittedReply,
+  SubmittedReview,
   ToggledCharacterDiff,
   ToggledFileCollapse,
   ToggledFullFile,
+  ToggledGitHubReviews,
   ToggledHunkCollapse,
   ToggledReviewed,
   ToggledSemantic,
@@ -170,6 +182,8 @@ const FetchSemantic = Command.define("FetchSemantic", {
 
 const MoveResponse = S.Struct({ moves: S.Array(MovedBlock) });
 const FullFileResponse = S.Struct({ oldText: S.String, newText: S.String });
+const GitHubReviewsResponse = S.Struct({ comments: S.Array(GitHubReviewComment) });
+const GitHubReplyResponse = S.Struct({ comment: GitHubReviewComment });
 
 const FetchFullFile = Command.define("FetchFullFile", {
   args: {
@@ -197,6 +211,84 @@ const FetchFullFile = Command.define("FetchFullFile", {
     }).pipe(
       Effect.catch(error =>
         Effect.succeed(FailedFullFile({ path, error: fetchErrorMessage(error) })),
+      ),
+      Effect.provide(Http.layer),
+    ),
+});
+
+const FetchGitHubReviews = Command.define("FetchGitHubReviews", {
+  args: { url: S.String },
+  messages: [LoadedGitHubReviews, FailedGitHubReviews],
+  execute: ({ url }) =>
+    Effect.gen(function* () {
+      const client = yield* HttpClient.HttpClient;
+      const response = yield* client.execute(
+        HttpClientRequest.get(`/api/reviews?url=${encodeURIComponent(url)}`),
+      );
+      const data: unknown = yield* response.json;
+      if (response.status < 200 || response.status >= 300) {
+        return yield* Effect.fail(
+          new Error(responseError(data, "Could not load GitHub reviews.")),
+        );
+      }
+      const decoded = yield* S.decodeUnknownEffect(GitHubReviewsResponse)(data);
+      return LoadedGitHubReviews({ comments: decoded.comments });
+    }).pipe(
+      Effect.catch(error =>
+        Effect.succeed(FailedGitHubReviews({ error: fetchErrorMessage(error) })),
+      ),
+      Effect.provide(Http.layer),
+    ),
+});
+
+const PostReviewReply = Command.define("PostReviewReply", {
+  args: { url: S.String, commentId: S.Number, body: S.String },
+  messages: [PostedReply, FailedReply],
+  execute: ({ url, commentId, body }) =>
+    Effect.gen(function* () {
+      const client = yield* HttpClient.HttpClient;
+      const request = HttpClientRequest.post("/api/reviews/reply").pipe(
+        HttpClientRequest.bodyJsonUnsafe({ url, commentId, body }),
+      );
+      const response = yield* client.execute(request);
+      const data: unknown = yield* response.json;
+      if (response.status < 200 || response.status >= 300) {
+        return yield* Effect.fail(new Error(responseError(data, "Could not post reply.")));
+      }
+      const decoded = yield* S.decodeUnknownEffect(GitHubReplyResponse)(data);
+      return PostedReply({ comment: decoded.comment });
+    }).pipe(
+      Effect.catch(error =>
+        Effect.succeed(FailedReply({ commentId, error: fetchErrorMessage(error) })),
+      ),
+      Effect.provide(Http.layer),
+    ),
+});
+
+const PostPullRequestReview = Command.define("PostPullRequestReview", {
+  args: {
+    url: S.String,
+    body: S.String,
+    event: S.Literals(["COMMENT", "APPROVE", "REQUEST_CHANGES"]),
+  },
+  messages: [PostedReview, FailedReviewSubmission],
+  execute: ({ url, body, event }) =>
+    Effect.gen(function* () {
+      const client = yield* HttpClient.HttpClient;
+      const request = HttpClientRequest.post("/api/reviews/submit").pipe(
+        HttpClientRequest.bodyJsonUnsafe({ url, body, event }),
+      );
+      const response = yield* client.execute(request);
+      const data: unknown = yield* response.json;
+      if (response.status < 200 || response.status >= 300) {
+        return yield* Effect.fail(
+          new Error(responseError(data, "Could not submit the GitHub review.")),
+        );
+      }
+      return PostedReview({ event });
+    }).pipe(
+      Effect.catch(error =>
+        Effect.succeed(FailedReviewSubmission({ error: fetchErrorMessage(error) })),
       ),
       Effect.provide(Http.layer),
     ),
@@ -270,12 +362,29 @@ const requestMoves = (model: ModelType): UpdateReturn => {
   ];
 };
 
+const requestGitHubReviews = (model: ModelType): UpdateReturn => {
+  if (
+    !model.showGitHubReviews ||
+    model.meta.number === "compare" ||
+    model.prUrl.trim() === "" ||
+    model.githubReviews._tag === "Loading" ||
+    model.githubReviews._tag === "Ready"
+  ) {
+    return [model, []];
+  }
+  return [
+    evo(model, { githubReviews: () => ({ _tag: "Loading" as const }) }),
+    [FetchGitHubReviews({ url: model.meta.url })],
+  ];
+};
+
 const requestSelectedIntelligence = (model: ModelType): UpdateReturn => {
   const selected = model.files.find(file => file.path === model.selectedPath);
   const [withSemantic, semanticCommands] =
     selected === undefined ? [model, []] : requestSemantic(model, selected);
   const [withMoves, moveCommands] = requestMoves(withSemantic);
-  return [withMoves, [...semanticCommands, ...moveCommands]];
+  const [withReviews, reviewCommands] = requestGitHubReviews(withMoves);
+  return [withReviews, [...semanticCommands, ...moveCommands, ...reviewCommands]];
 };
 
 const beginReviewLoad = (model: ModelType, url: string): ModelType =>
@@ -290,6 +399,11 @@ const beginReviewLoad = (model: ModelType, url: string): ModelType =>
     collapsedPaths: () => [],
     collapsedHunks: () => [],
     fullFileStates: () => [],
+    githubReviews: () => ({ _tag: "Idle" as const }),
+    replyDrafts: () => [],
+    replyStates: () => [],
+    reviewBody: () => "",
+    reviewSubmission: () => ({ _tag: "Idle" as const }),
   });
 
 const sampleModel = (model: ModelType): ModelType =>
@@ -307,6 +421,12 @@ const sampleModel = (model: ModelType): ModelType =>
     collapsedPaths: () => [],
     collapsedHunks: () => [],
     fullFileStates: () => [],
+    githubReviews: () => ({ _tag: "Idle" as const }),
+    replyDrafts: () => [],
+    replyStates: () => [],
+    reviewBody: () => "",
+    reviewSubmission: () => ({ _tag: "Idle" as const }),
+    showGitHubReviews: () => true,
   });
 
 const reviewOptions = (model: ModelType): ReviewOptions => ({
@@ -316,6 +436,7 @@ const reviewOptions = (model: ModelType): ReviewOptions => ({
   semantic: model.semantic,
   characterDiff: model.characterDiff,
   sidebarCollapsed: model.sidebarCollapsed,
+  showGitHubReviews: model.showGitHubReviews,
   selectedPath: model.selectedPath,
 });
 
@@ -330,6 +451,7 @@ const applyReviewOptions = (
     semantic: () => options.semantic,
     characterDiff: () => options.characterDiff,
     sidebarCollapsed: () => options.sidebarCollapsed,
+    showGitHubReviews: () => options.showGitHubReviews,
     selectedPath: () => options.selectedPath,
   });
 
@@ -410,6 +532,11 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
           collapsedPaths: () => [],
           collapsedHunks: () => [],
           fullFileStates: () => [],
+          githubReviews: () => ({ _tag: "Idle" as const }),
+          replyDrafts: () => [],
+          replyStates: () => [],
+          reviewBody: () => "",
+          reviewSubmission: () => ({ _tag: "Idle" as const }),
         });
         const [loaded, commands] = requestSelectedIntelligence(next);
         return synchronizeReviewUrl(loaded, commands);
@@ -480,6 +607,107 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
             ]
           : [model, []];
       },
+      LoadedGitHubReviews: ({ comments }) => [
+        evo(model, {
+          githubReviews: () => ({ _tag: "Ready" as const, comments }),
+        }),
+        [],
+      ],
+      FailedGitHubReviews: ({ error }) => [
+        evo(model, {
+          githubReviews: () => ({ _tag: "Failed" as const, error }),
+        }),
+        [],
+      ],
+      ChangedReplyDraft: ({ commentId, body }) => [
+        evo(model, {
+          replyDrafts: drafts => [
+            ...drafts.filter(draft => draft.commentId !== commentId),
+            { commentId, body },
+          ],
+          replyStates: states => states.filter(state => state.commentId !== commentId),
+        }),
+        [],
+      ],
+      SubmittedReply: ({ commentId }) => {
+        const body = model.replyDrafts.find(
+          draft => draft.commentId === commentId,
+        )?.body.trim();
+        const loading = model.replyStates.some(
+          state => state.commentId === commentId && state._tag === "Loading",
+        );
+        if (body === undefined || body === "" || loading) return [model, []];
+        return [
+          evo(model, {
+            replyStates: states => [
+              ...states.filter(state => state.commentId !== commentId),
+              { _tag: "Loading" as const, commentId },
+            ],
+          }),
+          [PostReviewReply({ url: model.meta.url, commentId, body })],
+        ];
+      },
+      PostedReply: ({ comment }) => [
+        evo(model, {
+          githubReviews: reviews =>
+            reviews._tag === "Ready"
+              ? {
+                  _tag: "Ready" as const,
+                  comments: [...reviews.comments, comment],
+                }
+              : reviews,
+          replyDrafts: drafts =>
+            drafts.filter(draft => draft.commentId !== comment.rootId),
+          replyStates: states =>
+            states.filter(state => state.commentId !== comment.rootId),
+        }),
+        [],
+      ],
+      FailedReply: ({ commentId, error }) => [
+        evo(model, {
+          replyStates: states => [
+            ...states.filter(state => state.commentId !== commentId),
+            { _tag: "Failed" as const, commentId, error },
+          ],
+        }),
+        [],
+      ],
+      ChangedReviewBody: ({ body }) => [
+        evo(model, {
+          reviewBody: () => body,
+          reviewSubmission: () => ({ _tag: "Idle" as const }),
+        }),
+        [],
+      ],
+      SubmittedReview: ({ event }) => {
+        const body = model.reviewBody.trim();
+        if (
+          model.reviewSubmission._tag === "Loading" ||
+          model.meta.number === "compare" ||
+          (event !== "APPROVE" && body === "")
+        ) {
+          return [model, []];
+        }
+        return [
+          evo(model, {
+            reviewSubmission: () => ({ _tag: "Loading" as const, event }),
+          }),
+          [PostPullRequestReview({ url: model.meta.url, body, event })],
+        ];
+      },
+      PostedReview: ({ event }) => [
+        evo(model, {
+          reviewBody: () => "",
+          reviewSubmission: () => ({ _tag: "Succeeded" as const, event }),
+        }),
+        [],
+      ],
+      FailedReviewSubmission: ({ error }) => [
+        evo(model, {
+          reviewSubmission: () => ({ _tag: "Failed" as const, error }),
+        }),
+        [],
+      ],
       ChangedFilter: ({ value }) => [evo(model, { filter: () => value }), []],
       SelectedFile: ({ path }) => {
         const next = evo(model, {
@@ -517,6 +745,11 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
           evo(model, { sidebarCollapsed: value => !value }),
           [],
         ),
+      ToggledGitHubReviews: () => {
+        const next = evo(model, { showGitHubReviews: value => !value });
+        const [updated, commands] = requestGitHubReviews(next);
+        return synchronizeReviewUrl(updated, commands);
+      },
       ToggledReviewed: ({ path }) => [
         evo(model, { reviewedPaths: paths => toggleMembership(paths, path) }),
         [],
@@ -586,6 +819,12 @@ const initialModel = (prUrl: string, options: ReviewOptions) =>
     collapsedPaths: [],
     collapsedHunks: [],
     fullFileStates: [],
+    showGitHubReviews: options.showGitHubReviews,
+    githubReviews: { _tag: "Idle" },
+    replyDrafts: [],
+    replyStates: [],
+    reviewBody: "",
+    reviewSubmission: { _tag: "Idle" },
   });
 
 export const init: Runtime.RoutingApplicationInit<ModelType, Message> = url => {

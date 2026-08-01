@@ -9,6 +9,7 @@ export type ReviewOptions = Readonly<{
   semantic: boolean;
   characterDiff: boolean;
   sidebarCollapsed: boolean;
+  showGitHubReviews: boolean;
   selectedPath: string;
 }>;
 
@@ -19,6 +20,7 @@ export const defaultReviewOptions: ReviewOptions = {
   semantic: true,
   characterDiff: true,
   sidebarCollapsed: false,
+  showGitHubReviews: true,
   selectedPath: "",
 };
 
@@ -103,6 +105,7 @@ export const reviewOptionsFromSearch = (search: string): ReviewOptions => {
       "expanded",
       false,
     ),
+    showGitHubReviews: optionBoolean(params.get("reviews"), "show", "hide", true),
     selectedPath: params.get("file") ?? "",
   };
 };
@@ -120,6 +123,7 @@ export const localReviewUrl = (
     semantic: options.semantic ? "on" : "off",
     characters: options.characterDiff ? "on" : "off",
     sidebar: options.sidebarCollapsed ? "collapsed" : "expanded",
+    reviews: options.showGitHubReviews ? "show" : "hide",
   });
   if (options.selectedPath !== "") params.set("file", options.selectedPath);
   return `${path}?${params.toString()}`;

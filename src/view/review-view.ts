@@ -11,6 +11,7 @@ import {
   ToggledCharacterDiff,
   ToggledFileCollapse,
   ToggledFullFile,
+  ToggledGitHubReviews,
   ToggledReviewed,
   ToggledSemantic,
   ToggledSidebar,
@@ -27,6 +28,10 @@ import type {
 import { toDiffLines, toFullDiffLines } from "../diff";
 import { splitDiffView, unifiedDiffView } from "./diff-view";
 import type { MovedRanges } from "./diff-view";
+import {
+  detachedReviewThreads,
+  reviewComposerView,
+} from "./github-review-view";
 
 const buttonClass = (active: boolean) =>
   `segmented-button${active ? " is-active" : ""}`;
@@ -241,6 +246,16 @@ const controlsView = (model: Model, h: HtmlBuilder<Message>): Html =>
         ToggledCharacterDiff(),
         h,
       ),
+      model.prUrl === "" || model.meta.number === "compare"
+        ? h.empty
+        : toggleButton(
+            model.githubReviews._tag === "Ready"
+              ? `GitHub reviews ${model.githubReviews.comments.filter(comment => comment.id === comment.rootId).length}`
+              : "GitHub reviews",
+            model.showGitHubReviews,
+            ToggledGitHubReviews(),
+            h,
+          ),
     ]),
     h.div([h.Class("control-spacer")], [""]),
     h.div([h.Class("legend")], [
@@ -249,6 +264,18 @@ const controlsView = (model: Model, h: HtmlBuilder<Message>): Html =>
       h.span([], [h.i([h.Class("legend-move")], [""]), "semantic move"]),
     ]),
   ]);
+
+const githubReviewStatusView = (model: Model, h: HtmlBuilder<Message>): Html => {
+  if (!model.showGitHubReviews || model.prUrl === "") return h.empty;
+  return model.githubReviews._tag === "Loading"
+    ? h.div([h.Class("github-reviews-status")], ["Loading GitHub review threads…"])
+    : model.githubReviews._tag === "Failed"
+      ? h.div([h.Class("github-reviews-status is-error"), h.Role("alert")], [
+          h.strong([], ["Could not load GitHub reviews"]),
+          h.span([], [model.githubReviews.error]),
+        ])
+      : h.empty;
+};
 
 const fileSidebarView = (
   model: Model,
@@ -451,7 +478,19 @@ const diffPanelView = (
   const interaction = {
     path: file.path,
     collapsedHunks: model.collapsedHunks,
+    reviews: {
+      comments:
+        model.showGitHubReviews && model.githubReviews._tag === "Ready"
+          ? model.githubReviews.comments
+          : [],
+      replyDrafts: model.replyDrafts,
+      replyStates: model.replyStates,
+    },
   };
+  const semanticOnly =
+    model.semantic &&
+    parsedSemantic?.semanticEqual === true &&
+    fullFileState?._tag !== "Ready";
 
   return h.section([h.Class(`diff-panel${collapsed ? " is-collapsed" : ""}`)], [
     h.div([h.Class("file-header")], [
@@ -553,7 +592,13 @@ const diffPanelView = (
                 ),
               )
             : h.empty,
-          model.semantic && parsedSemantic?.semanticEqual && fullFileState?._tag !== "Ready"
+          ...detachedReviewThreads(
+            file.path,
+            semanticOnly ? [] : lines,
+            interaction.reviews,
+            h,
+          ),
+          semanticOnly
             ? h.div([h.Class("semantic-equal")], [
                 h.strong([], ["No syntax changes"]),
                 h.span([], ["Only formatting or comments changed in this file."]),
@@ -590,6 +635,7 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Html => {
       : h.empty,
     reviewHeaderView(model, h),
     controlsView(model, h),
+    githubReviewStatusView(model, h),
     h.div(
       [h.Class(`workspace${model.sidebarCollapsed ? " sidebar-collapsed" : ""}`)],
       [
@@ -598,10 +644,14 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Html => {
         ? h.div([h.Class("review-content full-diff")], [
             movementSummaryView(model, h),
             ...visibleFiles.map(file => diffPanelView(file, model, movesFor(file), h)),
+            reviewComposerView(model, h),
           ])
         : selected === undefined
           ? h.section([h.Class("empty-state")], ["No text files to review."])
-          : diffPanelView(selected, model, movesFor(selected), h),
+          : h.div([h.Class("review-content")], [
+              diffPanelView(selected, model, movesFor(selected), h),
+              reviewComposerView(model, h),
+            ]),
       ],
     ),
   ]);

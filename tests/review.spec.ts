@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import {
   movesResponse,
+  reviewCommentsResponse,
   reviewResponse,
   reviewUrl,
   semanticResponse,
@@ -21,6 +22,9 @@ test("loads a PR and renders ast-grep intelligence in both review layouts", asyn
   });
   await page.route("**/api/moves?**", route =>
     route.fulfill({ status: 200, contentType: "application/json", json: movesResponse }),
+  );
+  await page.route("**/api/reviews?**", route =>
+    route.fulfill({ status: 200, contentType: "application/json", json: { comments: [] } }),
   );
 
   await page.goto("/");
@@ -103,7 +107,7 @@ test("loads a copied review route and refreshes it from GitHub", async ({ page }
   });
 
   const sharedRoute =
-    "/example/hunker-demo/pull/42?scope=full&view=unified&whitespace=show&semantic=off&characters=off&sidebar=collapsed&file=src%2Fmessage.ts";
+    "/example/hunker-demo/pull/42?scope=full&view=unified&whitespace=show&semantic=off&characters=off&sidebar=collapsed&reviews=hide&file=src%2Fmessage.ts";
   await page.goto(sharedRoute);
 
   await expect(page.getByRole("heading", { name: "Review revision 1" })).toBeVisible();
@@ -147,6 +151,85 @@ test("loads a copied review route and refreshes it from GitHub", async ({ page }
   expect(semanticRequests).toBe(0);
 });
 
+test("shows and hides inline GitHub reviews and posts replies and review decisions", async ({ page }) => {
+  let reviewLoads = 0;
+  await page.route("**/api/diff?**", route =>
+    route.fulfill({ status: 200, contentType: "application/json", json: reviewResponse }),
+  );
+  await page.route("**/api/reviews?**", route => {
+    reviewLoads += 1;
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: reviewCommentsResponse,
+    });
+  });
+  await page.route("**/api/reviews/reply", route => {
+    expect(route.request().postDataJSON()).toEqual({
+      url: reviewUrl,
+      commentId: 100,
+      body: "Yes, the rename is intentional.",
+    });
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: {
+        comment: {
+          ...reviewCommentsResponse.comments[1],
+          id: 102,
+          body: "Yes, the rename is intentional.",
+          author: "local-reviewer",
+        },
+      },
+    });
+  });
+  await page.route("**/api/reviews/submit", route => {
+    expect(route.request().postDataJSON()).toEqual({
+      url: reviewUrl,
+      body: "Please address the naming concern before merging.",
+      event: "REQUEST_CHANGES",
+    });
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: { event: "REQUEST_CHANGES" },
+    });
+  });
+
+  await page.goto(
+    "/example/hunker-demo/pull/42?scope=file&view=unified&whitespace=ignore&semantic=off&characters=on&sidebar=expanded&reviews=show&file=src%2Fgreet.ts",
+  );
+  await expect(page.locator(".github-review-thread")).toHaveCount(1);
+  await expect(page.locator(".github-review-thread")).toContainText(
+    "Could this keep the original parameter name?",
+  );
+  await expect(page.locator(".github-review-thread")).toContainText(
+    "The rename makes the template clearer.",
+  );
+
+  const reviewsToggle = page.getByRole("button", { name: "GitHub reviews 1" });
+  await reviewsToggle.click();
+  await expect(page.locator(".github-review-thread")).toHaveCount(0);
+  await expect(page).toHaveURL(url => url.searchParams.get("reviews") === "hide");
+  await reviewsToggle.click();
+  await expect(page.locator(".github-review-thread")).toHaveCount(1);
+  expect(reviewLoads).toBe(1);
+
+  await page.getByRole("textbox", { name: "Reply to review from alice-reviewer" }).fill(
+    "Yes, the rename is intentional.",
+  );
+  await page.getByRole("button", { name: "Reply", exact: true }).click();
+  await expect(page.locator(".github-review-thread")).toContainText(
+    "Yes, the rename is intentional.",
+  );
+
+  await page.getByRole("textbox", { name: "GitHub review summary" }).fill(
+    "Please address the naming concern before merging.",
+  );
+  await page.getByRole("button", { name: "Request changes" }).click();
+  await expect(page.getByRole("status")).toHaveText("Change request posted to GitHub.");
+});
+
 test("reports a semantic backend failure without hiding the patch", async ({ page }) => {
   await page.route("**/api/diff?**", route =>
     route.fulfill({ status: 200, contentType: "application/json", json: reviewResponse }),
@@ -157,6 +240,9 @@ test("reports a semantic backend failure without hiding the patch", async ({ pag
       contentType: "application/json",
       json: { error: "The semantic engine could not analyze this file." },
     }),
+  );
+  await page.route("**/api/reviews?**", route =>
+    route.fulfill({ status: 200, contentType: "application/json", json: { comments: [] } }),
   );
 
   await page.goto("/");
@@ -201,7 +287,7 @@ export const untouchedFooter = true;
   });
 
   await page.goto(
-    "/example/hunker-demo/pull/42?scope=file&view=unified&whitespace=ignore&semantic=off&characters=on&sidebar=expanded&file=src%2Fgreet.ts",
+    "/example/hunker-demo/pull/42?scope=file&view=unified&whitespace=ignore&semantic=off&characters=on&sidebar=expanded&reviews=hide&file=src%2Fgreet.ts",
   );
   const panel = page.locator(".diff-panel");
   await expect(panel).toHaveCount(1);

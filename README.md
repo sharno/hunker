@@ -18,6 +18,7 @@ The stack is Effect end to end:
 - `src/sample.ts` — local demonstration fixture
 - `backend/github-auth.ts` — environment and `gh` credential discovery
 - `backend/github.ts` — GitHub URL parsing, API calls, and base/head content loading
+- `backend/github-reviews.ts` — review-thread reads, replies, and review submission
 - `backend/ast-grep-analysis.ts` — parser selection, AST units, and structural fingerprints
 - `backend/semantic-engine.ts` — Effect service, semantic matching, and review-wide move detection
 - `backend/server.ts` — Effect HTTP route composition
@@ -45,6 +46,12 @@ Files and individual hunks can be collapsed independently. The Full file action
 loads the base and head versions through the authenticated Effect backend and
 fills in context omitted by GitHub's patch; Patch only returns to the compact
 review without another network request.
+
+GitHub review threads can be shown or hidden inline, and that choice is recorded
+in the review URL. Hunker can reply to an existing thread and submit Comment,
+Approve, or Request changes reviews through the same server-side GitHub
+credential used for private repositories. GitHub tokens need pull-request write
+permission for replies and review submission.
 
 ## Useful commands
 

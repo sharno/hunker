@@ -465,6 +465,22 @@ kbd {
   flex: 1;
 }
 
+.github-reviews-status {
+  display: flex;
+  gap: 8px;
+  padding: 8px 18px;
+  color: #4d5264;
+  background: #f2f3f8;
+  border-bottom: 1px solid #d8dae4;
+  font-size: 10px;
+}
+
+.github-reviews-status.is-error {
+  color: #793b31;
+  background: #fff0ed;
+  border-bottom-color: #edcbc5;
+}
+
 .legend,
 .legend span {
   display: flex;
@@ -1176,6 +1192,196 @@ kbd {
   font-weight: 720;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+.inline-review-threads,
+.detached-review-threads {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 620px;
+  padding: 10px 14px 10px 112px;
+  background: #f7f8fb;
+  border-top: 1px solid #d9dce5;
+  border-bottom: 1px solid #d9dce5;
+  font-family: var(--font-geist-sans), sans-serif;
+  white-space: normal;
+}
+
+.detached-review-threads {
+  min-width: 0;
+  padding-left: 14px;
+  background: #faf9f5;
+}
+
+.github-review-thread {
+  overflow: hidden;
+  background: white;
+  border: 1px solid #cfd3de;
+  border-radius: 7px;
+  box-shadow: 0 2px 7px rgba(16, 27, 44, 0.07);
+}
+
+.github-review-comment {
+  padding: 9px 11px;
+}
+
+.github-review-comment.is-reply {
+  margin-left: 24px;
+  border-top: 1px solid #e2e4eb;
+  border-left: 3px solid #d9dce5;
+}
+
+.github-review-comment-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #5c6470;
+  font-size: 9px;
+}
+
+.github-review-comment p {
+  margin: 6px 0 0;
+  color: #28313c;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.github-review-link {
+  color: #59657b;
+  font-size: 8px;
+  text-decoration: none;
+}
+
+.github-review-link:hover {
+  text-decoration: underline;
+}
+
+.github-reply-form {
+  display: grid;
+  gap: 7px;
+  padding: 9px 11px;
+  background: #f7f8fb;
+  border-top: 1px solid #e0e3eb;
+}
+
+.github-reply-form textarea,
+.github-review-composer textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 9px 10px;
+  color: var(--ink);
+  background: white;
+  border: 1px solid #c9cdd7;
+  border-radius: 6px;
+  outline: none;
+  font: 11px/1.5 var(--font-geist-sans), sans-serif;
+}
+
+.github-reply-form textarea:focus,
+.github-review-composer textarea:focus {
+  border-color: #889655;
+  box-shadow: 0 0 0 3px rgba(155, 183, 47, 0.14);
+}
+
+.github-reply-actions,
+.github-review-submit-row,
+.github-review-submit-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.github-reply-actions,
+.github-review-submit-row {
+  justify-content: space-between;
+}
+
+.github-reply-button,
+.github-review-submit-actions button {
+  min-height: 30px;
+  padding: 0 11px;
+  border: 1px solid #bdc2cc;
+  border-radius: 5px;
+  background: white;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 680;
+}
+
+.github-reply-button:disabled,
+.github-review-submit-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.github-review-error {
+  color: #9a4136;
+  font-size: 9px;
+}
+
+.github-review-success {
+  color: #23633f;
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.github-review-composer {
+  display: grid;
+  gap: 11px;
+  margin: 18px;
+  padding: 14px;
+  background: #f7f8fb;
+  border: 1px solid #cfd3de;
+  border-radius: 8px;
+  box-shadow: 0 3px 12px rgba(16, 27, 44, 0.06);
+}
+
+.github-review-composer-heading,
+.github-review-composer-heading > div {
+  display: flex;
+}
+
+.github-review-composer-heading {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.github-review-composer-heading > div {
+  flex-direction: column;
+  gap: 2px;
+}
+
+.github-review-composer-heading span,
+.github-review-submit-row > span {
+  color: #727985;
+  font-size: 9px;
+}
+
+.github-review-mark {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 24px;
+  color: white !important;
+  background: #24292f;
+  border-radius: 5px;
+  font-size: 8px !important;
+  font-weight: 800;
+}
+
+.github-review-submit-actions .request-changes-button {
+  color: #8d372e;
+  border-color: #d8a39b;
+}
+
+.github-review-submit-actions .approve-button {
+  color: #233700;
+  background: var(--lime);
+  border-color: var(--lime-dark);
 }
 
 .char-change {

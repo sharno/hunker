@@ -35,6 +35,7 @@ test("round-trips a complete review configuration through the query string", () 
     semantic: false,
     characterDiff: false,
     sidebarCollapsed: true,
+    showGitHubReviews: false,
     selectedPath: "src/message with spaces.ts",
   } as const;
   const href = localReviewUrl(
@@ -43,7 +44,7 @@ test("round-trips a complete review configuration through the query string", () 
   );
 
   expect(href).toBe(
-    "/example/hunker-demo/pull/42?scope=full&view=unified&whitespace=show&semantic=off&characters=off&sidebar=collapsed&file=src%2Fmessage+with+spaces.ts",
+    "/example/hunker-demo/pull/42?scope=full&view=unified&whitespace=show&semantic=off&characters=off&sidebar=collapsed&reviews=hide&file=src%2Fmessage+with+spaces.ts",
   );
   expect(reviewOptionsFromSearch(new URL(href!, "http://hunker.local").search)).toEqual(
     options,

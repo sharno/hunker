@@ -1,4 +1,4 @@
-import { Data, Effect, Layer } from "effect";
+import { Data, Effect, Layer, Schema as S } from "effect";
 import {
   HttpMiddleware,
   HttpRouter,
@@ -27,12 +27,21 @@ import {
 import type { FileStatus } from "./github";
 import { GitHubAuthLive } from "./github-auth";
 import {
+  loadReviewComments,
+  replyToReviewComment,
+  submitPullRequestReview,
+} from "./github-reviews";
+import {
   AstGrepSemanticLive,
   SemanticDiffEngine,
   SemanticEngineFailed,
 } from "./semantic-engine";
 
 class InvalidFileRequest extends Data.TaggedError("InvalidFileRequest")<{
+  readonly message: string;
+}> {}
+
+class InvalidReviewRequest extends Data.TaggedError("InvalidReviewRequest")<{
   readonly message: string;
 }> {}
 
@@ -56,6 +65,40 @@ const fileRequest = (request: HttpServerRequest.HttpServerRequest) =>
     }
     return { target, path, previousPath, status };
   });
+
+const pullTarget = (url: string) =>
+  Effect.gen(function* () {
+    const target = yield* parseGitHubUrl(url);
+    if (target._tag !== "PullTarget") {
+      return yield* new InvalidReviewRequest({
+        message: "GitHub reviews are available for pull requests, not compare URLs.",
+      });
+    }
+    return target;
+  });
+
+const ReplyBody = S.Struct({
+  url: S.String,
+  commentId: S.Number,
+  body: S.String,
+});
+
+const SubmitReviewBody = S.Struct({
+  url: S.String,
+  body: S.String,
+  event: S.Literals(["COMMENT", "APPROVE", "REQUEST_CHANGES"]),
+});
+
+const decodeBody = <A, I>(
+  request: HttpServerRequest.HttpServerRequest,
+  schema: S.Codec<A, I>,
+) =>
+  request.json.pipe(
+    Effect.flatMap(S.decodeUnknownEffect(schema)),
+    Effect.mapError(() =>
+      new InvalidReviewRequest({ message: "The review request body is invalid." }),
+    ),
+  );
 
 const handleDiff = (request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
@@ -132,6 +175,92 @@ const handleFile = (request: HttpServerRequest.HttpServerRequest) =>
     }),
   );
 
+const handleReviews = (request: HttpServerRequest.HttpServerRequest) =>
+  Effect.gen(function* () {
+    const requestUrl = new URL(request.url, "http://localhost:8787");
+    const target = yield* pullTarget(requestUrl.searchParams.get("url") ?? "");
+    const comments = yield* loadReviewComments(target);
+    return HttpServerResponse.jsonUnsafe({ comments });
+  }).pipe(
+    Effect.catchTags({
+      InvalidGitHubUrl: error =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+        ),
+      InvalidReviewRequest: error =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+        ),
+      GitHubFetchFailed: error =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
+        ),
+    }),
+  );
+
+const handleReviewReply = (request: HttpServerRequest.HttpServerRequest) =>
+  Effect.gen(function* () {
+    const input = yield* decodeBody(request, ReplyBody);
+    if (input.body.trim() === "") {
+      return yield* new InvalidReviewRequest({ message: "Write a reply before posting." });
+    }
+    const target = yield* pullTarget(input.url);
+    const comment = yield* replyToReviewComment(
+      target,
+      input.commentId,
+      input.body.trim(),
+    );
+    if (comment === undefined) {
+      return yield* new InvalidReviewRequest({
+        message: "GitHub returned an unexpected reply response.",
+      });
+    }
+    return HttpServerResponse.jsonUnsafe({ comment });
+  }).pipe(
+    Effect.catchTags({
+      InvalidGitHubUrl: error =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+        ),
+      InvalidReviewRequest: error =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+        ),
+      GitHubFetchFailed: error =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
+        ),
+    }),
+  );
+
+const handleSubmitReview = (request: HttpServerRequest.HttpServerRequest) =>
+  Effect.gen(function* () {
+    const input = yield* decodeBody(request, SubmitReviewBody);
+    if (input.event !== "APPROVE" && input.body.trim() === "") {
+      return yield* new InvalidReviewRequest({
+        message: "Comment and request-changes reviews require a summary.",
+      });
+    }
+    const target = yield* pullTarget(input.url);
+    yield* submitPullRequestReview(target, input.body.trim(), input.event);
+    return HttpServerResponse.jsonUnsafe({ event: input.event });
+  }).pipe(
+    Effect.catchTags({
+      InvalidGitHubUrl: error =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+        ),
+      InvalidReviewRequest: error =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+        ),
+      GitHubFetchFailed: error =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
+        ),
+    }),
+  );
+
 const handleMoves = (request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
     const requestUrl = new URL(request.url, "http://localhost:8787");
@@ -166,6 +295,9 @@ const Routes = Layer.mergeAll(
   HttpRouter.add("GET", "/api/file", handleFile),
   HttpRouter.add("GET", "/api/semantic", handleSemantic),
   HttpRouter.add("GET", "/api/moves", handleMoves),
+  HttpRouter.add("GET", "/api/reviews", handleReviews),
+  HttpRouter.add("POST", "/api/reviews/reply", handleReviewReply),
+  HttpRouter.add("POST", "/api/reviews/submit", handleSubmitReview),
 ).pipe(
   Layer.provide(NodeHttpClient.layerUndici),
   Layer.provide(NodeServices.layer),

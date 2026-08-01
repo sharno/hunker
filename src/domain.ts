@@ -120,6 +120,47 @@ export const FullFileState = S.Union([
 ]);
 export type FullFileState = typeof FullFileState.Type;
 
+export const GitHubReviewComment = S.Struct({
+  id: S.Number,
+  rootId: S.Number,
+  path: S.String,
+  body: S.String,
+  author: S.String,
+  htmlUrl: S.String,
+  createdAt: S.String,
+  line: S.NullOr(S.Number),
+  side: S.Literals(["LEFT", "RIGHT"]),
+});
+export type GitHubReviewComment = typeof GitHubReviewComment.Type;
+
+export const GitHubReviews = S.Union([
+  S.TaggedStruct("Idle", {}),
+  S.TaggedStruct("Loading", {}),
+  S.TaggedStruct("Ready", { comments: S.Array(GitHubReviewComment) }),
+  S.TaggedStruct("Failed", { error: S.String }),
+]);
+export type GitHubReviews = typeof GitHubReviews.Type;
+
+export const ReplyDraft = S.Struct({ commentId: S.Number, body: S.String });
+export type ReplyDraft = typeof ReplyDraft.Type;
+export const ReplyState = S.Union([
+  S.TaggedStruct("Loading", { commentId: S.Number }),
+  S.TaggedStruct("Failed", { commentId: S.Number, error: S.String }),
+]);
+export type ReplyState = typeof ReplyState.Type;
+
+export const ReviewSubmission = S.Union([
+  S.TaggedStruct("Idle", {}),
+  S.TaggedStruct("Loading", {
+    event: S.Literals(["COMMENT", "APPROVE", "REQUEST_CHANGES"]),
+  }),
+  S.TaggedStruct("Succeeded", {
+    event: S.Literals(["COMMENT", "APPROVE", "REQUEST_CHANGES"]),
+  }),
+  S.TaggedStruct("Failed", { error: S.String }),
+]);
+export type ReviewSubmission = typeof ReviewSubmission.Type;
+
 export const Model = S.Struct({
   phase: S.Literals(["ready", "loading", "error"]),
   error: S.String,
@@ -141,6 +182,12 @@ export const Model = S.Struct({
   collapsedPaths: S.Array(S.String),
   collapsedHunks: S.Array(S.String),
   fullFileStates: S.Array(FullFileState),
+  showGitHubReviews: S.Boolean,
+  githubReviews: GitHubReviews,
+  replyDrafts: S.Array(ReplyDraft),
+  replyStates: S.Array(ReplyState),
+  reviewBody: S.String,
+  reviewSubmission: ReviewSubmission,
 });
 export type Model = typeof Model.Type;
 
@@ -199,6 +246,29 @@ export const FailedFullFile = m("FailedFullFile", {
   path: S.String,
   error: S.String,
 });
+export const ToggledGitHubReviews = m("ToggledGitHubReviews");
+export const LoadedGitHubReviews = m("LoadedGitHubReviews", {
+  comments: S.Array(GitHubReviewComment),
+});
+export const FailedGitHubReviews = m("FailedGitHubReviews", { error: S.String });
+export const ChangedReplyDraft = m("ChangedReplyDraft", {
+  commentId: S.Number,
+  body: S.String,
+});
+export const SubmittedReply = m("SubmittedReply", { commentId: S.Number });
+export const PostedReply = m("PostedReply", { comment: GitHubReviewComment });
+export const FailedReply = m("FailedReply", {
+  commentId: S.Number,
+  error: S.String,
+});
+export const ChangedReviewBody = m("ChangedReviewBody", { body: S.String });
+export const SubmittedReview = m("SubmittedReview", {
+  event: S.Literals(["COMMENT", "APPROVE", "REQUEST_CHANGES"]),
+});
+export const PostedReview = m("PostedReview", {
+  event: S.Literals(["COMMENT", "APPROVE", "REQUEST_CHANGES"]),
+});
+export const FailedReviewSubmission = m("FailedReviewSubmission", { error: S.String });
 
 export const Message = S.Union([
   ChangedPrUrl,
@@ -227,5 +297,16 @@ export const Message = S.Union([
   ToggledFullFile,
   LoadedFullFile,
   FailedFullFile,
+  ToggledGitHubReviews,
+  LoadedGitHubReviews,
+  FailedGitHubReviews,
+  ChangedReplyDraft,
+  SubmittedReply,
+  PostedReply,
+  FailedReply,
+  ChangedReviewBody,
+  SubmittedReview,
+  PostedReview,
+  FailedReviewSubmission,
 ]);
 export type Message = typeof Message.Type;

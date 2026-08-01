@@ -62,3 +62,30 @@ export const semanticResponse = {
     },
   ],
 } as const;
+
+export const reviewCommentsResponse = {
+  comments: [
+    {
+      id: 100,
+      rootId: 100,
+      path: "src/greet.ts",
+      body: "Could this keep the original parameter name?",
+      author: "alice-reviewer",
+      htmlUrl: "https://github.com/example/hunker-demo/pull/42#discussion_r100",
+      createdAt: "2026-07-30T12:00:00Z",
+      line: 1,
+      side: "RIGHT",
+    },
+    {
+      id: 101,
+      rootId: 100,
+      path: "src/greet.ts",
+      body: "The rename makes the template clearer.",
+      author: "review-agent",
+      htmlUrl: "https://github.com/example/hunker-demo/pull/42#discussion_r101",
+      createdAt: "2026-07-30T12:05:00Z",
+      line: 1,
+      side: "RIGHT",
+    },
+  ],
+} as const;

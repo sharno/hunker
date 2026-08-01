@@ -72,7 +72,28 @@ const githubHeaders = {
   "x-github-api-version": "2022-11-28",
 };
 
-export const executeGitHub = (url: string, accept: string) =>
+const githubErrorMessage = (status: number, anonymous: boolean) => {
+  if (status === 404) {
+    return anonymous
+      ? "That change may be private. Run gh auth login or set GITHUB_TOKEN."
+      : "That change could not be found or your GitHub account cannot access it.";
+  }
+  if (status === 401) {
+    return "GitHub rejected the local credential. Run gh auth login again.";
+  }
+  if (status === 403) {
+    return "GitHub denied this request. Check that the local token has pull-request access and try again.";
+  }
+  if (status === 422) {
+    return "GitHub rejected this review action. Refresh the PR and try again.";
+  }
+  return `GitHub returned ${status}. Try again in a moment.`;
+};
+
+export const executeGitHubRequest = (
+  request: HttpClientRequest.HttpClientRequest,
+  accept: string,
+) =>
   Effect.gen(function* () {
     const client = yield* HttpClient.HttpClient;
     const auth = yield* GitHubAuth;
@@ -80,23 +101,21 @@ export const executeGitHub = (url: string, accept: string) =>
       onNone: () => ({}),
       onSome: value => ({ authorization: `Bearer ${value}` }),
     });
-    const request = HttpClientRequest.get(url).pipe(
+    const authenticatedRequest = request.pipe(
       HttpClientRequest.setHeaders({ ...githubHeaders, ...authorization, accept }),
     );
-    const response = yield* client.execute(request);
+    const response = yield* client.execute(authenticatedRequest);
     if (response.status < 200 || response.status >= 300) {
       return yield* new GitHubFetchFailed({
         status: response.status,
-        message:
-          response.status === 404
-            ? auth.source === "anonymous"
-              ? "That change may be private. Run gh auth login or set GITHUB_TOKEN."
-              : "That change could not be found or your GitHub account cannot access it."
-            : `GitHub returned ${response.status}. Try again in a moment.`,
+        message: githubErrorMessage(response.status, auth.source === "anonymous"),
       });
     }
     return response;
   });
+
+export const executeGitHub = (url: string, accept: string) =>
+  executeGitHubRequest(HttpClientRequest.get(url), accept);
 
 const asRecord = (value: unknown): Readonly<Record<string, unknown>> =>
   typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
