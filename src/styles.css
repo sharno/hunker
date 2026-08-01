@@ -735,6 +735,20 @@ kbd {
   color: #736b8a;
 }
 
+.semantic-banner.is-error {
+  color: #6e3027;
+  background: #fff0ed;
+  border-bottom-color: #edcbc5;
+}
+
+.semantic-banner.is-error .semantic-icon {
+  background: #f4cdc6;
+}
+
+.semantic-banner.is-error div span {
+  color: #8d5e57;
+}
+
 .confidence {
   padding: 3px 6px;
   border: 1px solid #c9bee8;
@@ -854,6 +868,21 @@ kbd {
 
 .split-cell.line-hunk {
   grid-column: auto;
+}
+
+.semantic-gap {
+  grid-column: 1 / -1;
+  min-height: 24px;
+  padding: 3px 14px 3px 112px;
+  color: #77708c;
+  background: #f0edf8;
+  border-top: 1px solid #ddd7ec;
+  border-bottom: 1px solid #ddd7ec;
+  font-size: 9px;
+}
+
+.split-lines .semantic-gap {
+  padding-left: 66px;
 }
 
 .diff-footer {
