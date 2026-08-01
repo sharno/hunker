@@ -611,7 +611,18 @@ const requestCommitDiff = (model: ModelType, sha: string): UpdateReturn => {
 const requestReviewLocation = (model: ModelType): UpdateReturn => {
   if (model.reviewTab === "files") return requestSelectedIntelligence(model);
   const [withCommits, commitCommands] = requestCommits(model);
-  if (model.selectedCommit === "") return [withCommits, commitCommands];
+  if (model.selectedCommit === "" || withCommits.commits._tag !== "Ready") {
+    return [withCommits, commitCommands];
+  }
+  if (!withCommits.commits.commits.some(commit => commit.sha === model.selectedCommit)) {
+    return synchronizeReviewUrl(
+      evo(withCommits, {
+        selectedCommit: () => "",
+        commitDiff: () => ({ _tag: "Idle" as const }),
+      }),
+      commitCommands,
+    );
+  }
   const [withDiff, diffCommands] = requestCommitDiff(
     withCommits,
     model.selectedCommit,
@@ -837,12 +848,28 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         evo(model, { phase: () => "error" as const, error: () => error }),
         [],
       ],
-      LoadedCommits: ({ commits }) => [
-        evo(model, {
+      LoadedCommits: ({ commits }) => {
+        const loaded = evo(model, {
           commits: () => ({ _tag: "Ready" as const, commits }),
-        }),
-        [],
-      ],
+        });
+        if (loaded.reviewTab !== "commits" || loaded.selectedCommit === "") {
+          return [loaded, []];
+        }
+        if (!commits.some(commit => commit.sha === loaded.selectedCommit)) {
+          return synchronizeReviewUrl(
+            evo(loaded, {
+              selectedCommit: () => "",
+              commitDiff: () => ({ _tag: "Idle" as const }),
+            }),
+            [],
+          );
+        }
+        const [withDiff, commands] = requestCommitDiff(
+          loaded,
+          loaded.selectedCommit,
+        );
+        return synchronizeReviewUrl(withDiff, commands);
+      },
       FailedCommits: ({ error }) => [
         evo(model, {
           commits: () => ({ _tag: "Failed" as const, error }),

@@ -281,6 +281,39 @@ test("lists PR commits and opens a URL-persisted commit diff", async ({ page }) 
   await expect(page.locator(".diff-panel")).toContainText("const message");
 });
 
+test("drops a stale commit when restoring URL state for another PR", async ({
+  page,
+}) => {
+  let commitDiffRequests = 0;
+  await page.route("**/api/diff?**", route => {
+    const target = new URL(route.request().url()).searchParams.get("url") ?? "";
+    if (target.includes("/commit/")) commitDiffRequests += 1;
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: reviewResponse,
+    });
+  });
+  await page.route("**/api/commits?**", route =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: commitsResponse,
+    }),
+  );
+
+  await page.goto(
+    "/example/hunker-demo/pull/42?scope=full&view=unified&whitespace=show&semantic=off&inline=off&syntax=off&sidebar=collapsed&reviews=hide&tab=commits&commit=deadbee&file=src%2Fstale.ts",
+  );
+
+  await expect(page.locator(".commit-row")).toHaveCount(2);
+  await expect(page).toHaveURL(url =>
+    url.searchParams.get("tab") === "commits" &&
+    url.searchParams.get("commit") === null,
+  );
+  expect(commitDiffRequests).toBe(0);
+});
+
 test("shows and hides inline GitHub reviews and posts replies and review decisions", async ({ page }) => {
   let reviewLoads = 0;
   await page.route("**/api/diff?**", route =>
