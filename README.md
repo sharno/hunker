@@ -1,6 +1,6 @@
 # Hunker
 
-Hunker is a focused pull-request diff viewer for reviewing human- and agent-written changes. It reduces visual noise with whitespace filtering, character-level highlighting, syntax highlighting, and syntax-aware structural diffs powered by ast-grep and tree-sitter.
+Hunker is a focused pull-request diff viewer for reviewing human- and agent-written changes. It reduces visual noise with whitespace filtering, token- or character-level highlighting, syntax highlighting, and syntax-aware structural diffs powered by ast-grep and tree-sitter.
 
 The stack is Effect end to end:
 
@@ -24,14 +24,14 @@ The stack is Effect end to end:
 - `backend/github-reviews.ts` — review-thread reads, replies, and review submission
 - `backend/ast-grep-analysis.ts` — parser selection, AST units, and structural fingerprints
 - `backend/semantic-engine.ts` — Effect service, semantic matching, and review-wide move detection
-- `backend/character-diff-engine.ts` — native Git whole-file alignment and character ranges
+- `backend/character-diff-engine.ts` — native Git whole-file alignment and inline token/character ranges
 - `backend/server.ts` — Effect HTTP route composition
 
 ## Run locally
 
 Requires Bun, Node.js 22 or newer, and Git. ast-grep runs in the server process
-through its native TypeScript package. Character diffs invoke the locally
-installed Git binary through an Effect service.
+through its native TypeScript package. Inline diffs invoke the locally installed
+Git binary through an Effect service.
 
 ```bash
 bun install
@@ -43,10 +43,11 @@ Open [http://localhost:5173](http://localhost:5173). The API runs on port `8787`
 Loading a review replaces the local address with a shareable route such as
 `http://localhost:5173/radarlabs/server/pull/7848`. Opening that route in another
 tab or reloading it fetches the review automatically. The query string records
-the selected file, full/file scope, layout, whitespace, semantic, character-diff,
-syntax-highlighting, review, and sidebar settings, so copying the address restores the same review view. Use
-the Refresh button in the review toolbar to discard cached semantic results and
-pull the latest diff from GitHub without losing those settings.
+the selected file, full/file scope, layout, whitespace, semantic, inline-diff,
+syntax-highlighting, review, and sidebar settings, so copying the address
+restores the same review view. Use the Refresh button in the review toolbar to
+discard cached semantic results and pull the latest diff from GitHub without
+losing those settings.
 
 Once a review loads, Hunker replaces the separate loader and controls bars with
 a single 48px sticky toolbar. Scope and layout remain directly accessible;
@@ -59,18 +60,19 @@ review without another network request.
 
 Syntax highlighting is enabled by default and can be toggled from the review
 controls. Lowlight produces a token tree that Foldkit renders as safe spans, so
-syntax colors compose with character-diff overlays without injecting HTML.
+syntax colors compose with inline-diff overlays without injecting HTML.
 Hunker registers only its supported grammars, including JavaScript, TypeScript,
 Python, Rust, OpenTofu/HCL, Go, shell, JSON, YAML, HTML, CSS, SQL, C/C++, Java,
 and Markdown.
 
-Character highlighting is calculated from the complete base and head files,
-not from adjacent patch lines. The backend runs Git's histogram diff with
-porcelain word-diff output and a one-character token regex, then returns typed
-line pairings and character ranges to the renderer. This lets unified and
-side-by-side views share the same alignment, handles multi-line replacements,
-and composes with the whitespace setting. Results are cached by file contents
-and never expose temporary paths to the browser.
+Inline highlighting is calculated from the complete base and head files, not
+from adjacent patch lines. Token mode is the default and highlights code-oriented
+words and punctuation; Character mode is available for exact text edits, and Off
+removes inline highlighting. The backend runs Git's histogram diff with porcelain
+word-diff output, then returns typed line pairings and ranges to the renderer.
+This lets unified and side-by-side views share the same alignment, handles
+multi-line replacements, and composes with the whitespace setting. Results are
+cached by file contents and never expose temporary paths to the browser.
 
 GitHub review threads can be shown or hidden inline, and that choice is recorded
 in the review URL. Hunker can reply to an existing thread and submit Comment,

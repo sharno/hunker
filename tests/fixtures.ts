@@ -100,9 +100,14 @@ const characterRows = {
   ],
 } as const;
 
-export const characterDiffResponse = (path: string, ignoreWhitespace: boolean) => ({
+export const characterDiffResponse = (
+  path: string,
+  ignoreWhitespace: boolean,
+  mode: "token" | "character",
+) => ({
   path,
   ignoreWhitespace,
+  mode,
   rows: characterRows[path as keyof typeof characterRows] ?? [],
 });
 

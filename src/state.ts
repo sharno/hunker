@@ -42,7 +42,7 @@ import {
   SemanticResult,
   SubmittedReply,
   SubmittedReview,
-  ToggledCharacterDiff,
+  SelectedInlineDiffMode,
   ToggledFileCollapse,
   ToggledFullFile,
   ToggledGitHubReviews,
@@ -197,9 +197,10 @@ const FetchCharacterDiff = Command.define("FetchCharacterDiff", {
     previousPath: S.String,
     status: S.Literals(["modified", "added", "deleted", "renamed"]),
     ignoreWhitespace: S.Boolean,
+    mode: S.Literals(["token", "character"]),
   },
   messages: [LoadedCharacterDiff, FailedCharacterDiff],
-  execute: ({ url, path, previousPath, status, ignoreWhitespace }) =>
+  execute: ({ url, path, previousPath, status, ignoreWhitespace, mode }) =>
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient;
       const query = new URLSearchParams({
@@ -208,6 +209,7 @@ const FetchCharacterDiff = Command.define("FetchCharacterDiff", {
         previousPath,
         status,
         whitespace: ignoreWhitespace ? "ignore" : "show",
+        mode,
       });
       const response = yield* client.execute(
         HttpClientRequest.get(`/api/characters?${query.toString()}`),
@@ -226,6 +228,7 @@ const FetchCharacterDiff = Command.define("FetchCharacterDiff", {
           FailedCharacterDiff({
             path,
             ignoreWhitespace,
+            mode,
             error: fetchErrorMessage(error),
           }),
         ),
@@ -431,14 +434,21 @@ const requestCharacterDiff = (
   model: ModelType,
   file: FileChange,
 ): UpdateReturn => {
+  if (model.inlineDiffMode === "off" || model.prUrl.trim() === "") {
+    return [model, []];
+  }
+  const mode = model.inlineDiffMode;
   const requested = model.characterDiffStates.some(state => {
     if (state._tag === "Failed") return false;
     return state._tag === "Ready"
       ? state.result.path === file.path &&
-          state.result.ignoreWhitespace === model.ignoreWhitespace
-      : state.path === file.path && state.ignoreWhitespace === model.ignoreWhitespace;
+          state.result.ignoreWhitespace === model.ignoreWhitespace &&
+          state.result.mode === mode
+      : state.path === file.path &&
+          state.ignoreWhitespace === model.ignoreWhitespace &&
+          state.mode === mode;
   });
-  if (!model.characterDiff || model.prUrl.trim() === "" || requested) {
+  if (requested) {
     return [model, []];
   }
   return [
@@ -449,6 +459,7 @@ const requestCharacterDiff = (
           _tag: "Loading" as const,
           path: file.path,
           ignoreWhitespace: model.ignoreWhitespace,
+          mode,
         },
       ],
     }),
@@ -459,6 +470,7 @@ const requestCharacterDiff = (
         previousPath: file.previousPath,
         status: file.status,
         ignoreWhitespace: model.ignoreWhitespace,
+        mode,
       }),
     ],
   ];
@@ -541,7 +553,7 @@ const reviewOptions = (model: ModelType): ReviewOptions => ({
   viewMode: model.viewMode,
   ignoreWhitespace: model.ignoreWhitespace,
   semantic: model.semantic,
-  characterDiff: model.characterDiff,
+  inlineDiffMode: model.inlineDiffMode,
   syntaxHighlighting: model.syntaxHighlighting,
   sidebarCollapsed: model.sidebarCollapsed,
   showGitHubReviews: model.showGitHubReviews,
@@ -557,7 +569,7 @@ const applyReviewOptions = (
     viewMode: () => options.viewMode,
     ignoreWhitespace: () => options.ignoreWhitespace,
     semantic: () => options.semantic,
-    characterDiff: () => options.characterDiff,
+    inlineDiffMode: () => options.inlineDiffMode,
     syntaxHighlighting: () => options.syntaxHighlighting,
     sidebarCollapsed: () => options.sidebarCollapsed,
     showGitHubReviews: () => options.showGitHubReviews,
@@ -692,28 +704,34 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
             ...states.filter(state =>
               state._tag === "Ready"
                 ? state.result.path !== result.path ||
-                  state.result.ignoreWhitespace !== result.ignoreWhitespace
+                  state.result.ignoreWhitespace !== result.ignoreWhitespace ||
+                  state.result.mode !== result.mode
                 : state.path !== result.path ||
-                  state.ignoreWhitespace !== result.ignoreWhitespace,
+                  state.ignoreWhitespace !== result.ignoreWhitespace ||
+                  state.mode !== result.mode,
             ),
             { _tag: "Ready" as const, result },
           ],
         }),
         [],
       ],
-      FailedCharacterDiff: ({ path, ignoreWhitespace, error }) => [
+      FailedCharacterDiff: ({ path, ignoreWhitespace, mode, error }) => [
         evo(model, {
           characterDiffStates: states => [
             ...states.filter(state =>
               state._tag === "Ready"
                 ? state.result.path !== path ||
-                  state.result.ignoreWhitespace !== ignoreWhitespace
-                : state.path !== path || state.ignoreWhitespace !== ignoreWhitespace,
+                  state.result.ignoreWhitespace !== ignoreWhitespace ||
+                  state.result.mode !== mode
+                : state.path !== path ||
+                  state.ignoreWhitespace !== ignoreWhitespace ||
+                  state.mode !== mode,
             ),
             {
               _tag: "Failed" as const,
               path,
               ignoreWhitespace,
+              mode,
               error,
             },
           ],
@@ -883,8 +901,8 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         const [updated, commands] = requestSelectedIntelligence(next);
         return synchronizeReviewUrl(updated, commands);
       },
-      ToggledCharacterDiff: () => {
-        const next = evo(model, { characterDiff: value => !value });
+      SelectedInlineDiffMode: ({ value }) => {
+        const next = evo(model, { inlineDiffMode: () => value });
         const [updated, commands] = requestSelectedIntelligence(next);
         return synchronizeReviewUrl(updated, commands);
       },
@@ -970,7 +988,7 @@ const initialModel = (prUrl: string, options: ReviewOptions) =>
     viewMode: options.viewMode,
     ignoreWhitespace: options.ignoreWhitespace,
     semantic: options.semantic,
-    characterDiff: options.characterDiff,
+    inlineDiffMode: options.inlineDiffMode,
     syntaxHighlighting: options.syntaxHighlighting,
     reviewedPaths: [],
     semanticResults: [],

@@ -115,6 +115,9 @@ export const CharacterRange = S.Struct({
 });
 export type CharacterRange = typeof CharacterRange.Type;
 
+export const InlineDiffMode = S.Literals(["token", "character", "off"]);
+export type InlineDiffMode = typeof InlineDiffMode.Type;
+
 export const CharacterDiffRow = S.Struct({
   oldLine: S.NullOr(S.Number),
   newLine: S.NullOr(S.Number),
@@ -126,6 +129,7 @@ export type CharacterDiffRow = typeof CharacterDiffRow.Type;
 export const CharacterDiffResult = S.Struct({
   path: S.String,
   ignoreWhitespace: S.Boolean,
+  mode: S.Literals(["token", "character"]),
   rows: S.Array(CharacterDiffRow),
 });
 export type CharacterDiffResult = typeof CharacterDiffResult.Type;
@@ -134,11 +138,13 @@ export const CharacterDiffState = S.Union([
   S.TaggedStruct("Loading", {
     path: S.String,
     ignoreWhitespace: S.Boolean,
+    mode: S.Literals(["token", "character"]),
   }),
   S.TaggedStruct("Ready", { result: CharacterDiffResult }),
   S.TaggedStruct("Failed", {
     path: S.String,
     ignoreWhitespace: S.Boolean,
+    mode: S.Literals(["token", "character"]),
     error: S.String,
   }),
 ]);
@@ -210,7 +216,7 @@ export const Model = S.Struct({
   viewMode: S.Literals(["unified", "split"]),
   ignoreWhitespace: S.Boolean,
   semantic: S.Boolean,
-  characterDiff: S.Boolean,
+  inlineDiffMode: InlineDiffMode,
   syntaxHighlighting: S.Boolean,
   reviewedPaths: S.Array(S.String),
   semanticResults: S.Array(SemanticResult),
@@ -263,6 +269,7 @@ export const LoadedCharacterDiff = m("LoadedCharacterDiff", {
 export const FailedCharacterDiff = m("FailedCharacterDiff", {
   path: S.String,
   ignoreWhitespace: S.Boolean,
+  mode: S.Literals(["token", "character"]),
   error: S.String,
 });
 export const ChangedFilter = m("ChangedFilter", { value: S.String });
@@ -275,7 +282,9 @@ export const SelectedReviewScope = m("SelectedReviewScope", {
 });
 export const ToggledWhitespace = m("ToggledWhitespace");
 export const ToggledSemantic = m("ToggledSemantic");
-export const ToggledCharacterDiff = m("ToggledCharacterDiff");
+export const SelectedInlineDiffMode = m("SelectedInlineDiffMode", {
+  value: InlineDiffMode,
+});
 export const ToggledSyntaxHighlighting = m("ToggledSyntaxHighlighting");
 export const ToggledSidebar = m("ToggledSidebar");
 export const ToggledReviewed = m("ToggledReviewed", { path: S.String });
@@ -342,7 +351,7 @@ export const Message = S.Union([
   SelectedReviewScope,
   ToggledWhitespace,
   ToggledSemantic,
-  ToggledCharacterDiff,
+  SelectedInlineDiffMode,
   ToggledSyntaxHighlighting,
   ToggledSidebar,
   ToggledReviewed,

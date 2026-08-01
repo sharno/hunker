@@ -5,10 +5,10 @@ import {
   ChangedPrUrl,
   RefreshedReview,
   SelectedFile,
+  SelectedInlineDiffMode,
   SelectedReviewScope,
   SelectedViewMode,
   SubmittedPrUrl,
-  ToggledCharacterDiff,
   ToggledFileCollapse,
   ToggledFullFile,
   ToggledGitHubReviews,
@@ -175,7 +175,21 @@ const viewPicker = (
 const intelligenceControls = (model: Model, h: HtmlBuilder<Message>) => [
   toggleButton("Ignore whitespace", model.ignoreWhitespace, ToggledWhitespace(), h),
   toggleButton("Semantic", model.semantic, ToggledSemantic(), h),
-  toggleButton("Character diff", model.characterDiff, ToggledCharacterDiff(), h),
+  h.div([h.Class("inline-diff-picker")], [
+    h.span([h.Class("control-label")], ["Inline diff"]),
+    h.div([h.Class("segmented")], [
+      ...(["token", "character", "off"] as const).map(mode =>
+        h.button(
+          [
+            h.Type("button"),
+            h.Class(buttonClass(model.inlineDiffMode === mode)),
+            h.OnClick(SelectedInlineDiffMode({ value: mode })),
+          ],
+          [mode === "token" ? "Token" : mode === "character" ? "Character" : "Off"],
+        ),
+      ),
+    ]),
+  ]),
   toggleButton("Syntax", model.syntaxHighlighting, ToggledSyntaxHighlighting(), h),
   model.prUrl === "" || model.meta.number === "compare"
     ? h.empty
@@ -193,7 +207,7 @@ const compactReviewToolbar = (model: Model, h: HtmlBuilder<Message>): Html => {
   const activeOptions = [
     model.ignoreWhitespace,
     model.semantic,
-    model.characterDiff,
+    model.inlineDiffMode !== "off",
     model.syntaxHighlighting,
     model.meta.number !== "compare" && model.showGitHubReviews,
   ].filter(Boolean).length;
@@ -550,7 +564,12 @@ const diffPanelView = (
         state._tag === "Ready"
           ? state.result.ignoreWhitespace
           : state.ignoreWhitespace;
-      return statePath === file.path && ignoresWhitespace === model.ignoreWhitespace;
+      const mode = state._tag === "Ready" ? state.result.mode : state.mode;
+      return (
+        statePath === file.path &&
+        ignoresWhitespace === model.ignoreWhitespace &&
+        mode === model.inlineDiffMode
+      );
     },
   );
   const parsedSemantic =
@@ -700,9 +719,9 @@ const diffPanelView = (
                 h.span([], [fullFileState.error]),
               ])
             : h.empty,
-          model.characterDiff && characterDiffState?._tag === "Failed"
+          model.inlineDiffMode !== "off" && characterDiffState?._tag === "Failed"
             ? h.div([h.Class("file-context-error"), h.Role("alert")], [
-                h.strong([], ["Could not calculate character changes"]),
+                h.strong([], ["Could not calculate inline changes"]),
                 h.span([], [characterDiffState.error]),
               ])
             : h.empty,
@@ -727,8 +746,20 @@ const diffPanelView = (
                 h.span([], ["Only formatting or comments changed in this file."]),
               ])
             : model.viewMode === "unified"
-              ? unifiedDiffView(lines, model.characterDiff, movedRanges, interaction, h)
-              : splitDiffView(lines, model.characterDiff, movedRanges, interaction, h),
+              ? unifiedDiffView(
+                  lines,
+                  model.inlineDiffMode !== "off",
+                  movedRanges,
+                  interaction,
+                  h,
+                )
+              : splitDiffView(
+                  lines,
+                  model.inlineDiffMode !== "off",
+                  movedRanges,
+                  interaction,
+                  h,
+                ),
           h.div([h.Class("diff-footer")], [
             h.span([], [fullFileState?._tag === "Ready" ? "End of file" : "End of patch"]),
             h.button([h.Type("button"), h.Class("comment-button")], [

@@ -15,12 +15,16 @@ test.beforeEach(async ({ page }) => {
   await page.route("**/api/characters?**", route => {
     const requestUrl = new URL(route.request().url());
     const path = requestUrl.searchParams.get("path") ?? "";
+    const mode = requestUrl.searchParams.get("mode") === "character"
+      ? "character"
+      : "token";
     return route.fulfill({
       status: 200,
       contentType: "application/json",
       json: characterDiffResponse(
         path,
         requestUrl.searchParams.get("whitespace") === "ignore",
+        mode,
       ),
     });
   });
@@ -77,6 +81,14 @@ test("loads a PR and renders ast-grep intelligence in both review layouts", asyn
   await expect(page.locator(".line-semantic")).not.toHaveCount(0);
 
   await page.locator(".toolbar-options summary").click();
+  const tokenMode = page.getByRole("button", { name: "Token", exact: true });
+  const characterMode = page.getByRole("button", { name: "Character", exact: true });
+  await expect(tokenMode).toHaveClass(classToken("is-active"));
+  await characterMode.click();
+  await expect(characterMode).toHaveClass(classToken("is-active"));
+  await expect(page).toHaveURL(url => url.searchParams.get("inline") === "character");
+  await tokenMode.click();
+  await expect(page).toHaveURL(url => url.searchParams.get("inline") === "token");
   const syntaxToggle = page.getByRole("button", { name: "Syntax", exact: true });
   await syntaxToggle.click();
   await expect(page.locator('.diff-lines [class*="hljs-"]')).toHaveCount(0);
@@ -106,7 +118,7 @@ test("loads a PR and renders ast-grep intelligence in both review layouts", asyn
     url.searchParams.get("view") === "unified" &&
     url.searchParams.get("whitespace") === "ignore" &&
     url.searchParams.get("semantic") === "off" &&
-    url.searchParams.get("characters") === "on" &&
+    url.searchParams.get("inline") === "token" &&
     url.searchParams.get("syntax") === "on" &&
     url.searchParams.get("sidebar") === "expanded" &&
     url.searchParams.get("file") === "src/greet.ts",
@@ -137,7 +149,7 @@ test("loads a copied review route and refreshes it from GitHub", async ({ page }
   });
 
   const sharedRoute =
-    "/example/hunker-demo/pull/42?scope=full&view=unified&whitespace=show&semantic=off&characters=off&syntax=off&sidebar=collapsed&reviews=hide&file=src%2Fmessage.ts";
+    "/example/hunker-demo/pull/42?scope=full&view=unified&whitespace=show&semantic=off&inline=off&syntax=off&sidebar=collapsed&reviews=hide&file=src%2Fmessage.ts";
   await page.goto(sharedRoute);
 
   await expect(page.getByRole("heading", { name: "Review revision 1" })).toBeVisible();
@@ -167,9 +179,8 @@ test("loads a copied review route and refreshes it from GitHub", async ({ page }
     "aria-pressed",
     "false",
   );
-  await expect(page.getByRole("button", { name: "Character diff" })).toHaveAttribute(
-    "aria-pressed",
-    "false",
+  await expect(page.getByRole("button", { name: "Off", exact: true })).toHaveClass(
+    classToken("is-active"),
   );
   await expect(page.getByRole("button", { name: "Syntax", exact: true })).toHaveAttribute(
     "aria-pressed",
@@ -244,7 +255,7 @@ test("shows and hides inline GitHub reviews and posts replies and review decisio
   });
 
   await page.goto(
-    "/example/hunker-demo/pull/42?scope=file&view=unified&whitespace=ignore&semantic=off&characters=on&syntax=on&sidebar=expanded&reviews=show&file=src%2Fgreet.ts",
+    "/example/hunker-demo/pull/42?scope=file&view=unified&whitespace=ignore&semantic=off&inline=token&syntax=on&sidebar=expanded&reviews=show&file=src%2Fgreet.ts",
   );
   await expect(page.locator(".github-review-thread")).toHaveCount(2);
   const openThread = page.locator(".github-review-thread").filter({
@@ -377,7 +388,7 @@ export const untouchedFooter = true;
   });
 
   await page.goto(
-    "/example/hunker-demo/pull/42?scope=file&view=unified&whitespace=ignore&semantic=off&characters=on&syntax=on&sidebar=expanded&reviews=hide&file=src%2Fgreet.ts",
+    "/example/hunker-demo/pull/42?scope=file&view=unified&whitespace=ignore&semantic=off&inline=token&syntax=on&sidebar=expanded&reviews=hide&file=src%2Fgreet.ts",
   );
   const panel = page.locator(".diff-panel");
   await expect(panel).toHaveCount(1);

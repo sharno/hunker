@@ -7,7 +7,7 @@ export type ReviewOptions = Readonly<{
   viewMode: "unified" | "split";
   ignoreWhitespace: boolean;
   semantic: boolean;
-  characterDiff: boolean;
+  inlineDiffMode: "token" | "character" | "off";
   syntaxHighlighting: boolean;
   sidebarCollapsed: boolean;
   showGitHubReviews: boolean;
@@ -19,7 +19,7 @@ export const defaultReviewOptions: ReviewOptions = {
   viewMode: "split",
   ignoreWhitespace: true,
   semantic: true,
-  characterDiff: true,
+  inlineDiffMode: "token",
   syntaxHighlighting: true,
   sidebarCollapsed: false,
   showGitHubReviews: true,
@@ -95,12 +95,22 @@ export const reviewOptionsFromSearch = (search: string): ReviewOptions => {
   const params = new URLSearchParams(search);
   const scope = params.get("scope");
   const view = params.get("view");
+  const inline = params.get("inline");
+  const legacyCharacters = params.get("characters");
+  const inlineDiffMode =
+    inline === "token" || inline === "character" || inline === "off"
+      ? inline
+      : legacyCharacters === "on"
+        ? "character"
+        : legacyCharacters === "off"
+          ? "off"
+          : "token";
   return {
     reviewScope: scope === "full" || scope === "file" ? scope : "file",
     viewMode: view === "unified" || view === "split" ? view : "split",
     ignoreWhitespace: optionBoolean(params.get("whitespace"), "ignore", "show", true),
     semantic: optionBoolean(params.get("semantic"), "on", "off", true),
-    characterDiff: optionBoolean(params.get("characters"), "on", "off", true),
+    inlineDiffMode,
     syntaxHighlighting: optionBoolean(params.get("syntax"), "on", "off", true),
     sidebarCollapsed: optionBoolean(
       params.get("sidebar"),
@@ -124,7 +134,7 @@ export const localReviewUrl = (
     view: options.viewMode,
     whitespace: options.ignoreWhitespace ? "ignore" : "show",
     semantic: options.semantic ? "on" : "off",
-    characters: options.characterDiff ? "on" : "off",
+    inline: options.inlineDiffMode,
     syntax: options.syntaxHighlighting ? "on" : "off",
     sidebar: options.sidebarCollapsed ? "collapsed" : "expanded",
     reviews: options.showGitHubReviews ? "show" : "hide",

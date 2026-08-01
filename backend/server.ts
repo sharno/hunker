@@ -186,10 +186,12 @@ const handleCharacters = (request: HttpServerRequest.HttpServerRequest) =>
     const { target, path, previousPath, status } = yield* fileRequest(request);
     const pair = yield* loadFilePair(target, path, previousPath, status);
     const engine = yield* CharacterDiffEngine;
+    const mode = requestUrl.searchParams.get("mode");
     const result = yield* engine.analyzeFile({
       path,
       ...pair,
       ignoreWhitespace: requestUrl.searchParams.get("whitespace") === "ignore",
+      mode: mode === "character" ? "character" : "token",
     });
     return HttpServerResponse.jsonUnsafe(result);
   }).pipe(

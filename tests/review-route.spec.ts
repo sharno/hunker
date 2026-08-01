@@ -33,7 +33,7 @@ test("round-trips a complete review configuration through the query string", () 
     viewMode: "unified",
     ignoreWhitespace: false,
     semantic: false,
-    characterDiff: false,
+    inlineDiffMode: "off",
     syntaxHighlighting: false,
     sidebarCollapsed: true,
     showGitHubReviews: false,
@@ -45,7 +45,7 @@ test("round-trips a complete review configuration through the query string", () 
   );
 
   expect(href).toBe(
-    "/example/hunker-demo/pull/42?scope=full&view=unified&whitespace=show&semantic=off&characters=off&syntax=off&sidebar=collapsed&reviews=hide&file=src%2Fmessage+with+spaces.ts",
+    "/example/hunker-demo/pull/42?scope=full&view=unified&whitespace=show&semantic=off&inline=off&syntax=off&sidebar=collapsed&reviews=hide&file=src%2Fmessage+with+spaces.ts",
   );
   expect(reviewOptionsFromSearch(new URL(href!, "http://hunker.local").search)).toEqual(
     options,
@@ -56,4 +56,9 @@ test("uses defaults for absent or invalid review options", () => {
   expect(reviewOptionsFromSearch("?scope=wat&semantic=maybe&sidebar=nope")).toEqual(
     defaultReviewOptions,
   );
+});
+
+test("migrates legacy character diff links", () => {
+  expect(reviewOptionsFromSearch("?characters=on").inlineDiffMode).toBe("character");
+  expect(reviewOptionsFromSearch("?characters=off").inlineDiffMode).toBe("off");
 });

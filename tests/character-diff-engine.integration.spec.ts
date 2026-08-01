@@ -38,6 +38,7 @@ test("native Git aligns whole-file character changes with their actual lines", a
     oldText: `${oldLines.join("\n")}\n`,
     newText: `${newLines.join("\n")}\n`,
     ignoreWhitespace: false,
+    mode: "character",
   });
 
   expect(result.rows.map(row => [row.oldLine, row.newLine])).toEqual([
@@ -60,7 +61,30 @@ test("native Git can suppress whitespace-only changes", async () => {
     oldText: "export const answer=42;\n",
     newText: "export  const answer = 42;\n",
     ignoreWhitespace: true,
+    mode: "token",
   });
 
   expect(result.rows).toEqual([]);
+});
+
+test("native Git highlights complete code tokens by default", async () => {
+  const oldLine = "const userName = oldValue;";
+  const newLine = "const displayName = newValue;";
+  const result = await runCharacterDiff({
+    path: "src/user.ts",
+    oldText: `${oldLine}\n`,
+    newText: `${newLine}\n`,
+    ignoreWhitespace: false,
+    mode: "token",
+  });
+
+  expect(result.mode).toBe("token");
+  expect(slices(oldLine, result.rows[0]?.oldRanges ?? [])).toEqual([
+    "userName",
+    "oldValue",
+  ]);
+  expect(slices(newLine, result.rows[0]?.newRanges ?? [])).toEqual([
+    "displayName",
+    "newValue",
+  ]);
 });

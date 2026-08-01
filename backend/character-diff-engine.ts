@@ -14,6 +14,7 @@ export type CharacterDiffInput = Readonly<{
   oldText: string;
   newText: string;
   ignoreWhitespace: boolean;
+  mode: "token" | "character";
 }>;
 
 type CharacterDiffEngineShape = Readonly<{
@@ -60,6 +61,7 @@ export const parseGitCharacterDiff = (
   output: string,
   path: string,
   ignoreWhitespace: boolean,
+  mode: "token" | "character",
 ): CharacterDiffResult => {
   const rows: Array<CharacterDiffRow> = [];
   let oldLine = 0;
@@ -134,14 +136,14 @@ export const parseGitCharacterDiff = (
     }
   }
   flush();
-  return CharacterDiffResult.make({ path, ignoreWhitespace, rows });
+  return CharacterDiffResult.make({ path, ignoreWhitespace, mode, rows });
 };
 
 const contentHash = (value: string) =>
   createHash("sha256").update(value).digest("hex");
 
 const cacheKey = (input: CharacterDiffInput) =>
-  `${input.path}\u0000${input.ignoreWhitespace ? "ignore" : "show"}\u0000${contentHash(input.oldText)}\u0000${contentHash(input.newText)}`;
+  `${input.path}\u0000${input.mode}\u0000${input.ignoreWhitespace ? "ignore" : "show"}\u0000${contentHash(input.oldText)}\u0000${contentHash(input.newText)}`;
 
 const cache = new Map<string, CharacterDiffResult>();
 
@@ -171,7 +173,9 @@ const execute = (input: CharacterDiffInput) =>
         "--unified=0",
         "--diff-algorithm=histogram",
         "--word-diff=porcelain",
-        "--word-diff-regex=.",
+        input.mode === "character"
+          ? "--word-diff-regex=."
+          : "--word-diff-regex=[[:alnum:]_]+|[^[:space:]]",
         ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
         "--",
         oldPath,
@@ -193,7 +197,12 @@ const execute = (input: CharacterDiffInput) =>
           status: 502,
         });
       }
-      return parseGitCharacterDiff(stdout, input.path, input.ignoreWhitespace);
+      return parseGitCharacterDiff(
+        stdout,
+        input.path,
+        input.ignoreWhitespace,
+        input.mode,
+      );
     }),
   ).pipe(
     Effect.timeoutOrElse({
