@@ -5,6 +5,7 @@
     "": {
       "name": "site-creator-vinext-starter",
       "dependencies": {
+        "@ast-grep/lang-python": "0.0.6",
         "@ast-grep/lang-rust": "0.0.7",
         "@ast-grep/napi": "0.45.0",
         "@effect/platform-browser": "4.0.0-beta.102",
@@ -24,6 +25,8 @@
     },
   },
   "packages": {
+    "@ast-grep/lang-python": ["@ast-grep/lang-python@0.0.6", "", { "dependencies": { "@ast-grep/setup-lang": "0.0.6" }, "peerDependencies": { "tree-sitter-cli": "0.25.8" }, "optionalPeers": ["tree-sitter-cli"] }, "sha512-eF/bEBspmrxdVuPNihvZDyyJx5qtIpGEMz9l1nNQmrji7NZcUiRNC8WwzYyQCBdy1mj8HZ0Tn4I2q3gp/6Bkiw=="],
+
     "@ast-grep/lang-rust": ["@ast-grep/lang-rust@0.0.7", "", { "dependencies": { "@ast-grep/setup-lang": "0.0.6" }, "peerDependencies": { "tree-sitter-cli": "0.25.8" }, "optionalPeers": ["tree-sitter-cli"] }, "sha512-CF6jv8XmlVQgr/pFKADM87EkoGiHIrHKsG1wcX2iqgdBX5kW8wH+Zd4GP6SMme2eZogD49f19vRoRTF44iZqzg=="],
 
     "@ast-grep/napi": ["@ast-grep/napi@0.45.0", "", { "optionalDependencies": { "@ast-grep/napi-darwin-arm64": "0.45.0", "@ast-grep/napi-darwin-x64": "0.45.0", "@ast-grep/napi-linux-arm64-gnu": "0.45.0", "@ast-grep/napi-linux-arm64-musl": "0.45.0", "@ast-grep/napi-linux-x64-gnu": "0.45.0", "@ast-grep/napi-linux-x64-musl": "0.45.0", "@ast-grep/napi-win32-arm64-msvc": "0.45.0", "@ast-grep/napi-win32-ia32-msvc": "0.45.0", "@ast-grep/napi-win32-x64-msvc": "0.45.0" } }, "sha512-5dQqAVZeHfdQsXjH9FCn+A8a1tb+GVa3Asdq6cKP4l7O0KqH/gmWLswvSaPx7twWfpUwHtGpX7L9frPEAqfNng=="],

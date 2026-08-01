@@ -270,7 +270,7 @@ const engine = SemanticDiffEngine.of({
         return SemanticResult.make({
           _tag: "Unsupported",
           path: file.path,
-          reason: "ast-grep semantic analysis currently supports JavaScript, TypeScript, and Rust.",
+          reason: "ast-grep semantic analysis currently supports JavaScript, TypeScript, Python, and Rust.",
         });
       }
       try {

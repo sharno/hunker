@@ -237,3 +237,102 @@ test("detects a Rust function moved between files", async () => {
     }),
   ]);
 });
+
+test("classifies changed and renamed Python declarations", async () => {
+  const updated = await runFile({
+    path: "src/greeting.py",
+    previousPath: "",
+    status: "modified",
+    oldText: `@dataclass
+class Greeting:
+    name: str
+`,
+    newText: `@dataclass
+class Greeting:
+    name: str
+    excited: bool = False
+`,
+  });
+  expect(updated._tag).toBe("Parsed");
+  if (updated._tag !== "Parsed") return;
+  expect(updated.language).toBe("Python");
+  expect(updated.changes).toEqual([
+    expect.objectContaining({
+      _tag: "Updated",
+      kind: "decorated_definition",
+      label: "Greeting",
+    }),
+  ]);
+
+  const renamed = await runFile({
+    path: "src/greeting.py",
+    previousPath: "",
+    status: "modified",
+    oldText: "def greet(name: str) -> str:\n    return name.upper()\n",
+    newText: "def welcome(person: str) -> str:\n    return person.upper()\n",
+  });
+  expect(renamed._tag).toBe("Parsed");
+  if (renamed._tag !== "Parsed") return;
+  expect(renamed.changes).toEqual([
+    expect.objectContaining({
+      _tag: "Renamed",
+      kind: "function_definition",
+      oldLabel: "greet",
+      newLabel: "welcome",
+    }),
+  ]);
+});
+
+test("recognizes formatting-only Python changes as semantically equal", async () => {
+  const result = await runFile({
+    path: "src/math.py",
+    previousPath: "",
+    status: "modified",
+    oldText: "def add(value:int)->int:\n return value+1\n",
+    newText: "def add(value: int) -> int:\n    return value + 1\n",
+  });
+
+  expect(result).toEqual(
+    expect.objectContaining({
+      _tag: "Parsed",
+      language: "Python",
+      semanticEqual: true,
+      changes: [],
+    }),
+  );
+});
+
+test("detects a Python function moved between files", async () => {
+  const moved = `def calculate_total(values: list[int]) -> int:
+    return sum(values)
+`;
+  const result = await runReview([
+    {
+      path: "src/total.py",
+      previousPath: "",
+      status: "modified",
+      oldText: `RETAINED = True\n\n${moved}`,
+      newText: "RETAINED = True\n",
+    },
+    {
+      path: "src/billing.py",
+      previousPath: "",
+      status: "modified",
+      oldText: 'MODULE_NAME = "billing"\n',
+      newText: `MODULE_NAME = "billing"\n\n${moved}`,
+    },
+  ]);
+
+  expect(result).toEqual([
+    expect.objectContaining({
+      fromPath: "src/total.py",
+      toPath: "src/billing.py",
+      fromLine: 3,
+      toLine: 3,
+      lineCount: 2,
+      kind: "function_definition",
+      label: "calculate_total",
+      changed: false,
+    }),
+  ]);
+});

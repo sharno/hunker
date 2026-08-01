@@ -1,3 +1,4 @@
+import pythonRegistration from "@ast-grep/lang-python";
 import rustRegistration from "@ast-grep/lang-rust";
 import {
   Lang,
@@ -10,12 +11,16 @@ import type { SourceRange } from "../src/domain";
 
 export type SupportedLanguage = Readonly<{
   ast: Parameters<typeof parse>[0];
-  name: "JavaScript" | "Rust" | "TypeScript" | "TSX";
+  name: "JavaScript" | "Python" | "Rust" | "TypeScript" | "TSX";
 }>;
 
+const PYTHON_LANGUAGE = "python";
 const RUST_LANGUAGE = "rust";
 
-registerDynamicLanguage({ [RUST_LANGUAGE]: rustRegistration });
+registerDynamicLanguage({
+  [PYTHON_LANGUAGE]: pythonRegistration,
+  [RUST_LANGUAGE]: rustRegistration,
+});
 
 export type AstUnit = Readonly<{
   kind: string;
@@ -32,6 +37,9 @@ export const languageForPath = (path: string): SupportedLanguage | undefined => 
   const extension = path.split(".").at(-1)?.toLowerCase();
   if (extension === "ts") return { ast: Lang.TypeScript, name: "TypeScript" };
   if (extension === "tsx") return { ast: Lang.Tsx, name: "TSX" };
+  if (extension === "py" || extension === "pyi") {
+    return { ast: PYTHON_LANGUAGE, name: "Python" };
+  }
   if (extension === "rs") return { ast: RUST_LANGUAGE, name: "Rust" };
   if (
     extension === "js" ||
@@ -46,8 +54,11 @@ export const languageForPath = (path: string): SupportedLanguage | undefined => 
 
 const declarationKinds = new Set([
   "class_declaration",
+  "class_definition",
+  "decorated_definition",
   "enum_declaration",
   "function_declaration",
+  "function_definition",
   "interface_declaration",
   "lexical_declaration",
   "type_alias_declaration",
@@ -65,6 +76,7 @@ const declarationKinds = new Set([
   "trait_item",
   "type_item",
   "union_item",
+  "assignment",
 ]);
 
 const memberKinds = new Set([
@@ -76,11 +88,13 @@ const memberKinds = new Set([
   "const_item",
   "function_item",
   "function_signature_item",
+  "function_definition",
   "type_item",
 ]);
 
 const containerKinds = new Set([
   "class_declaration",
+  "class_definition",
   "impl_item",
   "interface_declaration",
   "mod_item",
@@ -126,7 +140,13 @@ const leafTokens = (node: SgNode, shape: boolean): ReadonlyArray<string> => {
   return children.flatMap(child => leafTokens(child, shape));
 };
 
-const nodeLabel = (node: SgNode) => {
+const nodeLabel = (node: SgNode): string => {
+  if (String(node.kind()) === "decorated_definition") {
+    const definition = node.children().find(child =>
+      ["class_definition", "function_definition"].includes(String(child.kind())),
+    );
+    if (definition !== undefined) return nodeLabel(definition);
+  }
   const queue = [...node.children()];
   while (queue.length > 0) {
     const current = queue.shift();
@@ -137,8 +157,18 @@ const nodeLabel = (node: SgNode) => {
   return String(node.kind()).replaceAll("_", " ");
 };
 
-const nodePreview = (node: SgNode) =>
-  node.text().split("\n").find(line => line.trim() !== "")?.trim().slice(0, 100) ?? "";
+const nodePreview = (node: SgNode) => {
+  const previewNode =
+    String(node.kind()) === "decorated_definition"
+      ? (node.children().find(child =>
+          ["class_definition", "function_definition"].includes(String(child.kind())),
+        ) ?? node)
+      : node;
+  return (
+    previewNode.text().split("\n").find(line => line.trim() !== "")?.trim().slice(0, 100) ??
+    ""
+  );
+};
 
 const collectUnits = (root: SgNode, includeMembers: boolean): ReadonlyArray<AstUnit> => {
   const units: Array<AstUnit> = [];
