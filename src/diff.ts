@@ -11,37 +11,18 @@ export type DiffLine = Readonly<{
 export const normalizeLine = (line: string) =>
   line.replace(/^[-+ ]/, "").replace(/\s+/g, "").trim();
 
-const semanticInsight = (
-  patch: string,
-  status: FileChangeType["status"],
-  previousPath: string,
-): string => {
-  if (status === "renamed") return `Renamed from ${previousPath}`;
-  if (status === "added") return "New behavior introduced";
-  if (status === "deleted") return "Dead path removed";
+const GENERATED_DIFF_FILES = new Set([
+  "bun.lock",
+  "cargo.lock",
+  "composer.lock",
+  "go.sum",
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+]);
 
-  const lines = patch.split("\n");
-  const removed = lines.filter(line => line.startsWith("-")).map(normalizeLine);
-  const added = lines.filter(line => line.startsWith("+")).map(normalizeLine);
-  const moved = removed.filter(line => line.length > 12 && added.includes(line));
-  if (moved.length >= 2) return `${moved.length} unchanged lines moved`;
-
-  const removedSymbol = patch.match(
-    /^-\s*(?:export\s+)?(?:const|function|class|interface|type)\s+(\w+)/m,
-  )?.[1];
-  const addedSymbol = patch.match(
-    /^\+\s*(?:export\s+)?(?:const|function|class|interface|type)\s+(\w+)/m,
-  )?.[1];
-  if (
-    removedSymbol !== undefined &&
-    addedSymbol !== undefined &&
-    removedSymbol !== addedSymbol
-  ) {
-    return `${removedSymbol} renamed to ${addedSymbol}`;
-  }
-  if (/^\+.*(?:test|describe|expect)\(/m.test(patch)) return "Coverage added";
-  return "Behavior changed";
-};
+export const isGeneratedDiffPath = (path: string) =>
+  GENERATED_DIFF_FILES.has(path.split("/").at(-1)?.toLowerCase() ?? "");
 
 export const parseGitDiff = (diff: string): ReadonlyArray<FileChangeType> => {
   const chunks = diff.split(/^diff --git /m).filter(Boolean);
@@ -74,7 +55,6 @@ export const parseGitDiff = (diff: string): ReadonlyArray<FileChangeType> => {
       additions,
       deletions,
       patch,
-      insight: semanticInsight(patch, status, renameFrom),
     });
   });
 };

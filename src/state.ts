@@ -10,12 +10,16 @@ import { evo } from "foldkit/struct";
 import {
   ChangedFilter,
   ChangedPrUrl,
+  FailedMoves,
   FailedReview,
   FailedSemantic,
+  LoadedMoves,
   LoadedReview,
   LoadedSemantic,
   Model,
+  MovedBlock,
   SelectedFile,
+  SelectedReviewScope,
   SelectedViewMode,
   SemanticResult,
   ToggledCharacterDiff,
@@ -127,6 +131,33 @@ const FetchSemantic = Command.define("FetchSemantic", {
     ),
 });
 
+const MoveResponse = S.Struct({ moves: S.Array(MovedBlock) });
+
+const FetchMoves = Command.define("FetchMoves", {
+  args: { url: S.String },
+  messages: [LoadedMoves, FailedMoves],
+  execute: ({ url }) =>
+    Effect.gen(function* () {
+      const client = yield* HttpClient.HttpClient;
+      const response = yield* client.execute(
+        HttpClientRequest.get(`/api/moves?url=${encodeURIComponent(url)}`),
+      );
+      const data: unknown = yield* response.json;
+      if (response.status < 200 || response.status >= 300) {
+        return yield* Effect.fail(
+          new Error(responseError(data, "Could not scan this review for moved code.")),
+        );
+      }
+      const decoded = yield* S.decodeUnknownEffect(MoveResponse)(data);
+      return LoadedMoves({ moves: decoded.moves });
+    }).pipe(
+      Effect.catch(error =>
+        Effect.succeed(FailedMoves({ error: fetchErrorMessage(error) })),
+      ),
+      Effect.provide(Http.layer),
+    ),
+});
+
 const requestSemantic = (model: ModelType, file: FileChange): UpdateReturn => {
   const alreadyLoaded = model.semanticResults.some(result => result.path === file.path);
   const alreadyLoading =
@@ -154,6 +185,30 @@ const requestSemantic = (model: ModelType, file: FileChange): UpdateReturn => {
   ];
 };
 
+const requestMoves = (model: ModelType): UpdateReturn => {
+  if (
+    !model.semantic ||
+    model.reviewScope !== "full" ||
+    model.prUrl.trim() === "" ||
+    model.reviewMoves._tag === "Loading" ||
+    model.reviewMoves._tag === "Ready"
+  ) {
+    return [model, []];
+  }
+  return [
+    evo(model, { reviewMoves: () => ({ _tag: "Loading" as const }) }),
+    [FetchMoves({ url: model.meta.url })],
+  ];
+};
+
+const requestSelectedIntelligence = (model: ModelType): UpdateReturn => {
+  const selected = model.files.find(file => file.path === model.selectedPath);
+  const [withSemantic, semanticCommands] =
+    selected === undefined ? [model, []] : requestSemantic(model, selected);
+  const [withMoves, moveCommands] = requestMoves(withSemantic);
+  return [withMoves, [...semanticCommands, ...moveCommands]];
+};
+
 export const update = (model: ModelType, message: Message): UpdateReturn =>
   M.value(message).pipe(
     M.withReturnType<UpdateReturn>(),
@@ -167,6 +222,7 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
             error: () => "",
             semanticResults: () => [],
             semanticRequest: () => ({ _tag: "Idle" as const }),
+            reviewMoves: () => ({ _tag: "Idle" as const }),
           }),
           [FetchReview({ url: model.prUrl.trim() })],
         ];
@@ -179,9 +235,9 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
           selectedPath: () => files[0]?.path ?? "",
           reviewedPaths: () => [],
           semanticRequest: () => ({ _tag: "Idle" as const }),
+          reviewMoves: () => ({ _tag: "Idle" as const }),
         });
-        const first = files[0];
-        return first === undefined ? [next, []] : requestSemantic(next, first);
+        return requestSelectedIntelligence(next);
       },
       FailedReview: ({ error }) => [
         evo(model, { phase: () => "error" as const, error: () => error }),
@@ -209,11 +265,26 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         }),
         [],
       ],
+      LoadedMoves: ({ moves }) => [
+        evo(model, { reviewMoves: () => ({ _tag: "Ready" as const, moves }) }),
+        [],
+      ],
+      FailedMoves: ({ error }) => [
+        evo(model, { reviewMoves: () => ({ _tag: "Failed" as const, error }) }),
+        [],
+      ],
       ChangedFilter: ({ value }) => [evo(model, { filter: () => value }), []],
       SelectedFile: ({ path }) => {
-        const next = evo(model, { selectedPath: () => path });
+        const next = evo(model, {
+          selectedPath: () => path,
+          reviewScope: () => "file" as const,
+        });
         const file = next.files.find(item => item.path === path);
         return file === undefined ? [next, []] : requestSemantic(next, file);
+      },
+      SelectedReviewScope: ({ value }) => {
+        const next = evo(model, { reviewScope: () => value });
+        return value === "full" ? requestMoves(next) : [next, []];
       },
       SelectedViewMode: ({ value }) => [evo(model, { viewMode: () => value }), []],
       ToggledWhitespace: () => [
@@ -222,8 +293,7 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
       ],
       ToggledSemantic: () => {
         const next = evo(model, { semantic: value => !value });
-        const file = next.files.find(item => item.path === next.selectedPath);
-        return file === undefined ? [next, []] : requestSemantic(next, file);
+        return requestSelectedIntelligence(next);
       },
       ToggledCharacterDiff: () => [
         evo(model, { characterDiff: value => !value }),
@@ -245,6 +315,7 @@ export const init: Runtime.ElementInit<ModelType, Message> = () => [
     meta: sampleMeta,
     files: sampleFiles,
     selectedPath: sampleFiles[0]?.path ?? "",
+    reviewScope: "file",
     viewMode: "split",
     ignoreWhitespace: true,
     semantic: true,
@@ -252,6 +323,7 @@ export const init: Runtime.ElementInit<ModelType, Message> = () => [
     reviewedPaths: [],
     semanticResults: [],
     semanticRequest: { _tag: "Idle" },
+    reviewMoves: { _tag: "Idle" },
   }),
   [],
 ];

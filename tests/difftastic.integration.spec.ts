@@ -4,6 +4,7 @@ import { Effect } from "effect";
 import { NodeServices } from "@effect/platform-node";
 
 import { runDifftastic } from "../backend/difftastic";
+import { runMovedCodeDetection } from "../backend/moved-code";
 
 test("runs the real Difftastic process and decodes its structural alignment", async () => {
   const result = await Effect.runPromise(
@@ -33,5 +34,43 @@ test("normalizes Difftastic's compact created-file response", async () => {
   expect(result.alignedLines).toEqual([
     [null, 0],
     [null, 1],
+  ]);
+});
+
+test("uses Git to detect a block moved between files", async () => {
+  const moved = `export function calculateTotal(values: number[]) {
+  const subtotal = values.reduce((sum, value) => sum + value, 0);
+  const tax = subtotal * 0.2;
+  return subtotal + tax;
+}
+`;
+  const result = await Effect.runPromise(
+    runMovedCodeDetection([
+      {
+        path: "src/total.ts",
+        previousPath: "",
+        status: "modified",
+        oldText: `export const retained = true;\n\n${moved}`,
+        newText: "export const retained = true;\n",
+      },
+      {
+        path: "src/billing.ts",
+        previousPath: "",
+        status: "modified",
+        oldText: 'export const moduleName = "billing";\n',
+        newText: `export const moduleName = "billing";\n\n${moved}`,
+      },
+    ]).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  expect(result).toEqual([
+    {
+      fromPath: "src/total.ts",
+      toPath: "src/billing.ts",
+      fromLine: 3,
+      toLine: 3,
+      lineCount: 5,
+      preview: "export function calculateTotal(values: number[]) {",
+    },
   ]);
 });

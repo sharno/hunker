@@ -20,6 +20,7 @@ The stack is Effect end to end:
 - `backend/github-auth.ts` — environment and `gh` credential discovery
 - `backend/github.ts` — GitHub URL parsing, API calls, and base/head content loading
 - `backend/difftastic.ts` — scoped Difftastic process and JSON decoding
+- `backend/moved-code.ts` — review-wide Git moved-block detection
 - `backend/server.ts` — Effect HTTP route composition
 
 ## Run locally
@@ -63,3 +64,5 @@ Semantic analysis is lazy and cached per file in the browser model. When you ope
 4. Decodes the result into the typed Hunker domain and renders it in unified or side-by-side mode.
 
 Difftastic's JSON output is currently marked unstable upstream, so `backend/difftastic.ts` is the compatibility boundary to update if its schema changes. If Difftastic cannot analyze a file, Hunker keeps the regular GitHub patch visible and shows the semantic error without failing the review.
+
+Full diff mode renders every changed file in one scroll and lazily scans the entire review with Git's `--color-moved=blocks` engine. Exact moved blocks are summarized with source and destination lines and highlighted in purple in both locations. Generated lockfiles and one-line positional noise are excluded from review-wide move results.

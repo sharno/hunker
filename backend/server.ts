@@ -16,15 +16,18 @@ import {
 } from "@effect/platform-node";
 
 import { DifftasticFailed, runDifftastic } from "./difftastic";
+import { isGeneratedDiffPath, parseGitDiff } from "../src/diff";
 import {
   GitHubFetchFailed,
   InvalidGitHubUrl,
   loadFilePair,
+  loadFilePairs,
   loadReview,
   parseGitHubUrl,
 } from "./github";
 import type { FileStatus } from "./github";
 import { GitHubAuthLive } from "./github-auth";
+import { MoveDetectionFailed, runMovedCodeDetection } from "./moved-code";
 
 class InvalidSemanticRequest extends Data.TaggedError("InvalidSemanticRequest")<{
   readonly message: string;
@@ -97,9 +100,38 @@ const handleSemantic = (request: HttpServerRequest.HttpServerRequest) =>
     }),
   );
 
+const handleMoves = (request: HttpServerRequest.HttpServerRequest) =>
+  Effect.gen(function* () {
+    const requestUrl = new URL(request.url, "http://localhost:8787");
+    const target = yield* parseGitHubUrl(requestUrl.searchParams.get("url") ?? "");
+    const review = yield* loadReview(target);
+    const files = parseGitDiff(review.diff).filter(
+      file => file.patch.includes("@@") && !isGeneratedDiffPath(file.path),
+    );
+    const pairs = yield* loadFilePairs(target, files);
+    const moves = yield* runMovedCodeDetection(pairs);
+    return HttpServerResponse.jsonUnsafe({ moves });
+  }).pipe(
+    Effect.catchTags({
+      InvalidGitHubUrl: error =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+        ),
+      GitHubFetchFailed: error =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
+        ),
+      MoveDetectionFailed: (error: MoveDetectionFailed) =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
+        ),
+    }),
+  );
+
 const Routes = Layer.mergeAll(
   HttpRouter.add("GET", "/api/diff", handleDiff),
   HttpRouter.add("GET", "/api/semantic", handleSemantic),
+  HttpRouter.add("GET", "/api/moves", handleMoves),
 ).pipe(
   Layer.provide(NodeHttpClient.layerUndici),
   Layer.provide(NodeServices.layer),

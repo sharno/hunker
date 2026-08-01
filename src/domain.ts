@@ -8,7 +8,6 @@ export const FileChange = S.Struct({
   additions: S.Number,
   deletions: S.Number,
   patch: S.String,
-  insight: S.String,
 });
 export type FileChange = typeof FileChange.Type;
 
@@ -60,6 +59,24 @@ export const SemanticRequest = S.Union([
 ]);
 export type SemanticRequest = typeof SemanticRequest.Type;
 
+export const MovedBlock = S.Struct({
+  fromPath: S.String,
+  toPath: S.String,
+  fromLine: S.Number,
+  toLine: S.Number,
+  lineCount: S.Number,
+  preview: S.String,
+});
+export type MovedBlock = typeof MovedBlock.Type;
+
+export const ReviewMoves = S.Union([
+  S.TaggedStruct("Idle", {}),
+  S.TaggedStruct("Loading", {}),
+  S.TaggedStruct("Ready", { moves: S.Array(MovedBlock) }),
+  S.TaggedStruct("Failed", { error: S.String }),
+]);
+export type ReviewMoves = typeof ReviewMoves.Type;
+
 export const Model = S.Struct({
   phase: S.Literals(["ready", "loading", "error"]),
   error: S.String,
@@ -68,6 +85,7 @@ export const Model = S.Struct({
   meta: ReviewMeta,
   files: S.Array(FileChange),
   selectedPath: S.String,
+  reviewScope: S.Literals(["file", "full"]),
   viewMode: S.Literals(["unified", "split"]),
   ignoreWhitespace: S.Boolean,
   semantic: S.Boolean,
@@ -75,6 +93,7 @@ export const Model = S.Struct({
   reviewedPaths: S.Array(S.String),
   semanticResults: S.Array(SemanticResult),
   semanticRequest: SemanticRequest,
+  reviewMoves: ReviewMoves,
 });
 export type Model = typeof Model.Type;
 
@@ -93,10 +112,15 @@ export const FailedSemantic = m("FailedSemantic", {
   path: S.String,
   error: S.String,
 });
+export const LoadedMoves = m("LoadedMoves", { moves: S.Array(MovedBlock) });
+export const FailedMoves = m("FailedMoves", { error: S.String });
 export const ChangedFilter = m("ChangedFilter", { value: S.String });
 export const SelectedFile = m("SelectedFile", { path: S.String });
 export const SelectedViewMode = m("SelectedViewMode", {
   value: S.Literals(["unified", "split"]),
+});
+export const SelectedReviewScope = m("SelectedReviewScope", {
+  value: S.Literals(["file", "full"]),
 });
 export const ToggledWhitespace = m("ToggledWhitespace");
 export const ToggledSemantic = m("ToggledSemantic");
@@ -110,9 +134,12 @@ export const Message = S.Union([
   FailedReview,
   LoadedSemantic,
   FailedSemantic,
+  LoadedMoves,
+  FailedMoves,
   ChangedFilter,
   SelectedFile,
   SelectedViewMode,
+  SelectedReviewScope,
   ToggledWhitespace,
   ToggledSemantic,
   ToggledCharacterDiff,

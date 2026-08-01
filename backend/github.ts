@@ -194,6 +194,33 @@ const loadFileContent = (target: GitHubTarget, path: string, ref: string) =>
 
 export type FileStatus = "modified" | "added" | "deleted" | "renamed";
 
+export type FileDescriptor = Readonly<{
+  path: string;
+  previousPath: string;
+  status: FileStatus;
+}>;
+
+const loadFilePairWithRefs = (
+  target: GitHubTarget,
+  refs: Readonly<{ base: string; head: string }>,
+  file: FileDescriptor,
+) =>
+  Effect.gen(function* () {
+    const oldPath =
+      file.status === "renamed" && file.previousPath !== ""
+        ? file.previousPath
+        : file.path;
+    const oldText =
+      file.status === "added"
+        ? ""
+        : yield* loadFileContent(target, oldPath, refs.base);
+    const newText =
+      file.status === "deleted"
+        ? ""
+        : yield* loadFileContent(target, file.path, refs.head);
+    return { ...file, oldText, newText };
+  });
+
 export const loadFilePair = (
   target: GitHubTarget,
   path: string,
@@ -202,10 +229,23 @@ export const loadFilePair = (
 ) =>
   Effect.gen(function* () {
     const refs = yield* loadTargetRefs(target);
-    const oldPath = status === "renamed" && previousPath !== "" ? previousPath : path;
-    const oldText =
-      status === "added" ? "" : yield* loadFileContent(target, oldPath, refs.base);
-    const newText =
-      status === "deleted" ? "" : yield* loadFileContent(target, path, refs.head);
+    const { oldText, newText } = yield* loadFilePairWithRefs(target, refs, {
+      path,
+      previousPath,
+      status,
+    });
     return { oldText, newText };
+  });
+
+export const loadFilePairs = (
+  target: GitHubTarget,
+  files: ReadonlyArray<FileDescriptor>,
+) =>
+  Effect.gen(function* () {
+    const refs = yield* loadTargetRefs(target);
+    return yield* Effect.forEach(
+      files,
+      file => loadFilePairWithRefs(target, refs, file),
+      { concurrency: 6 },
+    );
   });

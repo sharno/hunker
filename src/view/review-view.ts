@@ -4,6 +4,7 @@ import {
   ChangedFilter,
   ChangedPrUrl,
   SelectedFile,
+  SelectedReviewScope,
   SelectedViewMode,
   SubmittedPrUrl,
   ToggledCharacterDiff,
@@ -11,7 +12,13 @@ import {
   ToggledSemantic,
   ToggledWhitespace,
 } from "../domain";
-import type { FileChange, Message, Model, SemanticResult } from "../domain";
+import type {
+  FileChange,
+  Message,
+  Model,
+  MovedBlock,
+  SemanticResult,
+} from "../domain";
 import { toDiffLines } from "../diff";
 import { toSemanticRows } from "../semantic";
 import {
@@ -20,6 +27,7 @@ import {
   splitDiffView,
   unifiedDiffView,
 } from "./diff-view";
+import type { MovedRanges } from "./diff-view";
 
 const buttonClass = (active: boolean) =>
   `segmented-button${active ? " is-active" : ""}`;
@@ -164,6 +172,28 @@ const reviewHeaderView = (model: Model, h: HtmlBuilder<Message>): Html => {
 
 const controlsView = (model: Model, h: HtmlBuilder<Message>): Html =>
   h.section([h.Class("controlbar")], [
+    h.div([h.Class("control-group scope-picker")], [
+      h.span([h.Class("control-label")], ["Scope"]),
+      h.div([h.Class("segmented")], [
+        h.button(
+          [
+            h.Type("button"),
+            h.Class(buttonClass(model.reviewScope === "file")),
+            h.OnClick(SelectedReviewScope({ value: "file" })),
+          ],
+          ["One file"],
+        ),
+        h.button(
+          [
+            h.Type("button"),
+            h.Class(buttonClass(model.reviewScope === "full")),
+            h.OnClick(SelectedReviewScope({ value: "full" })),
+          ],
+          ["Full diff"],
+        ),
+      ]),
+    ]),
+    h.div([h.Class("control-divider")], [""]),
     h.div([h.Class("control-group view-picker")], [
       h.span([h.Class("control-label")], ["View"]),
       h.div([h.Class("segmented")], [
@@ -250,33 +280,81 @@ const semanticBannerView = (
   const request = model.semanticRequest;
   const loading = request._tag === "Loading" && request.path === file.path;
   const failed = request._tag === "Failed" && request.path === file.path;
-  const title =
-    result !== undefined
-      ? `${result.language} structural diff`
-      : loading
-        ? "Difftastic is analyzing this file…"
-        : failed
-          ? "Difftastic analysis unavailable"
-          : file.insight;
-  const detail =
-    result !== undefined
-      ? `${result.chunks.length} semantic change ${result.chunks.length === 1 ? "group" : "groups"}; formatting and syntax-aware alignment are handled server-side.`
-      : failed
-        ? request.error
-        : loading
-          ? "Fetching base and head contents, then parsing their syntax trees."
-          : "Load a GitHub PR to replace this sample insight with Difftastic analysis.";
+  if (result !== undefined || (!loading && !failed)) return h.empty;
+  const title = loading
+    ? "Difftastic is analyzing this file…"
+    : "Difftastic analysis unavailable";
+  const detail = failed
+    ? request.error
+    : "Fetching both revisions and aligning their syntax trees.";
 
   return h.div([h.Class(`semantic-banner${failed ? " is-error" : ""}`)], [
     h.span([h.Class("semantic-icon")], [loading ? "◌" : failed ? "!" : "◎"]),
     h.div([], [h.strong([], [title]), h.span([], [detail])]),
-    h.span([h.Class("confidence")], [result === undefined ? "semantic" : "difftastic"]),
+    h.span([h.Class("confidence")], [loading ? "working" : "fallback"]),
+  ]);
+};
+
+const movementSummaryView = (model: Model, h: HtmlBuilder<Message>): Html => {
+  if (!model.semantic || model.reviewScope !== "full") return h.empty;
+  const state = model.reviewMoves;
+  if (state._tag === "Idle") return h.empty;
+  if (state._tag === "Loading") {
+    return h.section([h.Class("movement-summary is-loading")], [
+      h.span([h.Class("semantic-icon")], ["◌"]),
+      h.div([], [
+        h.strong([], ["Scanning the full PR for moved code…"]),
+        h.span([], ["Git is matching removed blocks with additions across every changed file."]),
+      ]),
+    ]);
+  }
+  if (state._tag === "Failed") {
+    return h.section([h.Class("movement-summary is-error")], [
+      h.span([h.Class("semantic-icon")], ["!"]),
+      h.div([], [
+        h.strong([], ["Whole-review move scan unavailable"]),
+        h.span([], [state.error]),
+      ]),
+    ]);
+  }
+  if (state.moves.length === 0) {
+    return h.section([h.Class("movement-summary")], [
+      h.span([h.Class("semantic-icon")], ["✓"]),
+      h.div([], [
+        h.strong([], ["No moved code blocks found"]),
+        h.span([], ["Git found no removed block reintroduced elsewhere in this diff."]),
+      ]),
+    ]);
+  }
+  return h.section([h.Class("movement-summary has-moves")], [
+    h.div([h.Class("movement-summary-heading")], [
+      h.span([h.Class("semantic-icon")], ["↗"]),
+      h.div([], [
+        h.strong([], [
+          `${state.moves.length} moved code ${state.moves.length === 1 ? "block" : "blocks"}`,
+        ]),
+        h.span([], ["These lines were removed in one location and added unchanged elsewhere."]),
+      ]),
+    ]),
+    h.div(
+      [h.Class("movement-list")],
+      state.moves.map((move, index) =>
+        h.div([h.Key(`${move.fromPath}-${move.fromLine}-${index}`), h.Class("movement-row")], [
+          h.span([h.Class("movement-count")], [`${move.lineCount} lines`]),
+          h.code([], [`${move.fromPath}:${move.fromLine}`]),
+          h.span([h.Class("movement-arrow")], ["→"]),
+          h.code([], [`${move.toPath}:${move.toLine}`]),
+          h.span([h.Class("movement-preview")], [move.preview]),
+        ]),
+      ),
+    ),
   ]);
 };
 
 const diffPanelView = (
   file: FileChange,
   model: Model,
+  moves: ReadonlyArray<MovedBlock>,
   h: HtmlBuilder<Message>,
 ): Html => {
   const reviewed = model.reviewedPaths.includes(file.path);
@@ -287,6 +365,14 @@ const diffPanelView = (
       ? []
       : toSemanticRows(semanticResult, model.ignoreWhitespace);
   const semanticDiff = semanticResult !== undefined && semanticRows.length > 0;
+  const movedRanges: MovedRanges = {
+    old: moves
+      .filter(move => move.fromPath === file.path)
+      .map(move => ({ start: move.fromLine, count: move.lineCount })),
+    new: moves
+      .filter(move => move.toPath === file.path)
+      .map(move => ({ start: move.toLine, count: move.lineCount })),
+  };
 
   return h.section([h.Class("diff-panel")], [
     h.div([h.Class("file-header")], [
@@ -302,6 +388,11 @@ const diffPanelView = (
         ]),
       ]),
       h.div([h.Class("file-actions")], [
+        model.semantic && semanticResult !== undefined
+          ? h.span([h.Class("semantic-engine-badge")], [
+              `Difftastic · ${semanticResult.language}`,
+            ])
+          : h.empty,
         h.button(
           [h.Type("button"), h.Class("icon-button"), h.Title("Copy file path")],
           ["⧉"],
@@ -320,14 +411,24 @@ const diffPanelView = (
         ),
       ]),
     ]),
+    moves.length === 0
+      ? h.empty
+      : h.div(
+          [h.Class("file-movements")],
+          moves.map((move, index) =>
+            h.span([h.Key(`file-move-${index}`)], [
+              `${move.lineCount} lines moved ${move.fromPath}:${move.fromLine} → ${move.toPath}:${move.toLine}`,
+            ]),
+          ),
+        ),
     model.semantic ? semanticBannerView(file, model, semanticResult, h) : h.empty,
     model.semantic && semanticDiff
       ? model.viewMode === "unified"
-        ? semanticUnifiedDiffView(semanticRows, model.characterDiff, h)
-        : semanticSplitDiffView(semanticRows, model.characterDiff, h)
+        ? semanticUnifiedDiffView(semanticRows, model.characterDiff, movedRanges, h)
+        : semanticSplitDiffView(semanticRows, model.characterDiff, movedRanges, h)
       : model.viewMode === "unified"
-        ? unifiedDiffView(lines, model.characterDiff, h)
-        : splitDiffView(lines, model.characterDiff, h),
+        ? unifiedDiffView(lines, model.characterDiff, movedRanges, h)
+        : splitDiffView(lines, model.characterDiff, movedRanges, h),
     h.div([h.Class("diff-footer")], [
       h.span([], ["End of file"]),
       h.button([h.Type("button"), h.Class("comment-button")], [
@@ -345,6 +446,9 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Html => {
     query === ""
       ? model.files
       : model.files.filter(file => file.path.toLowerCase().includes(query));
+  const moves = model.reviewMoves._tag === "Ready" ? model.reviewMoves.moves : [];
+  const movesFor = (file: FileChange) =>
+    moves.filter(move => move.fromPath === file.path || move.toPath === file.path);
 
   return h.main([h.Class("app-shell")], [
     topBarView(model, h),
@@ -355,9 +459,14 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Html => {
     controlsView(model, h),
     h.div([h.Class("workspace")], [
       fileSidebarView(model, visibleFiles, h),
-      selected === undefined
-        ? h.section([h.Class("empty-state")], ["No text files to review."])
-        : diffPanelView(selected, model, h),
+      model.reviewScope === "full"
+        ? h.div([h.Class("review-content full-diff")], [
+            movementSummaryView(model, h),
+            ...visibleFiles.map(file => diffPanelView(file, model, movesFor(file), h)),
+          ])
+        : selected === undefined
+          ? h.section([h.Class("empty-state")], ["No text files to review."])
+          : diffPanelView(selected, model, movesFor(selected), h),
     ]),
   ]);
 };

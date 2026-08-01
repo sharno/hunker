@@ -19,7 +19,27 @@ index 1111111..2222222 100644
 +export function greet(person: string) {
 +  return \`hello \${person}\`;
  }
+diff --git a/src/message.ts b/src/message.ts
+new file mode 100644
+--- /dev/null
++++ b/src/message.ts
+@@ -0,0 +1,2 @@
++export const greetingPrefix = "hello";
++export const greetingTarget = "world";
 `,
+} as const;
+
+export const movesResponse = {
+  moves: [
+    {
+      fromPath: "src/greet.ts",
+      toPath: "src/message.ts",
+      fromLine: 1,
+      toLine: 1,
+      lineCount: 2,
+      preview: "export const greetingPrefix = \"hello\";",
+    },
+  ],
 } as const;
 
 export const semanticResponse = {
