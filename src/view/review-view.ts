@@ -1,5 +1,6 @@
 import { Array, Option } from "effect";
 import { AsyncData } from "foldkit";
+import { createLazy } from "foldkit/html";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import { Popover } from "@foldkit/ui";
 
@@ -14,6 +15,7 @@ import {
   SelectedReviewScope,
   SelectedViewMode,
   ToggledFileCollapse,
+  ToggledFileTreeFolder,
   ToggledFullFile,
   ToggledGitHubReviews,
   ToggledReviewed,
@@ -48,6 +50,7 @@ import {
 } from "./github-review-view";
 import { repositoryView } from "./repository-view";
 import { githubLocationForm } from "./github-location-view";
+import { fileTreeView } from "./file-tree-view";
 
 const buttonClass = (active: boolean) =>
   `segmented-button${active ? " is-active" : ""}`;
@@ -127,18 +130,18 @@ const statusGlyph = (status: FileChange["status"]) =>
 
 const fileRow = (
   file: FileChange,
-  model: Model,
+  name: string,
+  selectedPath: string,
+  reviewedPaths: ReadonlyArray<string>,
   h: HtmlBuilder<Message>,
 ): Html => {
-  const reviewed = model.reviewedPaths.includes(file.path);
+  const reviewed = reviewedPaths.includes(file.path);
   return button(
     h,
     [
       h.Key(file.path),
       h.Type("button"),
-      h.Class(
-        `file-row${file.path === model.selectedPath ? " is-selected" : ""}`,
-      ),
+      h.Class(`file-row${file.path === selectedPath ? " is-selected" : ""}`),
       h.OnClick(SelectedFile({ path: file.path })),
     ],
     [
@@ -146,23 +149,7 @@ const fileRow = (
         [h.Class(`file-status status-${file.status}`)],
         [reviewed ? "✓" : statusGlyph(file.status)],
       ),
-      h.span(
-        [h.Class("file-copy")],
-        [
-          h.span(
-            [h.Class("file-name")],
-            [file.path.split("/").at(-1) ?? file.path],
-          ),
-          h.span(
-            [h.Class("file-dir")],
-            [
-              file.path.includes("/")
-                ? file.path.slice(0, file.path.lastIndexOf("/"))
-                : "root",
-            ],
-          ),
-        ],
-      ),
+      h.span([h.Class("file-copy")], [h.span([h.Class("file-name")], [name])]),
       h.span(
         [h.Class("file-delta")],
         [
@@ -173,6 +160,28 @@ const fileRow = (
     ],
   );
 };
+
+const reviewFileTree = (
+  files: ReadonlyArray<FileChange>,
+  selectedPath: string,
+  reviewedPaths: ReadonlyArray<string>,
+  collapsedFolders: ReadonlyArray<string>,
+  h: HtmlBuilder<Message>,
+): Html =>
+  fileTreeView(
+    {
+      files,
+      pathOf: (file) => file.path,
+      collapsedFolders,
+      onToggleFolder: (path) =>
+        ToggledFileTreeFolder({ scope: "review", path }),
+      renderFile: (file, name, builder) =>
+        fileRow(file, name, selectedPath, reviewedPaths, builder),
+    },
+    h,
+  );
+
+const lazyReviewFileTree = createLazy();
 
 const scopePicker = (
   model: Model,
@@ -793,7 +802,15 @@ const fileSidebarView = (
       ),
       h.nav(
         [h.Class("file-list"), h.AriaLabel("Changed files")],
-        visibleFiles.map((file) => fileRow(file, model, h)),
+        [
+          lazyReviewFileTree(reviewFileTree, [
+            visibleFiles,
+            model.selectedPath,
+            model.reviewedPaths,
+            model.collapsedFileTreeFolders,
+            h,
+          ]),
+        ],
       ),
       h.div(
         [h.Class("sidebar-tip")],

@@ -1,5 +1,6 @@
 import { Array, Option } from "effect";
 import { AsyncData } from "foldkit";
+import { createLazy } from "foldkit/html";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
 import { homeRouter } from "../app-route";
@@ -10,6 +11,7 @@ import {
   ClickedCloneRepository,
   SelectedRepositoryFile,
   SubmittedRepositorySearch,
+  ToggledFileTreeFolder,
 } from "../domain";
 import type {
   Message,
@@ -19,6 +21,7 @@ import type {
 } from "../domain";
 import { syntaxHighlightedContent } from "./syntax-highlight";
 import { githubLocationForm } from "./github-location-view";
+import { fileTreeView } from "./file-tree-view";
 
 const formatSize = (bytes: number) =>
   bytes < 1_024
@@ -29,6 +32,7 @@ const formatSize = (bytes: number) =>
 
 const repositoryFileButton = (
   file: RepositoryFile,
+  label: string,
   selected: boolean,
   h: HtmlBuilder<Message>,
 ): Html =>
@@ -42,10 +46,31 @@ const repositoryFileButton = (
     ],
     [
       h.span([h.Class("repository-file-icon")], ["·/"]),
-      h.span([], [file.path]),
+      h.span([], [label]),
       h.small([], [formatSize(file.size)]),
     ],
   );
+
+const repositoryFileTree = (
+  files: ReadonlyArray<RepositoryFile>,
+  selectedPath: string,
+  collapsedFolders: ReadonlyArray<string>,
+  h: HtmlBuilder<Message>,
+): Html =>
+  fileTreeView(
+    {
+      files,
+      pathOf: (file) => file.path,
+      collapsedFolders,
+      onToggleFolder: (path) =>
+        ToggledFileTreeFolder({ scope: "repository", path }),
+      renderFile: (file, name, builder) =>
+        repositoryFileButton(file, name, file.path === selectedPath, builder),
+    },
+    h,
+  );
+
+const lazyRepositoryFileTree = createLazy();
 
 const searchSnippet = (
   match: RepositorySearchMatch,
@@ -134,6 +159,7 @@ const repositorySearchResults = (
                 Array.map(files, (file) =>
                   repositoryFileButton(
                     file,
+                    file.path,
                     file.path === model.repositoryBrowser.selectedPath,
                     h,
                   ),
@@ -346,13 +372,14 @@ export const repositoryView = (model: Model, h: HtmlBuilder<Message>): Html => {
               ),
               h.nav(
                 [h.AriaLabel("Repository files")],
-                files.map((file) =>
-                  repositoryFileButton(
-                    file,
-                    file.path === browser.selectedPath,
+                [
+                  lazyRepositoryFileTree(repositoryFileTree, [
+                    files,
+                    browser.selectedPath,
+                    browser.collapsedFolders,
                     h,
-                  ),
-                ),
+                  ]),
+                ],
               ),
             ],
           ),

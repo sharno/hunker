@@ -49,6 +49,7 @@ import {
 } from "./domain";
 import type { FileChange, Message, Model as ModelType } from "./domain";
 import { hunkKey } from "./diff";
+import { revealFileInTree } from "./file-tree";
 import {
   commitGitHubUrl,
   FetchCommitDiff,
@@ -320,10 +321,16 @@ const requestCommitDiff = (model: ModelType, sha: string): UpdateReturn => {
   const cached = Option.getOrUndefined(AsyncData.getData(model.commitDiff));
   if (cached?.sha === sha) {
     const files = cached.files;
+    const selectedPath = files.some((file) => file.path === model.selectedPath)
+      ? model.selectedPath
+      : (files[0]?.path ?? "");
     const ready = resetDiffAnalysis(
       evo(model, {
         selectedCommit: () => sha,
         files: () => files,
+        selectedPath: () => selectedPath,
+        collapsedFileTreeFolders: (folders) =>
+          revealFileInTree(folders, selectedPath),
       }),
     );
     return requestSelectedIntelligence(ready);
@@ -376,6 +383,7 @@ const beginReviewLoad = (model: ModelType, url: string): ModelType =>
     reviewMoves: () => ReviewMoves.Idle(),
     characterDiffStates: () => [],
     reviewedPaths: () => [],
+    collapsedFileTreeFolders: () => [],
     collapsedPaths: () => [],
     collapsedHunks: () => [],
     fullFileStates: () => [],
@@ -409,6 +417,7 @@ const sampleModel = (model: ModelType): ModelType =>
     openReviewPopover: initialOpenReviewPopover,
     selectedPath: () => sampleFiles[0]?.path ?? "",
     reviewedPaths: () => [],
+    collapsedFileTreeFolders: () => [],
     semanticResults: () => [],
     semanticRequest: () => SemanticRequestIdle(),
     reviewMoves: () => ReviewMoves.Idle(),
@@ -454,6 +463,10 @@ const applyReviewOptions = (
     sidebarCollapsed: () => options.sidebarCollapsed,
     showGitHubReviews: () => options.showGitHubReviews,
     selectedPath: () => options.selectedPath,
+    collapsedFileTreeFolders: (folders) =>
+      options.selectedPath === ""
+        ? folders
+        : revealFileInTree(folders, options.selectedPath),
     reviewTab: () => options.reviewTab,
     selectedCommit: () => options.selectedCommit,
   });
@@ -683,6 +696,7 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
               ? selectedPath
               : (files[0]?.path ?? ""),
           reviewedPaths: () => [],
+          collapsedFileTreeFolders: () => [],
           semanticResults: () => [],
           semanticRequest: () => SemanticRequestIdle(),
           reviewMoves: () => ReviewMoves.Idle(),
@@ -783,13 +797,17 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         ) {
           return [model, []];
         }
+        const selectedPath = files.some(
+          (file) => file.path === model.selectedPath,
+        )
+          ? model.selectedPath
+          : (files[0]?.path ?? "");
         const next = evo(model, {
           files: () => files,
           commitDiff: () => CommitDiff.Success({ data: { sha, files } }),
-          selectedPath: (selectedPath) =>
-            files.some((file) => file.path === selectedPath)
-              ? selectedPath
-              : (files[0]?.path ?? ""),
+          selectedPath: () => selectedPath,
+          collapsedFileTreeFolders: (folders) =>
+            revealFileInTree(folders, selectedPath),
         });
         const [loaded, commands] = requestSelectedIntelligence(next);
         return synchronizeReviewUrl(loaded, commands);
@@ -1077,6 +1095,8 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
       SelectedFile: ({ path }) => {
         const next = evo(model, {
           selectedPath: () => path,
+          collapsedFileTreeFolders: (folders) =>
+            revealFileInTree(folders, path),
           reviewScope: () => "file" as const,
         });
         const result = requestSelectedIntelligence(next);
@@ -1085,16 +1105,20 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
       SelectedReviewTab: ({ value }) => {
         if (value === "files") {
           const files = model.pullRequestFiles;
+          const selectedPath = files.some(
+            (file) => file.path === model.selectedPath,
+          )
+            ? model.selectedPath
+            : (files[0]?.path ?? "");
           const next = resetDiffAnalysis(
             evo(model, {
               reviewTab: () => "files" as const,
               selectedCommit: () => "",
               commitDiff: () => CommitDiff.Idle(),
               files: () => files,
-              selectedPath: (selectedPath) =>
-                files.some((file) => file.path === selectedPath)
-                  ? selectedPath
-                  : (files[0]?.path ?? ""),
+              selectedPath: () => selectedPath,
+              collapsedFileTreeFolders: (folders) =>
+                revealFileInTree(folders, selectedPath),
             }),
           );
           const [loaded, commands] = requestSelectedIntelligence(next);
@@ -1156,6 +1180,25 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
           evo(model, { sidebarCollapsed: (value) => !value }),
           [],
         ),
+      ToggledFileTreeFolder: ({ scope, path }) =>
+        scope === "review"
+          ? [
+              evo(model, {
+                collapsedFileTreeFolders: (folders) =>
+                  toggleMembership(folders, path),
+              }),
+              [],
+            ]
+          : [
+              evo(model, {
+                repositoryBrowser: (browser) =>
+                  evo(browser, {
+                    collapsedFolders: (folders) =>
+                      toggleMembership(folders, path),
+                  }),
+              }),
+              [],
+            ],
       ToggledGitHubReviews: () => {
         const next = evo(model, { showGitHubReviews: (value) => !value });
         const [updated, commands] = requestGitHubReviews(next);
@@ -1249,6 +1292,7 @@ const initialModel = (prUrl: string, options: ReviewOptions) =>
       name: "",
       query: "",
       selectedPath: "",
+      collapsedFolders: [],
       files: RepositoryFiles.Idle(),
       search: RepositorySearch.Idle(),
       file: RepositoryFileContent.Idle(),
@@ -1259,6 +1303,7 @@ const initialModel = (prUrl: string, options: ReviewOptions) =>
     toolbarCompact: false,
     selectedPath: options.selectedPath || sampleFiles[0]?.path || "",
     sidebarCollapsed: options.sidebarCollapsed,
+    collapsedFileTreeFolders: [],
     reviewScope: options.reviewScope,
     viewMode: options.viewMode,
     ignoreWhitespace: options.ignoreWhitespace,

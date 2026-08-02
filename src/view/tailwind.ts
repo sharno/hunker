@@ -146,7 +146,7 @@ const utilities: Readonly<Record<string, string>> = {
   "repository-tree-heading":
     "flex items-center justify-between border-b border-line px-4 py-3 text-xs [&>span]:rounded-full [&>span]:bg-[#d8d8d2] [&>span]:px-2 [&>span]:py-1 [&>span]:font-mono [&>span]:text-[9px] [&>span]:text-muted",
   "repository-file-row":
-    "grid w-full cursor-pointer grid-cols-[24px_minmax(0,1fr)_auto] items-center gap-2 rounded-md border-0 bg-transparent px-2.5 py-2 text-left hover:bg-white/60 [&.is-selected]:bg-white [&.is-selected]:shadow-[inset_3px_0_#9bbb2f] [&>span:nth-child(2)]:overflow-hidden [&>span:nth-child(2)]:font-mono [&>span:nth-child(2)]:text-[10px] [&>span:nth-child(2)]:text-ellipsis [&>span:nth-child(2)]:whitespace-nowrap [&>small]:font-mono [&>small]:text-[8px] [&>small]:text-muted",
+    "grid w-full cursor-pointer grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-1.5 rounded-md border-0 bg-transparent px-1.5 py-1.5 text-left hover:bg-white/60 [&.is-selected]:bg-white [&.is-selected]:shadow-[inset_3px_0_#9bbb2f] [&>span:nth-child(2)]:overflow-hidden [&>span:nth-child(2)]:font-mono [&>span:nth-child(2)]:text-[10px] [&>span:nth-child(2)]:text-ellipsis [&>span:nth-child(2)]:whitespace-nowrap [&>small]:font-mono [&>small]:text-[8px] [&>small]:text-muted",
   "repository-file-icon":
     "grid size-5 place-items-center rounded bg-[#d8ddd5] font-mono text-[8px] text-[#52635a]",
   "repository-main": "min-w-0",
@@ -195,8 +195,21 @@ const utilities: Readonly<Record<string, string>> = {
   "file-search":
     "mx-3 mb-2.5 flex items-center gap-1.5 rounded-md border border-[#d6d5cf] bg-[#f8f7f3] px-[9px] py-[7px] text-[#777d76] [&_input]:w-full [&_input]:min-w-0 [&_input]:border-0 [&_input]:bg-transparent [&_input]:text-[11px] [&_input]:outline-none [&_input]:focus-visible:outline-2 [&_input]:focus-visible:outline-offset-2 [&_input]:focus-visible:outline-lime",
   "file-list": "overflow-auto px-2 pt-0.5 pb-3.5",
+  "file-tree": "min-w-0",
+  "file-tree-directory":
+    "min-w-0 [&>.file-tree]:ml-[11px] [&>.file-tree]:border-l [&>.file-tree]:border-[#d1d2cb] [&>.file-tree]:pl-1",
+  "file-tree-folder":
+    "grid w-full cursor-pointer grid-cols-[15px_18px_minmax(0,1fr)_auto] items-center gap-1 rounded-[4px] border-0 bg-transparent px-1.5 py-1.5 text-left text-[#4f5750] hover:bg-white/55 focus-visible:outline-2 focus-visible:outline-lime-dark",
+  "file-tree-chevron":
+    "grid size-[15px] place-items-center text-[14px] leading-none text-[#7d837b]",
+  "file-tree-folder-icon":
+    "grid size-[17px] place-items-center font-mono text-[10px] text-[#8b9858]",
+  "file-tree-folder-name":
+    "overflow-hidden font-mono text-[10px] font-[700] text-ellipsis whitespace-nowrap",
+  "file-tree-folder-count": "pr-1 font-mono text-[8px] text-[#969a93]",
+  "file-tree-leaf": "min-w-0",
   "file-row":
-    "grid w-full cursor-pointer grid-cols-[23px_minmax(0,1fr)_auto] items-center gap-2 rounded-[5px] border-0 border-l-[3px] border-l-transparent bg-transparent px-[9px] py-2.5 text-left hover:bg-white/60 [&.is-selected]:border-l-lime-dark [&.is-selected]:bg-paper [&.is-selected]:shadow-[0_1px_4px_rgb(16_27_44/8%)]",
+    "grid w-full cursor-pointer grid-cols-[23px_minmax(0,1fr)_auto] items-center gap-2 rounded-[5px] border-0 border-l-[3px] border-l-transparent bg-transparent px-1.5 py-1.5 text-left hover:bg-white/60 [&.is-selected]:border-l-lime-dark [&.is-selected]:bg-paper [&.is-selected]:shadow-[0_1px_4px_rgb(16_27_44/8%)]",
   "file-status":
     "grid size-5 place-items-center rounded-sm bg-[#d7dbdf] font-mono text-[9px] font-[850] text-[#4d5964]",
   "status-added": "bg-[#c8efdb] text-[#176642]",

@@ -16,9 +16,11 @@ The stack is Effect end to end:
 - `src/features/commits.ts` — commit-list and commit-diff commands
 - `src/features/revision.ts` — local PR freshness command and two-minute subscription
 - `src/features/repository.ts` — local-repository routes, commands, and reducer transitions
+- `src/file-tree.ts` — shared typed file/folder hierarchy and ancestor expansion
 - `src/diff.ts` — unified-diff parsing and full-file context stitching
 - `src/view/commits-view.ts` — PR commit timeline and selected-commit workspace
 - `src/view/repository-view.ts` — FFF-backed local file browser and search results
+- `src/view/file-tree-view.ts` — shared collapsible tree renderer for repository and review files
 - `src/view/diff-view.ts` — unified/side-by-side rendering and hunk interaction
 - `src/view/syntax-highlight.ts` — safe syntax tokenization and character-overlay composition
 - `src/view/tailwind.ts` — typed Foldkit adapter and component utility definitions
@@ -65,10 +67,13 @@ Once a review loads, Hunker replaces the separate loader and controls bars with
 a single 48px sticky toolbar. Scope and layout remain directly accessible;
 diff intelligence and opening another PR live in compact dropdowns.
 
-Files and individual hunks can be collapsed independently. The Full file action
-loads the base and head versions through the authenticated Effect backend and
-fills in context omitted by GitHub's patch; Patch only returns to the compact
-review without another network request.
+Repository files, PR files, and commit files use the same nested folder tree;
+folders sort before files, show descendant counts, and can be collapsed
+independently. Selecting a hidden file reopens its ancestors. Diff files and
+individual hunks can also be collapsed independently. The Full file action loads
+the base and head versions through the authenticated Effect backend and fills in
+context omitted by GitHub's patch; Patch only returns to the compact review
+without another network request.
 
 Syntax highlighting is enabled by default and can be toggled from the review
 controls. Lowlight produces a token tree that Foldkit renders as safe spans, so

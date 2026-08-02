@@ -16,6 +16,7 @@ import type {
   RepositoryFile as RepositoryFileType,
   RepositorySearchMatch as RepositorySearchMatchType,
 } from "../domain";
+import { revealFileInTree } from "../file-tree";
 import {
   CloneRepository,
   FetchRepositoryFile,
@@ -99,6 +100,10 @@ export const loadRepositoryLocation = (
           evo(browser, {
             query: () => options.query,
             selectedPath: () => options.file,
+            collapsedFolders: (folders) =>
+              options.file === ""
+                ? folders
+                : revealFileInTree(folders, options.file),
           }),
       })
     : evo(model, {
@@ -113,6 +118,7 @@ export const loadRepositoryLocation = (
           name: route.name,
           query: options.query,
           selectedPath: options.file,
+          collapsedFolders: [],
           files: RepositoryFiles.Loading(),
           search:
             options.query === ""
@@ -380,6 +386,7 @@ export const selectRepositoryFile = (
     repositoryBrowser: (browser) =>
       evo(browser, {
         selectedPath: () => path,
+        collapsedFolders: (folders) => revealFileInTree(folders, path),
         file: () => RepositoryFileContent.Loading(),
       }),
   });

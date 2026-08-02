@@ -177,6 +177,10 @@ export const SelectedInlineDiffMode = m("SelectedInlineDiffMode", {
 });
 export const ToggledSyntaxHighlighting = m("ToggledSyntaxHighlighting");
 export const ToggledSidebar = m("ToggledSidebar");
+export const ToggledFileTreeFolder = m("ToggledFileTreeFolder", {
+  scope: S.Literals(["review", "repository"]),
+  path: S.String,
+});
 export const ToggledReviewed = m("ToggledReviewed", { path: S.String });
 export const ToggledFileCollapse = m("ToggledFileCollapse", { path: S.String });
 export const ToggledHunkCollapse = m("ToggledHunkCollapse", {
@@ -283,6 +287,7 @@ export const Message = S.Union([
   SelectedInlineDiffMode,
   ToggledSyntaxHighlighting,
   ToggledSidebar,
+  ToggledFileTreeFolder,
   ToggledReviewed,
   ToggledFileCollapse,
   ToggledHunkCollapse,
