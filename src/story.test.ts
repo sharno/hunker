@@ -39,12 +39,12 @@ describe("review update", () => {
       update,
       given(home),
       message(ToggledSidebar()),
-      model((model) => {
-        expect(model.sidebarCollapsed).toBe(true);
+      model((state) => {
+        expect(state.sidebarCollapsed).toBe(true);
       }),
       message(ToggledSidebar()),
-      model((model) => {
-        expect(model.sidebarCollapsed).toBe(false);
+      model((state) => {
+        expect(state.sidebarCollapsed).toBe(false);
       }),
     );
   });
@@ -63,10 +63,10 @@ describe("review update", () => {
           files: sampleFiles,
         }),
       ),
-      model((model) => {
-        expect(model.phase._tag).toBe("Ready");
-        expect(model.meta.url).toBe(reviewUrl);
-        expect(model.files).toStrictEqual(sampleFiles);
+      model((state) => {
+        expect(state.phase._tag).toBe("Ready");
+        expect(state.meta.url).toBe(reviewUrl);
+        expect(state.files).toStrictEqual(sampleFiles);
       }),
       Command.resolve(Navigate, CompletedNavigate()),
     );
@@ -84,8 +84,8 @@ describe("review update", () => {
           error: "GitHub was unavailable",
         }),
       ),
-      model((model) => {
-        expect(model.phase).toStrictEqual(
+      model((state) => {
+        expect(state.phase).toStrictEqual(
           ReviewFailed({ error: "GitHub was unavailable" }),
         );
       }),

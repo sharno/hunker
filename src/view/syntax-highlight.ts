@@ -174,9 +174,9 @@ const renderToken = (
   return EffectArray.match(boundaries, {
     onEmpty: () => [tokenPiece(token.text, token.classes, false, h)],
     onNonEmpty: () => {
-      const points = [...new Set([0, ...boundaries, token.text.length])].sort(
-        (left, right) => left - right,
-      );
+      const points = [
+        ...new Set([0, ...boundaries, token.text.length]),
+      ].toSorted((left, right) => left - right);
       return points.slice(0, -1).flatMap((start, index) => {
         const end = points[index + 1];
         if (end === undefined || start === end) return [];

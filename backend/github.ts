@@ -1,4 +1,4 @@
-import { Data, Effect, Match as M, Option } from "effect";
+import { Data, Effect, Match as M, Option, Schema as S } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 
 import { GitHubAuth } from "./github-auth";
@@ -154,16 +154,74 @@ export const executeGitHubRequest = (
 export const executeGitHub = (url: string, accept: string) =>
   executeGitHubRequest(HttpClientRequest.get(url), accept);
 
-const asRecord = (value: unknown): Readonly<Record<string, unknown>> =>
-  typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : {};
+const GitHubUser = S.Struct({
+  login: S.String,
+  avatar_url: S.optional(S.String),
+});
 
-const stringField = (
-  record: Readonly<Record<string, unknown>>,
-  key: string,
-  fallback: string,
-) => (typeof record[key] === "string" ? record[key] : fallback);
+const GitHubCommitAuthor = S.Struct({
+  name: S.String,
+  date: S.optional(S.String),
+});
+
+const GitHubRef = S.Struct({
+  ref: S.String,
+  sha: S.String,
+});
+
+const PullMetadataResponse = S.Struct({
+  title: S.String,
+  user: S.NullOr(GitHubUser),
+  base: GitHubRef,
+  head: GitHubRef,
+});
+
+const CompareMetadataResponse = S.Struct({
+  base_commit: S.Struct({ sha: S.String }),
+  commits: S.Array(S.Struct({ sha: S.String })),
+});
+
+const CommitMetadataResponse = S.Struct({
+  sha: S.String,
+  commit: S.Struct({
+    message: S.String,
+    author: S.NullOr(GitHubCommitAuthor),
+  }),
+  author: S.NullOr(GitHubUser),
+  parents: S.Array(S.Struct({ sha: S.String })),
+});
+
+const PullCommitResponse = S.Struct({
+  sha: S.String,
+  commit: S.Struct({
+    message: S.String,
+    author: S.NullOr(GitHubCommitAuthor),
+  }),
+  author: S.NullOr(GitHubUser),
+  html_url: S.String,
+});
+
+const PullCommitsResponse = S.Array(PullCommitResponse);
+
+const decodeGitHubJson = <A>(
+  schema: S.Schema<A> & { readonly DecodingServices: never },
+  value: unknown,
+  subject: string,
+) =>
+  S.decodeUnknownEffect(schema)(value).pipe(
+    Effect.mapError(
+      () =>
+        new GitHubFetchFailed({
+          status: 502,
+          message: `GitHub returned malformed ${subject} data.`,
+        }),
+    ),
+  );
+
+const githubAuthor = (
+  user: S.Schema.Type<typeof GitHubUser> | null,
+  commitAuthor: S.Schema.Type<typeof GitHubCommitAuthor> | null,
+) => user?.login || commitAuthor?.name || "GitHub user";
 
 const apiUrl = (target: GitHubTarget) =>
   M.value(target).pipe(
@@ -208,13 +266,15 @@ export const loadReviewMetadata = (target: GitHubTarget) =>
       apiUrl(target),
       "application/vnd.github+json",
     );
-    const metadata = asRecord(yield* metadataResponse.json);
+    const metadataJson: unknown = yield* metadataResponse.json;
     if (target._tag === "CompareTarget") {
+      const metadata = yield* decodeGitHubJson(
+        CompareMetadataResponse,
+        metadataJson,
+        "compare",
+      );
       const [base = "base", head = "head"] = target.range.split("...");
-      const baseCommit = asRecord(metadata.base_commit);
-      const commits = Array.isArray(metadata.commits) ? metadata.commits : [];
-      const headCommit = asRecord(commits.at(-1));
-      const baseOid = stringField(baseCommit, "sha", "");
+      const baseOid = metadata.base_commit.sha;
       return {
         title: target.range,
         repository: `${target.owner}/${target.repo}`,
@@ -224,51 +284,48 @@ export const loadReviewMetadata = (target: GitHubTarget) =>
         head,
         url: webUrl(target),
         baseOid,
-        headOid: stringField(headCommit, "sha", baseOid),
+        headOid: metadata.commits.at(-1)?.sha ?? baseOid,
         headRef: head,
       };
     }
     if (target._tag === "CommitTarget") {
-      const commit = asRecord(metadata.commit);
-      const commitAuthor = asRecord(commit.author);
-      const user = asRecord(metadata.author);
-      const parents = Array.isArray(metadata.parents) ? metadata.parents : [];
-      const parent = asRecord(parents[0]);
-      const message = stringField(
-        commit,
-        "message",
-        `Commit ${target.sha.slice(0, 7)}`,
+      const metadata = yield* decodeGitHubJson(
+        CommitMetadataResponse,
+        metadataJson,
+        "commit",
       );
+      const baseOid = metadata.parents[0]?.sha ?? "";
       return {
-        title: message.split("\n")[0] ?? message,
+        title:
+          metadata.commit.message.split("\n")[0] ?? metadata.commit.message,
         repository: `${target.owner}/${target.repo}`,
         number: target.sha.slice(0, 7),
-        author:
-          stringField(user, "login", "") ||
-          stringField(commitAuthor, "name", "GitHub user"),
-        base: stringField(parent, "sha", ""),
-        head: stringField(metadata, "sha", target.sha),
+        author: githubAuthor(metadata.author, metadata.commit.author),
+        base: baseOid,
+        head: metadata.sha,
         url: webUrl(target),
-        baseOid: stringField(parent, "sha", ""),
-        headOid: stringField(metadata, "sha", target.sha),
-        headRef: stringField(metadata, "sha", target.sha),
+        baseOid,
+        headOid: metadata.sha,
+        headRef: metadata.sha,
       };
     }
-    const user = asRecord(metadata.user);
-    const base = asRecord(metadata.base);
-    const head = asRecord(metadata.head);
+    const metadata = yield* decodeGitHubJson(
+      PullMetadataResponse,
+      metadataJson,
+      "pull request",
+    );
 
     return {
-      title: stringField(metadata, "title", `Pull request #${target.number}`),
+      title: metadata.title,
       repository: `${target.owner}/${target.repo}`,
       number: target.number,
-      author: stringField(user, "login", "GitHub"),
-      base: stringField(base, "ref", "base"),
-      head: stringField(head, "ref", "head"),
+      author: metadata.user?.login ?? "GitHub",
+      base: metadata.base.ref,
+      head: metadata.head.ref,
       url: webUrl(target),
-      baseOid: stringField(base, "sha", ""),
-      headOid: stringField(head, "sha", ""),
-      headRef: stringField(head, "ref", "head"),
+      baseOid: metadata.base.sha,
+      headOid: metadata.head.sha,
+      headRef: metadata.head.ref,
     };
   });
 
@@ -304,32 +361,24 @@ export type PullCommit = Readonly<{
   htmlUrl: string;
 }>;
 
-const decodePullCommit = (value: unknown): PullCommit | undefined => {
-  const item = asRecord(value);
-  const sha = stringField(item, "sha", "");
-  if (sha === "") return undefined;
-  const commit = asRecord(item.commit);
-  const authored = asRecord(commit.author);
-  const user = asRecord(item.author);
+const pullCommit = (
+  item: S.Schema.Type<typeof PullCommitResponse>,
+): PullCommit => {
   return {
-    sha,
-    message: stringField(commit, "message", `Commit ${sha.slice(0, 7)}`),
-    author:
-      stringField(user, "login", "") ||
-      stringField(authored, "name", "GitHub user"),
-    avatarUrl: stringField(user, "avatar_url", ""),
-    authoredAt: stringField(authored, "date", ""),
-    htmlUrl: stringField(item, "html_url", ""),
+    sha: item.sha,
+    message: item.commit.message,
+    author: githubAuthor(item.author, item.commit.author),
+    avatarUrl: item.author?.avatar_url ?? "",
+    authoredAt: item.commit.author?.date ?? "",
+    htmlUrl: item.html_url,
   };
 };
 
 export const decodePullCommits = (value: unknown): ReadonlyArray<PullCommit> =>
-  Array.isArray(value)
-    ? value.flatMap((item) => {
-        const commit = decodePullCommit(item);
-        return commit === undefined ? [] : [commit];
-      })
-    : [];
+  Option.match(S.decodeUnknownOption(PullCommitsResponse)(value), {
+    onNone: () => [],
+    onSome: (items) => items.map(pullCommit),
+  });
 
 export const loadPullCommits = (target: PullTarget) =>
   Effect.gen(function* () {
@@ -342,9 +391,13 @@ export const loadPullCommits = (target: PullTarget) =>
         "application/vnd.github+json",
       );
       const value: unknown = yield* response.json;
-      const rawCount = Array.isArray(value) ? value.length : 0;
-      commits.push(...decodePullCommits(value));
-      hasNextPage = rawCount === 100;
+      const pageCommits = yield* decodeGitHubJson(
+        PullCommitsResponse,
+        value,
+        "pull request commits",
+      );
+      commits.push(...pageCommits.map(pullCommit));
+      hasNextPage = pageCommits.length === 100;
       page += 1;
     }
     return commits;

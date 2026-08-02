@@ -74,6 +74,10 @@ export class LocalRepository extends Context.Service<
 
 const validSegment = /^[a-zA-Z0-9._-]+$/;
 const maxFileCharacters = 500_000;
+const fileSource = (
+  path: string,
+  lines: ReadonlyArray<string>,
+): readonly [string, ReadonlyArray<string>] => [path, lines];
 
 export const cloneArguments = (
   repository: RepositoryId,
@@ -332,10 +336,8 @@ export const layer = Layer.effect(
             (path) =>
               validatedFilePath(root, path).pipe(
                 Effect.flatMap(fs.readFileString),
-                Effect.map((content) => [path, content.split("\n")] as const),
-                Effect.catch(() =>
-                  Effect.succeed([path, [] as Array<string>] as const),
-                ),
+                Effect.map((content) => fileSource(path, content.split("\n"))),
+                Effect.catch(() => Effect.succeed(fileSource(path, []))),
               ),
             { concurrency: 8 },
           ),

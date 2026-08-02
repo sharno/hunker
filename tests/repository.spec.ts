@@ -77,14 +77,11 @@ test("offers a temporary or configured clone when a repository is missing", asyn
 test("opens repository links without accepting a late response from the previous repo", async ({
   page,
 }) => {
-  let releaseFirst: () => void = () => undefined;
-  const firstGate = new Promise<void>((resolve) => {
-    releaseFirst = resolve;
-  });
+  const firstGate = Promise.withResolvers<void>();
   await page.route("**/api/repository/files?**", async (route) => {
     const requestUrl = new URL(route.request().url());
     const requested = requestUrl.searchParams.get("repository");
-    if (requested === "example/first") await firstGate;
+    if (requested === "example/first") await firstGate.promise;
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -108,7 +105,7 @@ test("opens repository links without accepting a late response from the previous
   await expect(page).toHaveURL("/repo/example/second");
   await expect(page.locator(".repository-file-row")).toContainText("second.ts");
 
-  releaseFirst();
+  firstGate.resolve();
   await expect(page.locator(".repository-file-row")).toContainText("second.ts");
   await expect(page.locator(".repository-file-row")).not.toContainText(
     "first.ts",

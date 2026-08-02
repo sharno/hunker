@@ -37,14 +37,11 @@ test("shows an empty loading state for initial loads and refreshes", async ({
   page,
 }) => {
   let reviewRequests = 0;
-  let releaseReview: () => void = () => undefined;
-  let reviewGate = new Promise<void>((resolve) => {
-    releaseReview = resolve;
-  });
+  let reviewGate = Promise.withResolvers<void>();
 
   await page.route("**/api/diff?**", async (route) => {
     const revision = ++reviewRequests;
-    await reviewGate;
+    await reviewGate.promise;
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -78,14 +75,12 @@ test("shows an empty loading state for initial loads and refreshes", async ({
   await expect(page.locator(".diff-panel")).toHaveCount(0);
   await expect(page).toHaveTitle("Loading review · Hunker");
 
-  releaseReview();
+  reviewGate.resolve();
   await expect(
     page.getByRole("heading", { name: "Loading test revision 1" }),
   ).toBeVisible();
 
-  reviewGate = new Promise<void>((resolve) => {
-    releaseReview = resolve;
-  });
+  reviewGate = Promise.withResolvers<void>();
   await page.getByRole("button", { name: "Refresh diff from GitHub" }).click();
 
   await expect(page.locator(".review-loading")).toBeVisible();
@@ -94,7 +89,7 @@ test("shows an empty loading state for initial loads and refreshes", async ({
   ).toHaveCount(0);
   await expect(page.locator(".diff-panel")).toHaveCount(0);
 
-  releaseReview();
+  reviewGate.resolve();
   await expect(
     page.getByRole("heading", { name: "Loading test revision 2" }),
   ).toBeVisible();

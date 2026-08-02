@@ -547,8 +547,11 @@ const requestRevisionCheck = (model: ModelType): UpdateReturn => {
   ];
 };
 
-export const update = (model: ModelType, message: Message): UpdateReturn =>
-  M.value(message).pipe(
+export const update = (
+  model: ModelType,
+  receivedMessage: Message,
+): UpdateReturn =>
+  M.value(receivedMessage).pipe(
     M.withReturnType<UpdateReturn>(),
     M.tagsExhaustive({
       GotGitHubLocationMessage: ({ message }) => {
@@ -557,8 +560,8 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         const next = evo(model, {
           githubLocation: () => githubLocation,
         });
-        const mappedCommands = Command.mapMessages(commands, (message) =>
-          GotGitHubLocationMessage({ message }),
+        const mappedCommands = Command.mapMessages(commands, (mappedMessage) =>
+          GotGitHubLocationMessage({ message: mappedMessage }),
         );
         return Option.match(maybeOutMessage, {
           onNone: () => [next, mappedCommands],
@@ -586,8 +589,8 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
               }),
               [
                 ...mappedCommands,
-                ...Command.mapMessages(closeCommands, (message) =>
-                  GotOpenReviewPopoverMessage({ message }),
+                ...Command.mapMessages(closeCommands, (mappedMessage) =>
+                  GotOpenReviewPopoverMessage({ message: mappedMessage }),
                 ),
                 Navigate({ href, method: "push" }),
               ],
@@ -610,8 +613,8 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         );
         return [
           evo(model, { diffOptionsPopover: () => diffOptionsPopover }),
-          Command.mapMessages(commands, (message) =>
-            GotDiffOptionsPopoverMessage({ message }),
+          Command.mapMessages(commands, (mappedMessage) =>
+            GotDiffOptionsPopoverMessage({ message: mappedMessage }),
           ),
         ];
       },
@@ -622,8 +625,8 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         );
         return [
           evo(model, { openReviewPopover: () => openReviewPopover }),
-          Command.mapMessages(commands, (message) =>
-            GotOpenReviewPopoverMessage({ message }),
+          Command.mapMessages(commands, (mappedMessage) =>
+            GotOpenReviewPopoverMessage({ message: mappedMessage }),
           ),
         ];
       },

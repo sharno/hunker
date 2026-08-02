@@ -1,3 +1,5 @@
+import type { CharacterDiffResult, SemanticResult } from "../src/domain";
+
 export const reviewUrl = "https://github.com/example/hunker-demo/pull/42";
 
 export const reviewResponse = {
@@ -104,7 +106,7 @@ export const movesResponse = {
   ],
 } as const;
 
-export const semanticResponse = {
+export const semanticResponse: SemanticResult = {
   _tag: "Parsed",
   path: "src/greet.ts",
   language: "TypeScript",
@@ -119,9 +121,9 @@ export const semanticResponse = {
       confidence: 1,
     },
   ],
-} as const;
+};
 
-const characterRows = {
+const characterRows: Readonly<Record<string, CharacterDiffResult["rows"]>> = {
   "src/greet.ts": [
     {
       oldLine: 1,
@@ -156,17 +158,17 @@ const characterRows = {
       newRanges: [{ start: 0, end: 38 }],
     },
   ],
-} as const;
+};
 
 export const characterDiffResponse = (
   path: string,
   ignoreWhitespace: boolean,
   mode: "token" | "character",
-) => ({
+): CharacterDiffResult => ({
   path,
   ignoreWhitespace,
   mode,
-  rows: characterRows[path as keyof typeof characterRows] ?? [],
+  rows: characterRows[path] ?? [],
 });
 
 export const reviewCommentsResponse = {

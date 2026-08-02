@@ -14,9 +14,9 @@ Each view resolves to a typed target:
 - `CommitTarget(repository, oid, parentOid)`
 - `WorkingCopyTarget(repositoryPath, branch, headOid, dirtyFingerprint)`
 
-The URL stores the human-readable ref or GitHub resource. The server resolves
-it to immutable OIDs for one response, so concurrent tabs never depend on a
-mutable process-wide checkout.
+The URL stores the human-readable ref or GitHub resource. The server resolves it
+to immutable OIDs for one response, so concurrent tabs never depend on a mutable
+process-wide checkout.
 
 ## Storage and commands
 
@@ -43,8 +43,8 @@ repository-browsing path cheap without allowing a truncated local commit list.
 
 Visible repository views should poll status every two minutes. The server may
 fetch the relevant branch or pull ref when its last successful fetch is older
-than two minutes. It must not automatically run `git pull` in a user checkout
-or broadly fetch unrelated refs.
+than two minutes. It must not automatically run `git pull` in a user checkout or
+broadly fetch unrelated refs.
 
 The UI should show the tracked branch, current OID, dirty state, upstream, and
 ahead/behind counts. When a clean checkout is behind, it can offer an explicit
@@ -58,8 +58,8 @@ available” instead of silently replacing the diff.
 ## Worktrees
 
 Most views do not need a worktree. Git can diff commits and read blobs directly.
-FFF is the exception because it indexes a filesystem tree. For fuzzy search on
-a target other than the user's current checkout, Hunker may create a detached,
+FFF is the exception because it indexes a filesystem tree. For fuzzy search on a
+target other than the user's current checkout, Hunker may create a detached,
 read-only worktree keyed by repository and target OID. These worktrees are cache
 entries with leases and idle-time cleanup; they are not assigned one-for-one to
 browser tabs.

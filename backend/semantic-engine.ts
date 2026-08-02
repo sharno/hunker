@@ -169,7 +169,9 @@ const locatedUnits = (
     const parsed = parseUnits(language, source, true);
     if (parsed.parseFailed) return [];
     const path = side === "old" ? fileOldPath(file) : file.path;
-    return parsed.units.map((unit) => ({ ...unit, path, pairIndex }));
+    return parsed.units.map((unit) =>
+      Object.assign({}, unit, { path, pairIndex }),
+    );
   });
 
 const isContainedMove = (
@@ -224,13 +226,14 @@ const detectReviewMoves = (files: ReadonlyArray<FilePair>) => {
   ) => {
     const oldUnique = uniqueBy([...oldRemaining], fingerprint);
     const newUnique = uniqueBy([...newRemaining], fingerprint);
-    const pairs = [...oldUnique].flatMap(([key, oldUnit]) => {
-      const newUnit = newUnique.get(key);
-      return newUnit === undefined ? [] : [{ oldUnit, newUnit }];
-    });
-    pairs.sort(
-      (left, right) => right.oldUnit.text.length - left.oldUnit.text.length,
-    );
+    const pairs = [...oldUnique]
+      .flatMap(([key, oldUnit]) => {
+        const newUnit = newUnique.get(key);
+        return newUnit === undefined ? [] : [{ oldUnit, newUnit }];
+      })
+      .toSorted(
+        (left, right) => right.oldUnit.text.length - left.oldUnit.text.length,
+      );
     const stableInFile = new Set<(typeof pairs)[number]>();
     if (!changed) {
       const sameFilePairs = new Map<number, Array<(typeof pairs)[number]>>();
@@ -243,7 +246,7 @@ const detectReviewMoves = (files: ReadonlyArray<FilePair>) => {
         ]);
       }
       for (const filePairs of sameFilePairs.values()) {
-        const ordered = [...filePairs].sort(
+        const ordered = filePairs.toSorted(
           (left, right) => left.oldUnit.order - right.oldUnit.order,
         );
         const stableIndexes = longestIncreasingIndexes(

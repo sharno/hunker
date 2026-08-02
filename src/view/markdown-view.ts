@@ -107,6 +107,7 @@ const heading = (
     case 6:
       return h.h6([], children);
   }
+  return depth satisfies never;
 };
 
 const tableRow = (
@@ -293,6 +294,7 @@ const renderNode = (
     case "definition":
       return h.empty;
   }
+  return node satisfies never;
 };
 
 const renderNodes = (

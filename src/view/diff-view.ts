@@ -180,16 +180,15 @@ export const unifiedDiffView = (
           ),
         ],
       );
-      return [
-        diffLine,
-        ...inlineReviewThreads(
+      return [diffLine].concat(
+        inlineReviewThreads(
           interaction.path,
           line.oldNumber,
           line.newNumber,
           interaction.reviews,
           h,
         ),
-      ];
+      );
     }),
   );
 
@@ -341,15 +340,14 @@ export const splitDiffView = (
           splitCell(row.right, "right", characterDiff, moved, interaction, h),
         ],
       );
-      return [
-        splitRow,
-        ...inlineReviewThreads(
+      return [splitRow].concat(
+        inlineReviewThreads(
           interaction.path,
           row.left?.oldNumber ?? null,
           row.right?.newNumber ?? null,
           interaction.reviews,
           h,
         ),
-      ];
+      );
     }),
   );

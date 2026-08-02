@@ -212,7 +212,7 @@ export const toFullDiffLines = (
   let oldCursor = oldLines.length === 0 ? 0 : 1;
   let newCursor = newLines.length === 0 ? 0 : 1;
 
-  for (let index = 0; index < patchLines.length; ) {
+  for (let index = 0; index < patchLines.length;) {
     const header = patchLines[index];
     if (header?.kind !== "hunk") {
       index += 1;

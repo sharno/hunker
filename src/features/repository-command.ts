@@ -1,4 +1,4 @@
-import { Effect, Schema as S } from "effect";
+import { Data, Effect, Schema as S } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { Command, Http } from "foldkit";
 
@@ -28,6 +28,13 @@ const fileResponse = S.Struct({
 });
 const cloneResponse = S.Struct({ path: S.String });
 
+class RepositoryFilesRequestFailed extends Data.TaggedError(
+  "RepositoryFilesRequestFailed",
+)<{
+  readonly message: string;
+  readonly missing: boolean;
+}> {}
+
 export const FetchRepositoryFiles = Command.define("FetchRepositoryFiles", {
   args: { repository: S.String },
   messages: [SucceededFetchRepositoryFiles, FailedFetchRepositoryFiles],
@@ -41,8 +48,7 @@ export const FetchRepositoryFiles = Command.define("FetchRepositoryFiles", {
       );
       const data: unknown = yield* response.json;
       if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail({
-          _tag: "RepositoryFilesRequestFailed" as const,
+        return yield* new RepositoryFilesRequestFailed({
           message: responseError(
             data,
             "Could not list local repository files.",
@@ -56,22 +62,21 @@ export const FetchRepositoryFiles = Command.define("FetchRepositoryFiles", {
         files: decoded.files,
       });
     }).pipe(
+      Effect.catchTag("RepositoryFilesRequestFailed", (error) =>
+        Effect.succeed(
+          FailedFetchRepositoryFiles({
+            repository,
+            error: error.message,
+            missing: error.missing,
+          }),
+        ),
+      ),
       Effect.catch((error) =>
         Effect.succeed(
           FailedFetchRepositoryFiles({
             repository,
-            error:
-              typeof error === "object" &&
-              error !== null &&
-              "message" in error &&
-              typeof error.message === "string"
-                ? error.message
-                : requestError(error, "Could not list files."),
-            missing:
-              typeof error === "object" &&
-              error !== null &&
-              "missing" in error &&
-              error.missing === true,
+            error: requestError(error, "Could not list files."),
+            missing: false,
           }),
         ),
       ),

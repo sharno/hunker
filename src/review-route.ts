@@ -47,14 +47,15 @@ const decodeSegment = (segment: string) =>
 export const reviewRouteFromPathname = (
   pathname: string,
 ): ReviewRoute | undefined => {
-  const route = locationToAppRoute(pathname);
-  return M.value(route).pipe(
+  const appRoute = locationToAppRoute(pathname);
+  return M.value(appRoute).pipe(
     M.withReturnType<ReviewRoute | undefined>(),
     M.tags({
-      Pull: (route) => route,
-      Compare: (route) => (route.range.length > 2 ? route : undefined),
-      Commit: (route) =>
-        /^[0-9a-f]{7,64}$/i.test(route.sha) ? route : undefined,
+      Pull: (pullRoute) => pullRoute,
+      Compare: (compareRoute) =>
+        compareRoute.range.length > 2 ? compareRoute : undefined,
+      Commit: (commitRoute) =>
+        /^[0-9a-f]{7,64}$/i.test(commitRoute.sha) ? commitRoute : undefined,
     }),
     M.orElse(() => undefined),
   );

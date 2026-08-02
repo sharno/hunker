@@ -267,25 +267,23 @@ const intelligenceControls = (model: Model, h: HtmlBuilder<Message>) => [
       h.span([h.Class("control-label")], ["Inline diff"]),
       h.div(
         [h.Class("segmented")],
-        [
-          ...(["token", "character", "off"] as const).map((mode) =>
-            button(
-              h,
-              [
-                h.Type("button"),
-                h.Class(buttonClass(model.inlineDiffMode === mode)),
-                h.OnClick(SelectedInlineDiffMode({ value: mode })),
-              ],
-              [
-                mode === "token"
-                  ? "Token"
-                  : mode === "character"
-                    ? "Character"
-                    : "Off",
-              ],
-            ),
+        (["token", "character", "off"] as const).map((mode) =>
+          button(
+            h,
+            [
+              h.Type("button"),
+              h.Class(buttonClass(model.inlineDiffMode === mode)),
+              h.OnClick(SelectedInlineDiffMode({ value: mode })),
+            ],
+            [
+              mode === "token"
+                ? "Token"
+                : mode === "character"
+                  ? "Character"
+                  : "Off",
+            ],
           ),
-        ],
+        ),
       ),
     ],
   ),
@@ -1003,6 +1001,22 @@ const movementSummaryView = (model: Model, h: HtmlBuilder<Message>): Html => {
   });
 };
 
+const semanticChangeText = (change: SemanticChange) => {
+  const kind = change.kind.replaceAll("_", " ");
+  if (change._tag === "Renamed") {
+    return `Renamed ${kind} ${change.oldLabel} → ${change.newLabel}`;
+  }
+  return `${change._tag} ${kind} ${change.label}`;
+};
+
+const semanticChangeKey = (change: SemanticChange) => {
+  if (change._tag === "Deleted") {
+    return `${change._tag}:${change.oldRange.startLine}:${change.oldRange.startColumn}:${change.label}`;
+  }
+  const label = change._tag === "Renamed" ? change.newLabel : change.label;
+  return `${change._tag}:${change.newRange.startLine}:${change.newRange.startColumn}:${label}`;
+};
+
 const diffPanelView = (
   file: FileChange,
   model: Model,
@@ -1070,22 +1084,6 @@ const diffPanelView = (
       .map((move) => ({ start: move.toLine, count: move.lineCount })),
     semanticOld: rangeFor("old"),
     semanticNew: rangeFor("new"),
-  };
-
-  const semanticChangeText = (change: SemanticChange) => {
-    const kind = change.kind.replaceAll("_", " ");
-    if (change._tag === "Renamed") {
-      return `Renamed ${kind} ${change.oldLabel} → ${change.newLabel}`;
-    }
-    return `${change._tag} ${kind} ${change.label}`;
-  };
-
-  const semanticChangeKey = (change: SemanticChange) => {
-    if (change._tag === "Deleted") {
-      return `${change._tag}:${change.oldRange.startLine}:${change.oldRange.startColumn}:${change.label}`;
-    }
-    const label = change._tag === "Renamed" ? change.newLabel : change.label;
-    return `${change._tag}:${change.newRange.startLine}:${change.newRange.startColumn}:${label}`;
   };
 
   const interaction = {

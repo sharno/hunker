@@ -3,7 +3,14 @@
   "extends": ["./node_modules/@foldkit/oxlint-plugin/recommended.json"],
   "plugins": ["typescript"],
   "categories": {
-    "correctness": "off"
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "error"
+  },
+  "options": {
+    "typeAware": true,
+    "denyWarnings": true,
+    "reportUnusedDisableDirectives": "error"
   },
   "rules": {
     "no-unused-vars": [
@@ -16,20 +23,11 @@
       }
     ],
     "typescript/no-explicit-any": "error",
+    "no-underscore-dangle": ["error", { "allow": ["_tag"] }],
     "typescript/consistent-type-assertions": [
       "error",
       { "assertionStyle": "never" }
     ]
   },
-  "ignorePatterns": [
-    "dist/",
-    "node_modules/",
-    "vendor/",
-    "**/*.d.ts",
-    "vite.config.ts",
-    "vitest.config.ts",
-    "playwright.config.ts",
-    "**/*.config.js",
-    "**/*.config.mjs"
-  ]
+  "ignorePatterns": ["dist/", "node_modules/", "vendor/", "**/*.d.ts"]
 }

@@ -19,13 +19,7 @@ import {
   CharacterDiffFailed,
   layer as characterDiffLayer,
 } from "./character-diff-engine";
-import {
-  GitHubFetchFailed,
-  InvalidGitHubUrl,
-  loadPullCommits,
-  loadReviewMetadata,
-  parseGitHubUrl,
-} from "./github";
+import { loadPullCommits, loadReviewMetadata, parseGitHubUrl } from "./github";
 import type { FileStatus } from "./github";
 import { layer as githubAuthLayer } from "./github-auth";
 import { LocalGit, LocalGitFailed, layer as localGitLayer } from "./local-git";

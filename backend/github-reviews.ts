@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Option, Schema as S } from "effect";
 import {
   HttpClient,
   HttpClientError,
@@ -31,49 +31,45 @@ export type ReviewEvent = "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
 const repositoryApiUrl = (target: PullTarget) =>
   `https://api.github.com/repos/${target.owner}/${target.repo}`;
 
-const asRecord = (value: unknown): Readonly<Record<string, unknown>> =>
-  typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : {};
+const GitHubReviewCommentResponse = S.Struct({
+  id: S.Number,
+  path: S.String,
+  body: S.String,
+  user: S.NullOr(S.Struct({ login: S.String })),
+  html_url: S.String,
+  created_at: S.String,
+  in_reply_to_id: S.optional(S.Number),
+  line: S.NullOr(S.Number),
+  original_line: S.NullOr(S.Number),
+  side: S.NullOr(S.String),
+  original_side: S.NullOr(S.String),
+});
 
-const stringField = (record: Readonly<Record<string, unknown>>, key: string) =>
-  typeof record[key] === "string" ? record[key] : "";
+const GitHubReviewCommentsResponse = S.Array(GitHubReviewCommentResponse);
 
-const numberField = (record: Readonly<Record<string, unknown>>, key: string) =>
-  typeof record[key] === "number" ? record[key] : undefined;
-
-const reviewComment = (value: unknown): ReviewComment | undefined => {
-  const comment = asRecord(value);
-  const id = numberField(comment, "id");
-  const path = stringField(comment, "path");
-  if (id === undefined || path === "") return undefined;
-  const user = asRecord(comment.user);
-  const sideValue =
-    stringField(comment, "side") || stringField(comment, "original_side");
+const reviewComment = (
+  comment: S.Schema.Type<typeof GitHubReviewCommentResponse>,
+): ReviewComment => {
+  const sideValue = comment.side ?? comment.original_side;
   return {
-    id,
-    rootId: numberField(comment, "in_reply_to_id") ?? id,
-    path,
-    body: stringField(comment, "body"),
-    author: stringField(user, "login") || "GitHub user",
-    htmlUrl: stringField(comment, "html_url"),
-    createdAt: stringField(comment, "created_at"),
-    line:
-      numberField(comment, "line") ??
-      numberField(comment, "original_line") ??
-      null,
+    id: comment.id,
+    rootId: comment.in_reply_to_id ?? comment.id,
+    path: comment.path,
+    body: comment.body,
+    author: comment.user?.login ?? "GitHub user",
+    htmlUrl: comment.html_url,
+    createdAt: comment.created_at,
+    line: comment.line ?? comment.original_line,
     side: sideValue === "LEFT" ? "LEFT" : "RIGHT",
     resolved: false,
   };
 };
 
 const decodeComments = (value: unknown): ReadonlyArray<ReviewComment> =>
-  Array.isArray(value)
-    ? value.flatMap((item) => {
-        const comment = reviewComment(item);
-        return comment === undefined ? [] : [comment];
-      })
-    : [];
+  Option.match(S.decodeUnknownOption(GitHubReviewCommentsResponse)(value), {
+    onNone: () => [],
+    onSome: (comments) => comments.map(reviewComment),
+  });
 
 const reviewThreadsQuery = `
   query HunkerReviewThreads($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
@@ -98,34 +94,60 @@ type ResolvedThreadsPage = Readonly<{
   nextCursor: string | null;
 }>;
 
+const GitHubReviewThreadsResponse = S.Struct({
+  data: S.Struct({
+    repository: S.NullOr(
+      S.Struct({
+        pullRequest: S.NullOr(
+          S.Struct({
+            reviewThreads: S.Struct({
+              nodes: S.Array(
+                S.Struct({
+                  isResolved: S.Boolean,
+                  comments: S.Struct({
+                    nodes: S.Array(
+                      S.Struct({
+                        fullDatabaseId: S.NullOr(S.Union([S.String, S.Number])),
+                      }),
+                    ),
+                  }),
+                }),
+              ),
+              pageInfo: S.Struct({
+                hasNextPage: S.Boolean,
+                endCursor: S.NullOr(S.String),
+              }),
+            }),
+          }),
+        ),
+      }),
+    ),
+  }),
+});
+
 export const decodeResolvedThreadsPage = (
   value: unknown,
 ): ResolvedThreadsPage => {
-  const data = asRecord(asRecord(value).data);
-  const repository = asRecord(data.repository);
-  const pullRequest = asRecord(repository.pullRequest);
-  const reviewThreads = asRecord(pullRequest.reviewThreads);
-  const nodes = Array.isArray(reviewThreads.nodes) ? reviewThreads.nodes : [];
-  const resolutions = nodes.flatMap((node) => {
-    const thread = asRecord(node);
-    const comments = asRecord(thread.comments);
-    const root = Array.isArray(comments.nodes)
-      ? asRecord(comments.nodes[0])
-      : {};
-    const rawId = root.fullDatabaseId;
+  const decoded = Option.getOrUndefined(
+    S.decodeUnknownOption(GitHubReviewThreadsResponse)(value),
+  );
+  const reviewThreads = decoded?.data.repository?.pullRequest?.reviewThreads;
+  if (reviewThreads === undefined) {
+    return { resolutions: [], nextCursor: null };
+  }
+  const resolutions = reviewThreads.nodes.flatMap((thread) => {
+    const rawId = thread.comments.nodes[0]?.fullDatabaseId;
     const id =
-      typeof rawId === "string" || typeof rawId === "number"
-        ? Number(rawId)
-        : Number.NaN;
-    return Number.isSafeInteger(id) && typeof thread.isResolved === "boolean"
-      ? [[id, thread.isResolved] as const]
+      rawId === null || rawId === undefined ? Number.NaN : Number(rawId);
+    return Number.isSafeInteger(id)
+      ? ([[id, thread.isResolved]] satisfies ReadonlyArray<
+          readonly [number, boolean]
+        >)
       : [];
   });
-  const pageInfo = asRecord(reviewThreads.pageInfo);
-  const nextCursor =
-    pageInfo.hasNextPage === true && typeof pageInfo.endCursor === "string"
-      ? pageInfo.endCursor
-      : null;
+  const nextCursor = reviewThreads.pageInfo.hasNextPage
+    ? reviewThreads.pageInfo.endCursor
+    : null;
   return { resolutions, nextCursor };
 };
 
@@ -174,10 +196,11 @@ export const loadReviewComments = (target: PullTarget) =>
         ).pipe(Effect.as(new Map<number, boolean>())),
       ),
     );
-    return comments.map((comment) => ({
-      ...comment,
-      resolved: resolutions.get(comment.rootId) ?? false,
-    }));
+    return comments.map((comment) =>
+      Object.assign({}, comment, {
+        resolved: resolutions.get(comment.rootId) ?? false,
+      }),
+    );
   });
 
 export const replyToReviewComment = (
@@ -193,8 +216,11 @@ export const replyToReviewComment = (
       request,
       "application/vnd.github+json",
     );
-    const comment = reviewComment(yield* response.json);
-    return comment;
+    const value: unknown = yield* response.json;
+    return Option.map(
+      S.decodeUnknownOption(GitHubReviewCommentResponse)(value),
+      reviewComment,
+    ).pipe(Option.getOrUndefined);
   });
 
 export const submitPullRequestReview = (

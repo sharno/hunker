@@ -166,7 +166,7 @@ export const layer = Layer.effect(
             fs.writeFileString(oldPath, input.oldText),
             fs.writeFileString(newPath, input.newText),
           ]);
-          const arguments_ = [
+          const gitArguments = [
             "diff",
             "--no-index",
             "--no-color",
@@ -185,7 +185,7 @@ export const layer = Layer.effect(
             newPath,
           ];
           const handle = yield* spawner.spawn(
-            ChildProcess.make("git", arguments_),
+            ChildProcess.make("git", gitArguments),
           );
           const [stdout, stderr, exitCode] = yield* Effect.all(
             [

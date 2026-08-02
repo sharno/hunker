@@ -38,8 +38,8 @@ const byName = <A>(left: FileTreeNode<A>, right: FileTreeNode<A>) =>
 const finishDirectory = <A>(draft: DraftDirectory<A>): FileTreeDirectory<A> => {
   const directories = [...draft.directories.values()]
     .map(finishDirectory)
-    .sort(byName);
-  const files = [...draft.files].sort(byName);
+    .toSorted(byName);
+  const files = draft.files.toSorted(byName);
   const children = [...directories, ...files];
   return {
     _tag: "Directory",

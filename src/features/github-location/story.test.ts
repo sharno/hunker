@@ -19,9 +19,9 @@ describe("GitHub location update", () => {
       update,
       given(init("", false)),
       message(UpdatedInput({ value: "https://github.com/foldkit/foldkit" })),
-      model((model) => {
-        expect(model.value).toBe("https://github.com/foldkit/foldkit");
-        expect(model.maybeError).toStrictEqual(Option.none());
+      model((state) => {
+        expect(state.value).toBe("https://github.com/foldkit/foldkit");
+        expect(state.maybeError).toStrictEqual(Option.none());
       }),
       expectNoOutMessage(),
     );
