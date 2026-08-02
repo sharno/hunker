@@ -70,7 +70,10 @@ test("offers a temporary or configured clone when a repository is missing", asyn
     }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Clone to /tmp" }).click();
-  await expect(page.locator(".repository-file-row")).toHaveCount(3);
+  await expect(page.locator(".repository-file-row")).toHaveCount(1);
+  await expect(
+    page.getByRole("button", { name: "Expand src", exact: true }),
+  ).toBeVisible();
   expect(fileRequests).toBe(2);
 });
 
@@ -164,7 +167,9 @@ test("browses local files and shows fuzzy content results with context", async (
   await page.goto("/repo/example/hunker-demo");
   await expect(
     page.getByRole("navigation", { name: "Repository files" }),
-  ).toContainText("greet.ts");
+  ).not.toContainText("greet.ts");
+  await expect(page.locator(".repository-file-row")).toHaveCount(1);
+  await page.getByRole("button", { name: "Expand src", exact: true }).click();
   await expect(page.locator(".repository-file-row")).toHaveCount(3);
   await page.getByRole("button", { name: "Collapse src", exact: true }).click();
   await expect(page.locator(".repository-file-row")).toHaveCount(1);

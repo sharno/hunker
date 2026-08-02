@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import {
   buildFileTree,
+  directoryPaths,
   parentFolderPaths,
   revealFileInTree,
 } from "../src/file-tree";
@@ -33,6 +34,17 @@ test("builds a directory-first tree with descendant file counts", () => {
 });
 
 test("reveals every ancestor when a nested file is selected", () => {
+  expect(
+    directoryPaths(
+      [
+        { path: "README.md" },
+        { path: "src/view/app.ts" },
+        { path: "src/index.ts" },
+        { path: "docs/guide.md" },
+      ],
+      (file) => file.path,
+    ),
+  ).toEqual(["docs", "src", "src/view"]);
   expect(parentFolderPaths("src/view/app.ts")).toEqual(["src", "src/view"]);
   expect(
     revealFileInTree(["docs", "src", "src/view"], "src/view/app.ts"),

@@ -82,6 +82,21 @@ export const buildFileTree = <A>(
   return finishDirectory(root).children;
 };
 
+const directoryPathsFromNodes = <A>(
+  nodes: ReadonlyArray<FileTreeNode<A>>,
+): ReadonlyArray<string> =>
+  nodes.flatMap((node) =>
+    node._tag === "Directory"
+      ? [node.path, ...directoryPathsFromNodes(node.children)]
+      : [],
+  );
+
+export const directoryPaths = <A>(
+  files: ReadonlyArray<A>,
+  pathOf: (file: A) => string,
+): ReadonlyArray<string> =>
+  directoryPathsFromNodes(buildFileTree(files, pathOf));
+
 export const parentFolderPaths = (path: string): ReadonlyArray<string> => {
   const segments = path.split("/").filter((segment) => segment !== "");
   return segments

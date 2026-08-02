@@ -21,7 +21,7 @@ import {
   Search,
   type SearchMatch as RepositorySearchMatchType,
 } from "./model";
-import { revealFileInTree } from "../../file-tree";
+import { directoryPaths, revealFileInTree } from "../../file-tree";
 
 export type RepositoryRoute = Readonly<{ owner: string; name: string }>;
 export type RepositoryOptions = Readonly<{ query: string; file: string }>;
@@ -166,6 +166,13 @@ const filesLoaded = (
     : [
         evo(model, {
           files: () => Files.Success({ data: files }),
+          collapsedFolders: (folders) =>
+            AsyncData.isLoading(model.files)
+              ? revealFileInTree(
+                  directoryPaths(files, (file) => file.path),
+                  model.selectedPath,
+                )
+              : folders,
         }),
         [],
       ];
