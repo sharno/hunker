@@ -44,8 +44,8 @@ The stack is Effect end to end:
   freshness
 - `backend/review-backing.ts` — local-object selection and pinned GitHub
   fallback
-- `backend/local-repository.ts` — scoped local clone discovery, FFF indexes, and
-  file reads
+- `backend/local-repository.ts` — scoped local clone discovery, ripgrep and FFF
+  search, and safe file reads
 - `backend/settings.ts` — Effect-validated, atomically persisted local settings
 - `backend/ast-grep-analysis.ts` — parser selection, AST units, and structural
   fingerprints
@@ -62,9 +62,10 @@ Markdown, and syntax renderers remain ordinary shared modules.
 
 ## Run locally
 
-Requires Bun, Node.js 22 or newer, and Git. ast-grep runs in the server process
-through its native TypeScript package. Inline diffs invoke the locally installed
-Git binary through an Effect service.
+Requires Bun, Node.js 22 or newer, Git, and ripgrep. ast-grep runs in the server
+process through its native TypeScript package. Inline diffs and repository
+search invoke the locally installed Git and ripgrep binaries through Effect
+services.
 
 ```bash
 bun install
@@ -149,20 +150,24 @@ defaults when no settings file exists:
 HUNKER_REPOS_ROOT=/path/to/clones bun run dev
 ```
 
-Repository search is entirely local. FFF maintains a native fuzzy index for
-filename ranking and content matches; Hunker adds surrounding source lines and
-opens matched files with the same safe syntax highlighter used by diffs. Search
-queries remain in the query string, while selected files and the Files/Commits
-view use GitHub-shaped paths. The Commits view reads up to 100 commits from the
-local checkout's `HEAD` and links each immutable OID to Hunker's existing
-commit-diff view. The API validates repository and file paths against the
-configured root before reading them. When a repository is unavailable, the
-browser offers to clone it either below the configured repos root or into
-`/tmp/hunker/repositories`. Set `HUNKER_CACHE_ROOT` to move temporary Hunker
-clones elsewhere. Cloning uses the local `gh` authentication, including access
-to private repositories. New clones start with only the default branch tip and
-use Git's partial-clone support; missing immutable objects are fetched on
-demand, while the commits view deepens the PR history progressively.
+Repository search is entirely local. Exact text is the default and ripgrep
+provides fixed-string and regular-expression modes across filenames and file
+contents. FFF remains available as an explicit fuzzy mode for approximate
+discovery. Hunker adds surrounding source lines and opens matched files with the
+same safe syntax highlighter used by diffs. Search queries and non-default modes
+remain in the query string, while selected files and the Files/Commits view use
+GitHub-shaped paths. Pull-request and selected-commit searches stay scoped to
+their loaded changed paths and patch text, so they also work without a local
+clone. The Commits view reads up to 100 commits from the local checkout's `HEAD`
+and links each immutable OID to Hunker's existing commit-diff view. The API
+validates repository and file paths against the configured root before reading
+them. When a repository is unavailable, the browser offers to clone it either
+below the configured repos root or into `/tmp/hunker/repositories`. Set
+`HUNKER_CACHE_ROOT` to move temporary Hunker clones elsewhere. Cloning uses the
+local `gh` authentication, including access to private repositories. New clones
+start with only the default branch tip and use Git's partial-clone support;
+missing immutable objects are fetched on demand, while the commits view deepens
+the PR history progressively.
 
 After a checkout or cache clone exists, Hunker automatically uses its Git object
 database for PR and commit diffs, file revisions, and commit logs. Each loaded

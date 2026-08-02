@@ -53,17 +53,24 @@ test("round-trips repository routes and browser options", () => {
   expect(
     localRepositoryUrl(
       { owner: "radarlabs", name: "server" },
-      { query: "config key", file: "src/config.ts", tab: "files" },
+      {
+        query: "config key",
+        searchMode: "regex",
+        file: "src/config.ts",
+        tab: "files",
+      },
     ),
-  ).toBe("/radarlabs/server/blob/HEAD/src/config.ts?q=config+key");
+  ).toBe("/radarlabs/server/blob/HEAD/src/config.ts?q=config+key&search=regex");
   expect(
     repositoryOptionsFromSearch("?q=config+key&file=src%2Fconfig.ts"),
   ).toEqual({
     query: "config key",
+    searchMode: "literal",
     file: "src/config.ts",
     tab: "files",
   });
   expect(repositoryOptionsFromSearch("?view=commits").tab).toBe("commits");
+  expect(repositoryOptionsFromSearch("?search=fuzzy").searchMode).toBe("fuzzy");
 });
 
 test("offers a temporary or configured clone when a repository is missing", async ({
@@ -196,9 +203,10 @@ test("lists local repository commits and links them to commit review", async ({
   await expect(page.getByText("On main")).toBeVisible();
 });
 
-test("browses local files and shows fuzzy content results with context", async ({
+test("uses literal search by default and keeps FFF as an explicit mode", async ({
   page,
 }) => {
+  const searchModes: Array<string | null> = [];
   await page.route("**/api/repository/files?**", (route) => {
     const requestUrl = new URL(route.request().url());
     expect(requestUrl.searchParams.get("repository")).toBe(repository);
@@ -208,8 +216,9 @@ test("browses local files and shows fuzzy content results with context", async (
       json: { files },
     });
   });
-  await page.route("**/api/repository/search?**", (route) =>
-    route.fulfill({
+  await page.route("**/api/repository/search?**", (route) => {
+    searchModes.push(new URL(route.request().url()).searchParams.get("mode"));
+    return route.fulfill({
       status: 200,
       contentType: "application/json",
       json: {
@@ -230,8 +239,8 @@ test("browses local files and shows fuzzy content results with context", async (
           },
         ],
       },
-    }),
-  );
+    });
+  });
   await page.route("**/api/repository/file?**", (route) =>
     route.fulfill({
       status: 200,
@@ -257,6 +266,12 @@ test("browses local files and shows fuzzy content results with context", async (
   await page.getByRole("button", { name: "Expand src", exact: true }).click();
   await expect(page.locator(".repository-file-row")).toHaveCount(3);
 
+  const mode = page.getByRole("combobox", {
+    name: "Repository search mode",
+  });
+  await expect(mode).toHaveValue("literal");
+  await mode.selectOption("fuzzy");
+
   await page
     .getByRole("searchbox", {
       name: "Search repository files and contents",
@@ -264,8 +279,11 @@ test("browses local files and shows fuzzy content results with context", async (
     .fill("gret person");
   await page.getByRole("button", { name: "Search", exact: true }).click();
   await expect(page).toHaveURL(
-    (url) => url.searchParams.get("q") === "gret person",
+    (url) =>
+      url.searchParams.get("q") === "gret person" &&
+      url.searchParams.get("search") === "fuzzy",
   );
+  expect(searchModes).toEqual(["fuzzy"]);
   await expect(page.locator(".repository-filename-results")).toContainText(
     "src/greet.ts",
   );

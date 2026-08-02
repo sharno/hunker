@@ -1,6 +1,7 @@
 import { Schema as S } from "effect";
 import { m } from "foldkit/message";
 
+import { RepositorySearchMode } from "../../features/code-search";
 import { Commit, File, SearchMatch } from "./model";
 
 export const CompletedNavigate = m("CompletedNavigate");
@@ -30,16 +31,21 @@ export const FailedCloneRepository = m("FailedCloneRepository", {
 export const UpdatedRepositoryQuery = m("UpdatedRepositoryQuery", {
   value: S.String,
 });
+export const SelectedRepositorySearchMode = m("SelectedRepositorySearchMode", {
+  mode: RepositorySearchMode,
+});
 export const SubmittedRepositorySearch = m("SubmittedRepositorySearch");
 export const SucceededSearchRepository = m("SucceededSearchRepository", {
   repository: S.String,
   query: S.String,
+  mode: RepositorySearchMode,
   files: S.Array(File),
   matches: S.Array(SearchMatch),
 });
 export const FailedSearchRepository = m("FailedSearchRepository", {
   repository: S.String,
   query: S.String,
+  mode: RepositorySearchMode,
   error: S.String,
 });
 export const SelectedRepositoryFile = m("SelectedRepositoryFile", {
@@ -85,6 +91,7 @@ export const Message = S.Union([
   SucceededCloneRepository,
   FailedCloneRepository,
   UpdatedRepositoryQuery,
+  SelectedRepositorySearchMode,
   SubmittedRepositorySearch,
   SucceededSearchRepository,
   FailedSearchRepository,

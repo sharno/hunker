@@ -138,7 +138,7 @@ const utilities: Readonly<Record<string, string>> = {
   "repository-identity":
     "flex min-w-0 flex-col [&>span]:text-[8px] [&>span]:tracking-[0.08em] [&>span]:text-[#9da7b4] [&>span]:uppercase [&>strong]:overflow-hidden [&>strong]:text-xs [&>strong]:text-ellipsis [&>strong]:whitespace-nowrap",
   "repository-search":
-    "grid h-9 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-[#4a5669] bg-[#263247] pl-3 [&>span]:text-[#aeb6be] [&_input]:min-w-0 [&_input]:border-0 [&_input]:bg-transparent [&_input]:text-[12px] [&_input]:text-white [&_input]:outline-none [&_input]:focus-visible:outline-2 [&_input]:focus-visible:outline-offset-2 [&_input]:focus-visible:outline-lime [&_input::placeholder]:text-[#8f9baa] [&_button]:h-7 [&_button]:cursor-pointer [&_button]:rounded-[4px] [&_button]:border-0 [&_button]:bg-lime [&_button]:px-3 [&_button]:text-[10px] [&_button]:font-[750] [&_button]:text-ink [&.is-hidden]:invisible [&.is-hidden]:pointer-events-none max-[760px]:order-3 max-[760px]:col-span-3",
+    "grid h-9 grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-[#4a5669] bg-[#263247] pl-3 [&>span]:text-[#aeb6be] [&_select]:max-w-24 [&_select]:rounded [&_select]:border [&_select]:border-[#566277] [&_select]:bg-[#344057] [&_select]:px-1.5 [&_select]:py-1 [&_select]:text-[9px] [&_select]:font-[700] [&_select]:text-white [&_select]:outline-none [&_input]:min-w-0 [&_input]:border-0 [&_input]:bg-transparent [&_input]:text-[12px] [&_input]:text-white [&_input]:outline-none [&_input]:focus-visible:outline-2 [&_input]:focus-visible:outline-offset-2 [&_input]:focus-visible:outline-lime [&_input::placeholder]:text-[#8f9baa] [&_button]:h-7 [&_button]:cursor-pointer [&_button]:rounded-[4px] [&_button]:border-0 [&_button]:bg-lime [&_button]:px-3 [&_button]:text-[10px] [&_button]:font-[750] [&_button]:text-ink [&.is-hidden]:invisible [&.is-hidden]:pointer-events-none max-[760px]:order-3 max-[760px]:col-span-3",
   "repository-view-tabs":
     "shrink-0 bg-[#303b50] [&_.segmented-button]:px-2.5 [&_.segmented-button]:py-1.5 [&_.segmented-button]:text-[10px] [&_.segmented-button]:text-[#b9c0cb] [&_.segmented-button.is-active]:bg-[#f7f7f3] [&_.segmented-button.is-active]:text-ink",
   "repository-github-loader":
@@ -231,7 +231,9 @@ const utilities: Readonly<Record<string, string>> = {
   "sidebar-toggle":
     "grid size-[26px] cursor-pointer place-items-center rounded-[5px] border border-[#c9cac3] bg-[#f8f7f3] p-0 text-[17px] leading-none text-[#626961] hover:border-[#aeb29f] hover:text-ink",
   "file-search":
-    "mx-3 mb-2.5 flex items-center gap-1.5 rounded-md border border-[#d6d5cf] bg-[#f8f7f3] px-[9px] py-[7px] text-[#777d76] [&_input]:w-full [&_input]:min-w-0 [&_input]:border-0 [&_input]:bg-transparent [&_input]:text-[11px] [&_input]:outline-none [&_input]:focus-visible:outline-2 [&_input]:focus-visible:outline-offset-2 [&_input]:focus-visible:outline-lime",
+    "mx-3 mb-2.5 flex items-center gap-1.5 rounded-md border border-[#d6d5cf] bg-[#f8f7f3] px-[9px] py-[7px] text-[#777d76] [&_select]:max-w-[58px] [&_select]:shrink-0 [&_select]:rounded [&_select]:border [&_select]:border-[#d0d2ca] [&_select]:bg-white [&_select]:px-1 [&_select]:py-0.5 [&_select]:text-[9px] [&_select]:font-[700] [&_select]:text-[#596159] [&_input]:w-full [&_input]:min-w-0 [&_input]:border-0 [&_input]:bg-transparent [&_input]:text-[11px] [&_input]:outline-none [&_input]:focus-visible:outline-2 [&_input]:focus-visible:outline-offset-2 [&_input]:focus-visible:outline-lime",
+  "file-search-error":
+    "mx-3 -mt-1.5 mb-2.5 rounded border border-[#e0aaa0] bg-[#fff0ed] px-2 py-1.5 font-mono text-[9px] leading-4 text-[#8c3026]",
   "file-list": "overflow-auto px-2 pt-0.5 pb-3.5",
   "file-tree": "min-w-0",
   "file-tree-directory":

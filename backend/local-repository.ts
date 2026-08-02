@@ -1,7 +1,21 @@
 import { FileFinder } from "@ff-labs/fff-node";
-import { Context, Data, Effect, FileSystem, Layer, Path, Stream } from "effect";
+import {
+  Context,
+  Data,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Schema as S,
+  Stream,
+} from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
+import {
+  compileTextSearch,
+  type RepositorySearchMode,
+} from "../src/features/code-search";
 import { loadSettings, resolveConfiguredPath } from "./settings";
 
 export type RepositoryFile = Readonly<{
@@ -46,6 +60,7 @@ type LocalRepositoryShape = Readonly<{
   search: (
     repository: RepositoryId,
     query: string,
+    mode: RepositorySearchMode,
   ) => Effect.Effect<
     Readonly<{
       files: ReadonlyArray<RepositoryFile>;
@@ -87,6 +102,36 @@ const fileSource = (
   path: string,
   lines: ReadonlyArray<string>,
 ): readonly [string, ReadonlyArray<string>] => [path, lines];
+
+const RipgrepText = S.Struct({ text: S.String });
+const RipgrepSubmatch = S.Struct({
+  match: RipgrepText,
+  start: S.Number,
+  end: S.Number,
+});
+const RipgrepMatch = S.Struct({
+  type: S.Literals(["match"]),
+  data: S.Struct({
+    path: RipgrepText,
+    lines: RipgrepText,
+    line_number: S.Number,
+    submatches: S.Array(RipgrepSubmatch),
+  }),
+});
+
+const parseJson = (value: string): unknown => JSON.parse(value);
+const decodeRipgrepMatch = (line: string) =>
+  Option.liftThrowable(parseJson)(line).pipe(
+    Option.flatMap(S.decodeUnknownOption(RipgrepMatch)),
+  );
+const characterOffset = (value: string, byteOffset: number) =>
+  Buffer.from(value).subarray(0, byteOffset).toString("utf8").length;
+const matchRange = (start: number, end: number): readonly [number, number] => [
+  start,
+  end,
+];
+const relativeRipgrepPath = (path: string) =>
+  path.startsWith("./") ? path.slice(2) : path;
 
 export const cloneArguments = (
   repository: RepositoryId,
@@ -149,6 +194,39 @@ export const layer = Layer.effect(
           error instanceof LocalRepositoryFailed
             ? error
             : failure(`Could not run Git: ${String(error)}`, 502),
+        ),
+      );
+
+    const runRipgrep = (
+      repositoryPath: string,
+      arguments_: ReadonlyArray<string>,
+      invalidPatternIsClientError = false,
+    ) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const handle = yield* spawner.spawn(
+            ChildProcess.make("rg", arguments_, { cwd: repositoryPath }),
+          );
+          const [output, exitCode] = yield* Effect.all(
+            [Stream.mkString(Stream.decodeText(handle.all)), handle.exitCode],
+            { concurrency: "unbounded" },
+          );
+          if (
+            exitCode === ChildProcessSpawner.ExitCode(0) ||
+            exitCode === ChildProcessSpawner.ExitCode(1)
+          ) {
+            return output;
+          }
+          return yield* failure(
+            output.trim() || `ripgrep exited with status ${exitCode}.`,
+            invalidPatternIsClientError ? 400 : 502,
+          );
+        }),
+      ).pipe(
+        Effect.mapError((error) =>
+          error instanceof LocalRepositoryFailed
+            ? error
+            : failure(`Could not run ripgrep: ${String(error)}`, 502),
         ),
       );
 
@@ -350,7 +428,7 @@ export const layer = Layer.effect(
         }));
       });
 
-    const search = (repository: RepositoryId, query: string) =>
+    const fuzzySearch = (repository: RepositoryId, query: string) =>
       Effect.gen(function* () {
         const { root, finder } = yield* finderFor(repository);
         const files = yield* Effect.try({
@@ -413,6 +491,119 @@ export const layer = Layer.effect(
           }),
         };
       });
+
+    const textSearch = (
+      repository: RepositoryId,
+      query: string,
+      mode: Exclude<RepositorySearchMode, "fuzzy">,
+    ) =>
+      Effect.gen(function* () {
+        const root = yield* repositoryPath(repository);
+        const expression = compileTextSearch(query, mode);
+        if (expression._tag === "Invalid") {
+          return yield* failure(expression.error, 400);
+        }
+        const [rawFiles, rawMatches] = yield* Effect.all([
+          runRipgrep(root, ["--files", "--hidden", "--glob", "!.git"]),
+          runRipgrep(
+            root,
+            [
+              "--json",
+              "--line-number",
+              "--column",
+              "--max-count",
+              "4",
+              "--max-filesize",
+              "2M",
+              "--hidden",
+              "--glob",
+              "!.git",
+              "--smart-case",
+              ...(mode === "literal" ? ["--fixed-strings"] : []),
+              "--",
+              query,
+              ".",
+            ],
+            mode === "regex",
+          ),
+        ]);
+        const filenamePaths = rawFiles
+          .split("\n")
+          .filter((path) => path !== "" && expression.matches(path))
+          .slice(0, 24);
+        const files = yield* Effect.forEach(
+          filenamePaths,
+          (path) =>
+            fs.stat(paths.resolve(root, path)).pipe(
+              Effect.map((info) => ({
+                path,
+                size: Number(info.size),
+                gitStatus: "clean",
+              })),
+              Effect.catch(() =>
+                Effect.succeed({ path, size: 0, gitStatus: "clean" }),
+              ),
+            ),
+          { concurrency: 8 },
+        );
+        const decodedMatches = rawMatches
+          .split("\n")
+          .flatMap((line) => Option.toArray(decodeRipgrepMatch(line)))
+          .slice(0, 100);
+        const matchedPaths = [
+          ...new Set(
+            decodedMatches.map((match) =>
+              relativeRipgrepPath(match.data.path.text),
+            ),
+          ),
+        ];
+        const sources = new Map(
+          yield* Effect.forEach(
+            matchedPaths,
+            (path) =>
+              validatedFilePath(root, path).pipe(
+                Effect.flatMap(fs.readFileString),
+                Effect.map((content) => fileSource(path, content.split("\n"))),
+                Effect.catch(() => Effect.succeed(fileSource(path, []))),
+              ),
+            { concurrency: 8 },
+          ),
+        );
+        return {
+          files,
+          matches: decodedMatches.map(({ data }) => {
+            const path = relativeRipgrepPath(data.path.text);
+            const lineContent = data.lines.text.replace(/\r?\n$/, "");
+            const lines = sources.get(path) ?? [];
+            const index = data.line_number - 1;
+            const ranges = data.submatches.map((submatch) =>
+              matchRange(
+                characterOffset(lineContent, submatch.start),
+                characterOffset(lineContent, submatch.end),
+              ),
+            );
+            return {
+              path,
+              line: data.line_number,
+              column: (ranges[0]?.[0] ?? 0) + 1,
+              lineContent,
+              contextBefore: lines.slice(Math.max(0, index - 2), index),
+              contextAfter: lines.slice(index + 1, index + 3),
+              ranges,
+              definition: false,
+            };
+          }),
+        };
+      });
+
+    const search = (
+      repository: RepositoryId,
+      query: string,
+      mode: RepositorySearchMode,
+    ) =>
+      mode === "fuzzy"
+        ? fuzzySearch(repository, query)
+        : textSearch(repository, query, mode);
 
     const readFile = (repository: RepositoryId, relativePath: string) =>
       Effect.gen(function* () {

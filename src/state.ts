@@ -364,6 +364,7 @@ const beginReviewLoad = (model: ModelType, url: string): ModelType =>
     prUrl: () => url,
     reviewRevision: () => ReviewRevisionIdle(),
     filter: () => "",
+    filterMode: (): "literal" => "literal",
     files: () => [],
     pullRequestFiles: () => [],
     semanticResults: () => [],
@@ -1235,6 +1236,10 @@ export const update = (
         [],
       ],
       UpdatedFilter: ({ value }) => [evo(model, { filter: () => value }), []],
+      SelectedReviewSearchMode: ({ value }) => [
+        evo(model, { filterMode: () => value }),
+        [],
+      ],
       SelectedFile: ({ path }) => {
         const next = evo(model, {
           selectedPath: () => path,
@@ -1414,6 +1419,7 @@ const initialModel = (
     githubLocation: GitHubLocation.init(prUrl, prUrl !== ""),
     prUrl,
     filter: "",
+    filterMode: "literal",
     meta: sampleMeta,
     reviewRevision: ReviewRevisionIdle(),
     files: sampleFiles,

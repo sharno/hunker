@@ -4,6 +4,7 @@ import { ts } from "foldkit/schema";
 import { Popover } from "@foldkit/ui";
 
 import * as GitHubLocation from "./features/github-location";
+import { TextSearchMode } from "./features/code-search";
 import * as Repository from "./page/repository";
 import * as Settings from "./page/settings";
 
@@ -269,6 +270,7 @@ export const Model = S.Struct({
   githubLocation: GitHubLocation.Model,
   prUrl: S.String,
   filter: S.String,
+  filterMode: TextSearchMode,
   meta: ReviewMeta,
   reviewRevision: ReviewRevision,
   files: S.Array(FileChange),

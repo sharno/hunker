@@ -51,6 +51,66 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+test("searches paths and changed code within the current pull request", async ({
+  page,
+}) => {
+  await page.route("**/api/diff?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: reviewResponse,
+    }),
+  );
+  await page.route("**/api/semantic?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: semanticResponse,
+    }),
+  );
+  await page.route("**/api/moves?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: movesResponse,
+    }),
+  );
+  await page.route("**/api/reviews?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: { comments: [] },
+    }),
+  );
+
+  await page.goto("/example/hunker-demo/pull/42");
+
+  const search = page.getByRole("searchbox", {
+    name: "Search pull request paths and changes",
+  });
+  const mode = page.getByRole("combobox", {
+    name: "Pull request search mode",
+  });
+  const files = page.locator(".file-row");
+
+  await expect(mode).toHaveValue("literal");
+  await search.fill("greetingPrefix");
+  await expect(files).toHaveCount(1);
+  await expect(files.first()).toContainText("message.ts");
+  await expect(page.locator(".sidebar-heading")).toContainText("1/2");
+
+  await mode.selectOption("regex");
+  await search.fill("greet\\(person");
+  await expect(files).toHaveCount(1);
+  await expect(files.first()).toContainText("greet.ts");
+
+  await search.fill("[");
+  await expect(page.getByRole("alert")).toContainText(
+    "Invalid regular expression",
+  );
+  await expect(files).toHaveCount(0);
+});
+
 test("shows an empty loading state for initial loads and refreshes", async ({
   page,
 }) => {

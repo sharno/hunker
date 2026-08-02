@@ -35,6 +35,10 @@
 - Record durable Effect, Foldkit, tooling, and architecture discoveries in this
   file as they are learned. Keep the guidance general and remove or correct it
   when the vendored sources prove it wrong.
+- Treat structured subprocess output as an external boundary: decode each record
+  with Effect Schema, model command-specific exit statuses (for example, a
+  search command's no-match status), and normalize tool paths to the app's
+  canonical repository-relative form before they enter domain state.
 - Use Bun for dependency management and scripts.
 - Keep the project on TypeScript 7 and strict typing. Do not introduce `any`.
 - Use Oxfmt for formatting and Oxlint with type-aware linting. Do not add

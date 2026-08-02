@@ -3,6 +3,7 @@ import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { Command, Http, Navigation } from "foldkit";
 
 import { requestError, responseError } from "../../api";
+import { RepositorySearchMode } from "../../features/code-search";
 import {
   CompletedNavigate,
   FailedCloneRepository,
@@ -162,12 +163,16 @@ export const CloneRepository = Command.define("CloneRepository", {
 });
 
 export const SearchRepository = Command.define("SearchRepository", {
-  args: { repository: S.String, query: S.String },
+  args: {
+    repository: S.String,
+    query: S.String,
+    mode: RepositorySearchMode,
+  },
   messages: [SucceededSearchRepository, FailedSearchRepository],
-  execute: ({ repository, query }) =>
+  execute: ({ repository, query, mode }) =>
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient;
-      const params = new URLSearchParams({ repository, query });
+      const params = new URLSearchParams({ repository, query, mode });
       const response = yield* client.execute(
         HttpClientRequest.get(`/api/repository/search?${params.toString()}`),
       );
@@ -180,13 +185,19 @@ export const SearchRepository = Command.define("SearchRepository", {
         );
       }
       const decoded = yield* S.decodeUnknownEffect(searchResponse)(data);
-      return SucceededSearchRepository({ repository, query, ...decoded });
+      return SucceededSearchRepository({
+        repository,
+        query,
+        mode,
+        ...decoded,
+      });
     }).pipe(
       Effect.catch((error) =>
         Effect.succeed(
           FailedSearchRepository({
             repository,
             query,
+            mode,
             error:
               error instanceof Error
                 ? error.message

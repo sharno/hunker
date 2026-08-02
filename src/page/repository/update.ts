@@ -1,4 +1,4 @@
-import { Array, Match as M, Option } from "effect";
+import { Array, Match as M, Option, Schema as S } from "effect";
 import { AsyncData, Command, Update } from "foldkit";
 import { evo } from "foldkit/struct";
 
@@ -9,6 +9,10 @@ import {
   repositoryRouter,
 } from "../../app-route";
 import type { AppRoute } from "../../app-route";
+import {
+  RepositorySearchMode,
+  type RepositorySearchMode as RepositorySearchModeType,
+} from "../../features/code-search";
 import type { Message } from "./message";
 import {
   CloneRepository,
@@ -35,6 +39,7 @@ import { directoryPaths, revealFileInTree } from "../../file-tree";
 export type RepositoryRoute = Readonly<{ owner: string; name: string }>;
 export type RepositoryOptions = Readonly<{
   query: string;
+  searchMode: RepositorySearchModeType;
   file: string;
   tab: "files" | "commits";
 }>;
@@ -70,6 +75,12 @@ export const repositoryOptionsFromSearch = (
   const params = new URLSearchParams(search);
   return {
     query: params.get("q") ?? "",
+    searchMode: Option.getOrElse(
+      S.decodeUnknownOption(RepositorySearchMode)(
+        params.get("search") ?? "literal",
+      ),
+      (): "literal" => "literal",
+    ),
     file: params.get("file") ?? "",
     tab: params.get("view") === "commits" ? "commits" : "files",
   };
@@ -86,16 +97,19 @@ export const repositoryOptionsFromRoute = (
       Repository: () => legacy,
       RepositoryCommits: () => ({
         query: legacy.query,
+        searchMode: legacy.searchMode,
         file: "",
         tab: "commits",
       }),
       RepositoryCommitsRef: () => ({
         query: legacy.query,
+        searchMode: legacy.searchMode,
         file: "",
         tab: "commits",
       }),
       RepositoryFile: ({ path }) => ({
         query: legacy.query,
+        searchMode: legacy.searchMode,
         file: path,
         tab: "files",
       }),
@@ -106,10 +120,17 @@ export const repositoryOptionsFromRoute = (
 
 export const localRepositoryUrl = (
   repository: RepositoryRoute,
-  options: RepositoryOptions = { query: "", file: "", tab: "files" },
+  options: RepositoryOptions = {
+    query: "",
+    searchMode: "literal",
+    file: "",
+    tab: "files",
+  },
 ) => {
   const params = new URLSearchParams();
   if (options.query !== "") params.set("q", options.query);
+  if (options.searchMode !== "literal")
+    params.set("search", options.searchMode);
   const search = params.size === 0 ? "" : `?${params.toString()}`;
   const location =
     options.tab === "commits"
@@ -141,7 +162,12 @@ const synchronizeRepositoryUrl = (
 ): RepositoryUpdate => {
   const href = localRepositoryUrl(
     { owner: model.owner, name: model.name },
-    { query: model.query, file: model.selectedPath, tab: model.tab },
+    {
+      query: model.query,
+      searchMode: model.searchMode,
+      file: model.selectedPath,
+      tab: model.tab,
+    },
   );
   return [model, [...commands, NavigateRepository({ href })]];
 };
@@ -153,9 +179,14 @@ export const load = (
 ): RepositoryUpdate => {
   const sameRepository =
     model.owner === route.owner && model.name === route.name;
+  const sameSearch =
+    sameRepository &&
+    model.query === options.query &&
+    model.searchMode === options.searchMode;
   const current = sameRepository
     ? evo(model, {
         query: () => options.query,
+        searchMode: () => options.searchMode,
         selectedPath: () => options.file,
         tab: () => options.tab,
         collapsedFolders: (folders) =>
@@ -168,6 +199,7 @@ export const load = (
         name: route.name,
         tab: options.tab,
         query: options.query,
+        searchMode: options.searchMode,
         selectedPath: options.file,
         collapsedFolders: [],
         files: Files.Loading(),
@@ -187,17 +219,19 @@ export const load = (
         );
   const maybeSearchCommand: Option.Option<Command.Command<Message>> =
     options.query === "" ||
-    (sameRepository &&
+    (sameSearch &&
       (AsyncData.isPending(current.search) ||
         Option.exists(
           AsyncData.getData(current.search),
-          (data) => data.query === options.query,
+          (data) =>
+            data.query === options.query && data.mode === options.searchMode,
         )))
       ? Option.none()
       : Option.some(
           SearchRepository({
             repository: `${route.owner}/${route.name}`,
             query: options.query,
+            mode: options.searchMode,
           }),
         );
   const maybeFileCommand: Option.Option<Command.Command<Message>> =
@@ -352,8 +386,37 @@ const submitSearch = (model: Model): RepositoryUpdate => {
     search: () => Search.Loading(),
   });
   return synchronizeRepositoryUrl(next, [
-    SearchRepository({ repository: repositoryName(next), query }),
+    SearchRepository({
+      repository: repositoryName(next),
+      query,
+      mode: next.searchMode,
+    }),
   ]);
+};
+
+const selectSearchMode = (
+  model: Model,
+  searchMode: RepositorySearchModeType,
+): RepositoryUpdate => {
+  if (model.searchMode === searchMode) return [model, []];
+  const query = model.query.trim();
+  const next = evo(model, {
+    query: () => query,
+    searchMode: () => searchMode,
+    search: () => (query === "" ? Search.Idle() : Search.Loading()),
+  });
+  return synchronizeRepositoryUrl(
+    next,
+    query === ""
+      ? []
+      : [
+          SearchRepository({
+            repository: repositoryName(next),
+            query,
+            mode: searchMode,
+          }),
+        ],
+  );
 };
 
 const searchLoaded = (
@@ -361,17 +424,21 @@ const searchLoaded = (
   input: Readonly<{
     repository: string;
     query: string;
+    mode: RepositorySearchModeType;
     files: ReadonlyArray<RepositoryFileType>;
     matches: ReadonlyArray<RepositorySearchMatchType>;
   }>,
 ): RepositoryUpdate =>
-  repositoryName(model) === input.repository && model.query === input.query
+  repositoryName(model) === input.repository &&
+  model.query === input.query &&
+  model.searchMode === input.mode
     ? [
         evo(model, {
           search: () =>
             Search.Success({
               data: {
                 query: input.query,
+                mode: input.mode,
                 files: input.files,
                 matches: input.matches,
               },
@@ -385,9 +452,12 @@ const searchFailed = (
   model: Model,
   repository: string,
   query: string,
+  mode: RepositorySearchModeType,
   error: string,
 ): RepositoryUpdate =>
-  repositoryName(model) === repository && model.query === query
+  repositoryName(model) === repository &&
+  model.query === query &&
+  model.searchMode === mode
     ? [evo(model, { search: () => Search.Failure({ error }) }), []]
     : [model, []];
 
@@ -522,10 +592,11 @@ export const update = (model: Model, message: Message): RepositoryUpdate =>
       FailedCloneRepository: ({ repository, error }) =>
         cloneFailed(model, repository, error),
       UpdatedRepositoryQuery: ({ value }) => changeQuery(model, value),
+      SelectedRepositorySearchMode: ({ mode }) => selectSearchMode(model, mode),
       SubmittedRepositorySearch: () => submitSearch(model),
       SucceededSearchRepository: (input) => searchLoaded(model, input),
-      FailedSearchRepository: ({ repository, query, error }) =>
-        searchFailed(model, repository, query, error),
+      FailedSearchRepository: ({ repository, query, mode, error }) =>
+        searchFailed(model, repository, query, mode, error),
       SelectedRepositoryFile: ({ path }) => selectFile(model, path),
       ClickedCloseRepositoryFile: () => closeFile(model),
       SucceededFetchRepositoryFile: (input) => fileLoaded(model, input),

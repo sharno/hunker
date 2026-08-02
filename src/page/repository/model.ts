@@ -1,6 +1,8 @@
 import { Schema as S } from "effect";
 import { AsyncData } from "foldkit";
 
+import { RepositorySearchMode } from "../../features/code-search";
+
 export const File = S.Struct({
   path: S.String,
   size: S.Number,
@@ -28,6 +30,7 @@ export const Files = AsyncData.Schema(S.Array(File), FilesError);
 
 export const SearchData = S.Struct({
   query: S.String,
+  mode: RepositorySearchMode,
   files: S.Array(File),
   matches: S.Array(SearchMatch),
 });
@@ -64,6 +67,7 @@ export const Model = S.Struct({
   name: S.String,
   tab: S.Literals(["files", "commits"]),
   query: S.String,
+  searchMode: RepositorySearchMode,
   selectedPath: S.String,
   collapsedFolders: S.Array(S.String),
   files: Files.schema,
@@ -80,6 +84,7 @@ export const empty = (): Model =>
     name: "",
     tab: "files",
     query: "",
+    searchMode: "literal",
     selectedPath: "",
     collapsedFolders: [],
     files: Files.Idle(),

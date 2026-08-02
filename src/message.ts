@@ -5,6 +5,7 @@ import { UrlRequest } from "foldkit/navigation";
 import { Popover } from "@foldkit/ui";
 
 import * as GitHubLocation from "./features/github-location";
+import { TextSearchMode } from "./features/code-search";
 import * as Repository from "./page/repository";
 import * as Settings from "./page/settings";
 import {
@@ -111,6 +112,9 @@ export const FailedFetchCharacterDiff = m("FailedFetchCharacterDiff", {
   error: S.String,
 });
 export const UpdatedFilter = m("UpdatedFilter", { value: S.String });
+export const SelectedReviewSearchMode = m("SelectedReviewSearchMode", {
+  value: TextSearchMode,
+});
 export const SelectedFile = m("SelectedFile", { path: S.String });
 export const SelectedReviewTab = m("SelectedReviewTab", {
   value: S.Literals(["files", "commits"]),
@@ -217,6 +221,7 @@ export const Message = S.Union([
   SucceededFetchCharacterDiff,
   FailedFetchCharacterDiff,
   UpdatedFilter,
+  SelectedReviewSearchMode,
   SelectedFile,
   SelectedReviewTab,
   SelectedCommit,

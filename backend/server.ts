@@ -14,6 +14,7 @@ import {
 } from "@effect/platform-node";
 
 import { isGeneratedDiffPath, parseGitDiff } from "../src/diff";
+import { RepositorySearchMode } from "../src/features/code-search";
 import {
   CharacterDiffEngine,
   CharacterDiffFailed,
@@ -290,8 +291,14 @@ const handleRepositorySearch = (request: HttpServerRequest.HttpServerRequest) =>
         message: "Enter a search query.",
       });
     }
+    const mode = Option.getOrElse(
+      S.decodeUnknownOption(RepositorySearchMode)(
+        requestUrl.searchParams.get("mode") ?? "literal",
+      ),
+      (): "literal" => "literal",
+    );
     const local = yield* LocalRepository;
-    const results = yield* local.search(repository, query);
+    const results = yield* local.search(repository, query, mode);
     return HttpServerResponse.jsonUnsafe(results);
   }).pipe(
     Effect.catchTags({

@@ -13,6 +13,7 @@ import {
   SelectedInlineDiffMode,
   SelectedReviewTab,
   SelectedReviewScope,
+  SelectedReviewSearchMode,
   SelectedViewMode,
   ToggledFileCollapse,
   ToggledFileTreeFolder,
@@ -41,6 +42,10 @@ import { homeRouter, settingsRouter } from "../app-route";
 import * as Repository from "../page/repository";
 import * as Settings from "../page/settings";
 import { isPullRequestUrl } from "../review-route";
+import {
+  compileTextSearch,
+  type TextSearchMode,
+} from "../features/code-search";
 import { splitDiffView, unifiedDiffView } from "./diff-view";
 import type { MovedRanges } from "./diff-view";
 import {
@@ -54,6 +59,14 @@ import {
 } from "./github-review-view";
 import { githubLocationForm } from "./github-location-view";
 import { fileTreeView } from "./file-tree-view";
+
+const reviewSearchMode = (value: string): TextSearchMode =>
+  value === "regex" ? "regex" : "literal";
+
+const reviewSearchError = (model: Model) => {
+  const search = compileTextSearch(model.filter, model.filterMode);
+  return search._tag === "Invalid" ? search.error : "";
+};
 
 const buttonClass = (active: boolean) =>
   `segmented-button${active ? " is-active" : ""}`;
@@ -777,7 +790,14 @@ const fileSidebarView = (
             [],
             [model.reviewTab === "commits" ? "Commit files" : "Changed files"],
           ),
-          h.span([], [String(model.files.length)]),
+          h.span(
+            [],
+            [
+              model.filter.trim() === ""
+                ? String(model.files.length)
+                : `${visibleFiles.length}/${model.files.length}`,
+            ],
+          ),
           button(
             h,
             [
@@ -804,15 +824,40 @@ const fileSidebarView = (
         [h.Class("file-search")],
         [
           h.span([], ["⌕"]),
+          h.select(
+            [
+              h.Value(model.filterMode),
+              h.AriaLabel("Pull request search mode"),
+              h.OnInput((value) =>
+                SelectedReviewSearchMode({
+                  value: reviewSearchMode(value),
+                }),
+              ),
+            ],
+            [
+              h.option([h.Value("literal")], ["Text"]),
+              h.option([h.Value("regex")], ["Regex"]),
+            ],
+          ),
           input("review-filter", h, [
             h.Type("search"),
             h.Value(model.filter),
-            h.Placeholder("Filter files"),
-            h.AriaLabel("Filter changed files"),
+            h.Placeholder(
+              model.filterMode === "regex"
+                ? "Search PR with regex"
+                : "Search this PR",
+            ),
+            h.AriaLabel("Search pull request paths and changes"),
             h.OnInput((value) => UpdatedFilter({ value })),
           ]),
         ],
       ),
+      reviewSearchError(model) === ""
+        ? h.empty
+        : h.div(
+            [h.Class("file-search-error"), h.Role("alert")],
+            [reviewSearchError(model)],
+          ),
       h.nav(
         [h.Class("file-list"), h.AriaLabel("Changed files")],
         [
@@ -1417,11 +1462,20 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Html => {
   const selected =
     model.files.find((file) => file.path === model.selectedPath) ??
     model.files[0];
-  const query = model.filter.trim().toLowerCase();
+  const query = model.filter;
+  const hasQuery = query.trim() !== "";
+  const search = compileTextSearch(query, model.filterMode);
   const visibleFiles =
-    query === ""
-      ? model.files
-      : model.files.filter((file) => file.path.toLowerCase().includes(query));
+    !hasQuery || search._tag === "Invalid"
+      ? !hasQuery
+        ? model.files
+        : []
+      : model.files.filter(
+          (file) =>
+            search.matches(file.path) ||
+            search.matches(file.previousPath) ||
+            search.matches(file.patch),
+        );
   const moves = AsyncData.getOrElse(model.reviewMoves, () => []);
   const movesFor = (file: FileChange) =>
     moves.filter(

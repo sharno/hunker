@@ -9,11 +9,13 @@ import {
   ClickedCloneRepository,
   type Message,
   SelectedRepositoryFile,
+  SelectedRepositorySearchMode,
   SelectedRepositoryTab,
   SubmittedRepositorySearch,
   ToggledRepositoryFolder,
   UpdatedRepositoryQuery,
 } from "./message";
+import type { RepositorySearchMode } from "../../features/code-search";
 import type {
   Commit,
   File as RepositoryFile,
@@ -46,6 +48,19 @@ const authoredDate = (value: string) => {
         timeStyle: "short",
       }).format(date);
 };
+
+const repositorySearchMode = (value: string): RepositorySearchMode =>
+  value === "regex" ? "regex" : value === "fuzzy" ? "fuzzy" : "literal";
+
+const searchDescription = (mode: RepositorySearchMode) =>
+  mode === "fuzzy"
+    ? "FFF is ranking approximate filename and content matches locally."
+    : mode === "regex"
+      ? "ripgrep is applying the expression across the local repository."
+      : "ripgrep is matching exact text across the local repository.";
+
+const searchKind = (mode: RepositorySearchMode) =>
+  mode === "fuzzy" ? "fuzzy" : mode === "regex" ? "regex" : "literal";
 
 const repositoryCommitRow = (
   model: Model,
@@ -252,10 +267,7 @@ const repositorySearchResults = (
       [h.Class("repository-results-state")],
       [
         h.strong([], [`Searching for “${model.query}”…`]),
-        h.span(
-          [],
-          ["FFF is ranking filenames and matching file contents locally."],
-        ),
+        h.span([], [searchDescription(model.searchMode)]),
       ],
     );
   }
@@ -275,7 +287,8 @@ const repositorySearchResults = (
         [
           h.h2([], [`Filename matches · ${data.files.length}`]),
           Array.match(data.files, {
-            onEmpty: () => h.p([], ["No fuzzy filename matches."]),
+            onEmpty: () =>
+              h.p([], [`No ${searchKind(data.mode)} filename matches.`]),
             onNonEmpty: (files) =>
               h.div(
                 [h.Class("repository-filename-results")],
@@ -296,7 +309,8 @@ const repositorySearchResults = (
         [
           h.h2([], [`Content matches · ${data.matches.length}`]),
           Array.match(data.matches, {
-            onEmpty: () => h.p([], ["No fuzzy content matches."]),
+            onEmpty: () =>
+              h.p([], [`No ${searchKind(data.mode)} content matches.`]),
             onNonEmpty: (matches) =>
               h.div(
                 [h.Class("repository-content-results")],
@@ -471,10 +485,32 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
               ],
               [
                 h.span([], ["⌕"]),
+                h.select(
+                  [
+                    h.Value(model.searchMode),
+                    h.AriaLabel("Repository search mode"),
+                    h.OnInput((value) =>
+                      SelectedRepositorySearchMode({
+                        mode: repositorySearchMode(value),
+                      }),
+                    ),
+                  ],
+                  [
+                    h.option([h.Value("literal")], ["Text"]),
+                    h.option([h.Value("regex")], ["Regex"]),
+                    h.option([h.Value("fuzzy")], ["Fuzzy · FFF"]),
+                  ],
+                ),
                 input("repository-query", h, [
                   h.Type("search"),
                   h.Value(model.query),
-                  h.Placeholder("Fuzzy search files and contents"),
+                  h.Placeholder(
+                    model.searchMode === "regex"
+                      ? "Search with a regular expression"
+                      : model.searchMode === "fuzzy"
+                        ? "Find approximate matches"
+                        : "Search exact text",
+                  ),
                   h.AriaLabel("Search repository files and contents"),
                   h.OnInput((value) => UpdatedRepositoryQuery({ value })),
                 ]),
