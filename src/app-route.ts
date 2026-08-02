@@ -44,6 +44,10 @@ export const RepositoryRoute = r("Repository", {
   owner: S.String,
   repository: S.String,
 });
+export const RepositoryPullsRoute = r("RepositoryPulls", {
+  owner: S.String,
+  repository: S.String,
+});
 export const RepositoryCommitsRoute = r("RepositoryCommits", {
   owner: S.String,
   repository: S.String,
@@ -72,6 +76,7 @@ export const AppRoute = S.Union([
   CompareRoute,
   CommitRoute,
   RepositoryRoute,
+  RepositoryPullsRoute,
   RepositoryCommitsRoute,
   RepositoryCommitsRefRoute,
   RepositoryFileRoute,
@@ -87,6 +92,7 @@ export type PullCommitRoute = typeof PullCommitRoute.Type;
 export type CompareRoute = typeof CompareRoute.Type;
 export type CommitRoute = typeof CommitRoute.Type;
 export type RepositoryRoute = typeof RepositoryRoute.Type;
+export type RepositoryPullsRoute = typeof RepositoryPullsRoute.Type;
 export type RepositoryCommitsRoute = typeof RepositoryCommitsRoute.Type;
 export type RepositoryCommitsRefRoute = typeof RepositoryCommitsRefRoute.Type;
 export type RepositoryFileRoute = typeof RepositoryFileRoute.Type;
@@ -164,6 +170,12 @@ export const repositoryCommitsRouter = pipe(
   Route.mapTo(RepositoryCommitsRoute),
 );
 
+export const repositoryPullsRouter = pipe(
+  repositoryPrefix,
+  slash(literal("pulls")),
+  Route.mapTo(RepositoryPullsRoute),
+);
+
 export const repositoryCommitsRefRouter = pipe(
   repositoryPrefix,
   slash(literal("commits")),
@@ -193,6 +205,7 @@ const routeParser = Route.oneOf(
   repositoryFileRouter,
   repositoryCommitsRefRouter,
   repositoryCommitsRouter,
+  repositoryPullsRouter,
   legacyRepositoryRouter,
   repositoryRouter,
   homeRouter,

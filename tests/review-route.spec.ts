@@ -40,6 +40,9 @@ test("selects the best Hunker view for common GitHub links", () => {
     "/radarlabs/server",
   );
   expect(
+    localLocationFromGitHubUrl("https://github.com/radarlabs/server/pulls"),
+  ).toBe("/radarlabs/server/pulls");
+  expect(
     localLocationFromGitHubUrl(
       "https://github.com/radarlabs/server/blob/main/src/config.ts#L10",
     ),

@@ -5,16 +5,22 @@ import { Command, Http, Navigation } from "foldkit";
 import { requestError, responseError } from "../../api";
 import { RepositorySearchMode } from "../../features/code-search";
 import {
+  PullRequestFilter,
+  RepositoryPullRequestsPage,
+} from "../../features/repository-pulls";
+import {
   CompletedNavigate,
   FailedCloneRepository,
   FailedFetchRepositoryFile,
   FailedFetchRepositoryFiles,
   FailedFetchRepositoryCommits,
+  FailedFetchRepositoryPullRequests,
   FailedSearchRepository,
   SucceededCloneRepository,
   SucceededFetchRepositoryFile,
   SucceededFetchRepositoryFiles,
   SucceededFetchRepositoryCommits,
+  SucceededFetchRepositoryPullRequests,
   SucceededSearchRepository,
 } from "./message";
 import { Commit, File, SearchMatch } from "./model";
@@ -123,6 +129,58 @@ export const FetchRepositoryCommits = Command.define("FetchRepositoryCommits", {
       Effect.provide(Http.layer),
     ),
 });
+
+export const FetchRepositoryPullRequests = Command.define(
+  "FetchRepositoryPullRequests",
+  {
+    args: {
+      repository: S.String,
+      state: PullRequestFilter,
+      page: S.Number,
+    },
+    messages: [
+      SucceededFetchRepositoryPullRequests,
+      FailedFetchRepositoryPullRequests,
+    ],
+    execute: ({ repository, state, page }) =>
+      Effect.gen(function* () {
+        const client = yield* HttpClient.HttpClient;
+        const params = new URLSearchParams({
+          repository,
+          state,
+          page: String(page),
+        });
+        const response = yield* client.execute(
+          HttpClientRequest.get(`/api/repository/pulls?${params.toString()}`),
+        );
+        const data: unknown = yield* response.json;
+        if (response.status < 200 || response.status >= 300) {
+          return yield* Effect.fail(
+            new Error(responseError(data, "Could not list pull requests.")),
+          );
+        }
+        const decoded = yield* S.decodeUnknownEffect(
+          RepositoryPullRequestsPage,
+        )(data);
+        return SucceededFetchRepositoryPullRequests({
+          repository,
+          ...decoded,
+        });
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.succeed(
+            FailedFetchRepositoryPullRequests({
+              repository,
+              state,
+              page,
+              error: requestError(error, "Could not list pull requests."),
+            }),
+          ),
+        ),
+        Effect.provide(Http.layer),
+      ),
+  },
+);
 
 export const CloneRepository = Command.define("CloneRepository", {
   args: {

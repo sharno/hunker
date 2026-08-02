@@ -149,6 +149,29 @@ const utilities: Readonly<Record<string, string>> = {
     "grid min-h-[calc(100vh-56px)] grid-cols-[330px_minmax(0,1fr)] [&.is-commits]:grid-cols-1 max-[760px]:grid-cols-1",
   "repository-commit-row": "text-ink no-underline",
   "repository-commits-browser": "my-8",
+  "repository-pulls-browser":
+    "mx-auto my-8 w-[min(940px,calc(100%-32px))] overflow-hidden rounded-xl border border-line bg-paper shadow-[0_7px_24px_rgb(16_27_44/7%)]",
+  "repository-pulls-heading":
+    "flex items-end justify-between gap-5 border-b border-line bg-[#f5f4ef] px-6 py-5 max-[680px]:items-start max-[680px]:flex-col [&>div:first-child>span]:font-mono [&>div:first-child>span]:text-[9px] [&>div:first-child>span]:font-[800] [&>div:first-child>span]:tracking-[0.1em] [&>div:first-child>span]:text-[#748047] [&_h1]:mt-1 [&_h1]:mb-1 [&_h1]:text-xl [&_p]:m-0 [&_p]:text-[10px] [&_p]:text-muted",
+  "repository-pull-filters":
+    "shrink-0 bg-[#e5e5df] [&_.segmented-button]:px-3 [&_.segmented-button]:py-2 [&_.segmented-button]:text-[10px]",
+  "repository-pull-list": "divide-y divide-line",
+  "repository-pull-row":
+    "grid min-h-[76px] grid-cols-[34px_minmax(0,1fr)_auto_18px] items-start gap-3 px-5 py-4 text-ink no-underline hover:bg-[#f8f8f3] max-[620px]:grid-cols-[30px_minmax(0,1fr)_auto] max-[620px]:[&>.commit-open-arrow]:hidden",
+  "repository-pull-avatar":
+    "grid size-8 place-items-center rounded-full bg-[#dce2d4] object-cover font-mono text-[9px] font-[800] text-[#52624d]",
+  "repository-pull-title":
+    "flex min-w-0 items-baseline gap-2 [&>strong]:overflow-hidden [&>strong]:text-[12px] [&>strong]:text-ellipsis [&>strong]:whitespace-nowrap [&>code]:shrink-0 [&>code]:font-mono [&>code]:text-[9px] [&>code]:text-muted",
+  "repository-pull-copy":
+    "min-w-0 [&>small]:mt-1 [&>small]:block [&>small]:overflow-hidden [&>small]:text-[9px] [&>small]:text-ellipsis [&>small]:whitespace-nowrap [&>small]:text-muted",
+  "repository-pull-labels":
+    "mt-2 flex flex-wrap gap-1 [&>span]:rounded-full [&>span]:border [&>span]:border-[#d4d8c9] [&>span]:bg-[#edf1e2] [&>span]:px-2 [&>span]:py-0.5 [&>span]:text-[8px] [&>span]:font-[650] [&>span]:text-[#59664b]",
+  "repository-pull-state":
+    "mt-0.5 rounded-full border px-2 py-1 text-[8px] font-[750] [&.is-open]:border-[#9ecdad] [&.is-open]:bg-[#e2f5e8] [&.is-open]:text-[#25653d] [&.is-closed]:border-[#e5aaa1] [&.is-closed]:bg-[#ffebe7] [&.is-closed]:text-[#8c3328] [&.is-merged]:border-[#c4b2e6] [&.is-merged]:bg-[#eee8fb] [&.is-merged]:text-[#5f4495] [&.is-draft]:border-[#c9cbc4] [&.is-draft]:bg-[#eeeeea] [&.is-draft]:text-[#666b65]",
+  "repository-pull-load-more":
+    "mx-auto my-4 block min-h-9 cursor-pointer rounded-md border border-[#bfc6ac] bg-[#f6f8ee] px-5 text-[10px] font-[750] text-[#4e612d] hover:border-[#9faf6f] disabled:cursor-wait disabled:opacity-60",
+  "repository-pull-page-error":
+    "m-4 rounded-md border border-[#e3aaa0] bg-[#fff0ed] px-3 py-2 text-[10px] text-[#8a3228]",
   "repository-tree":
     "sticky top-14 flex h-[calc(100vh-56px)] flex-col overflow-hidden border-r border-line bg-[#ecebe5] max-[760px]:static max-[760px]:h-[300px] max-[760px]:border-r-0 max-[760px]:border-b [&>nav]:overflow-auto [&>nav]:px-2 [&>nav]:pb-3",
   "repository-tree-heading":

@@ -43,6 +43,10 @@ test("round-trips repository routes and browser options", () => {
     owner: "radarlabs",
     name: "server",
   });
+  expect(repositoryRouteFromPathname("/radarlabs/server/pulls")).toEqual({
+    owner: "radarlabs",
+    name: "server",
+  });
   expect(repositoryRouteFromPathname("/radarlabs/server/commits/main")).toEqual(
     {
       owner: "radarlabs",
@@ -56,11 +60,24 @@ test("round-trips repository routes and browser options", () => {
       {
         query: "config key",
         searchMode: "regex",
+        pullRequestFilter: "open",
         file: "src/config.ts",
         tab: "files",
       },
     ),
   ).toBe("/radarlabs/server/blob/HEAD/src/config.ts?q=config+key&search=regex");
+  expect(
+    localRepositoryUrl(
+      { owner: "radarlabs", name: "server" },
+      {
+        query: "",
+        searchMode: "literal",
+        pullRequestFilter: "all",
+        file: "",
+        tab: "pulls",
+      },
+    ),
+  ).toBe("/radarlabs/server/pulls?state=all");
   expect(
     repositoryOptionsFromSearch("?q=config+key&file=src%2Fconfig.ts"),
   ).toEqual({
@@ -68,9 +85,85 @@ test("round-trips repository routes and browser options", () => {
     searchMode: "literal",
     file: "src/config.ts",
     tab: "files",
+    pullRequestFilter: "open",
   });
   expect(repositoryOptionsFromSearch("?view=commits").tab).toBe("commits");
   expect(repositoryOptionsFromSearch("?search=fuzzy").searchMode).toBe("fuzzy");
+});
+
+test("lists and paginates repository pull requests without a local clone", async ({
+  page,
+}) => {
+  let fileRequests = 0;
+  await page.route("**/api/repository/files?**", (route) => {
+    fileRequests += 1;
+    return route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      json: { error: "Local repository not found." },
+    });
+  });
+  await page.route("**/api/repository/pulls?**", (route) => {
+    const requestUrl = new URL(route.request().url());
+    const state = requestUrl.searchParams.get("state");
+    const requestedPage = Number(requestUrl.searchParams.get("page"));
+    const closed = state === "closed";
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: {
+        state,
+        page: requestedPage,
+        hasMore: !closed && requestedPage === 1,
+        pullRequests: [
+          {
+            number: closed ? 38 : requestedPage === 1 ? 42 : 41,
+            title: closed
+              ? "Ship the merged review"
+              : requestedPage === 1
+                ? "Refine the diff viewer"
+                : "Add repository browsing",
+            author: "review-agent",
+            avatarUrl: "",
+            state: closed ? "merged" : "open",
+            draft: false,
+            updatedAt: "2026-08-02T12:00:00Z",
+            base: "main",
+            head: closed ? "feature/merged" : "feature/review",
+            labels: closed ? ["shipped"] : ["frontend"],
+          },
+        ],
+      },
+    });
+  });
+
+  await page.goto("/example/hunker-demo/pulls");
+  await expect(
+    page.getByRole("heading", {
+      name: "Pull requests for example/hunker-demo",
+    }),
+  ).toBeVisible();
+  await expect(page.locator(".repository-pull-row")).toHaveCount(1);
+  await expect(page.locator(".repository-pull-row").first()).toHaveAttribute(
+    "href",
+    "/example/hunker-demo/pull/42",
+  );
+  await expect(page.getByText("frontend", { exact: true })).toBeVisible();
+  expect(fileRequests).toBe(0);
+
+  await page.getByRole("button", { name: "Load more" }).click();
+  await expect(page.locator(".repository-pull-row")).toHaveCount(2);
+
+  await page.getByRole("button", { name: "Closed", exact: true }).click();
+  await expect(page).toHaveURL("/example/hunker-demo/pulls?state=closed");
+  await expect(page.locator(".repository-pull-row")).toHaveCount(1);
+  await expect(page.locator(".repository-pull-row").first()).toContainText(
+    "Merged",
+  );
+  await expect(page.locator(".repository-pull-row").first()).toHaveAttribute(
+    "href",
+    "/example/hunker-demo/pull/38",
+  );
 });
 
 test("offers a temporary or configured clone when a repository is missing", async ({

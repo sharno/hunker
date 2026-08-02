@@ -1,6 +1,10 @@
 import { Data, Effect, Match as M, Option, Schema as S } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 
+import type {
+  PullRequestFilter,
+  RepositoryPullRequest,
+} from "../src/features/repository-pulls";
 import { GitHubAuth } from "./github-auth";
 
 export type PullTarget = Readonly<{
@@ -203,6 +207,20 @@ const PullCommitResponse = S.Struct({
 
 const PullCommitsResponse = S.Array(PullCommitResponse);
 
+const PullRequestListItemResponse = S.Struct({
+  number: S.Number,
+  title: S.String,
+  state: S.Literals(["open", "closed"]),
+  draft: S.Boolean,
+  user: S.NullOr(GitHubUser),
+  updated_at: S.String,
+  merged_at: S.NullOr(S.String),
+  base: S.Struct({ ref: S.String }),
+  head: S.Struct({ label: S.String }),
+  labels: S.Array(S.Struct({ name: S.String })),
+});
+const PullRequestListResponse = S.Array(PullRequestListItemResponse);
+
 const decodeGitHubJson = <A>(
   schema: S.Schema<A> & { readonly DecodingServices: never },
   value: unknown,
@@ -401,6 +419,53 @@ export const loadPullCommits = (target: PullTarget) =>
       page += 1;
     }
     return commits;
+  });
+
+const repositoryPullRequest = (
+  item: S.Schema.Type<typeof PullRequestListItemResponse>,
+): RepositoryPullRequest => ({
+  number: item.number,
+  title: item.title,
+  author: item.user?.login ?? "GitHub user",
+  avatarUrl: item.user?.avatar_url ?? "",
+  state: item.merged_at === null ? item.state : "merged",
+  draft: item.draft,
+  updatedAt: item.updated_at,
+  base: item.base.ref,
+  head: item.head.label,
+  labels: item.labels.map((label) => label.name),
+});
+
+export const decodeRepositoryPullRequests = (
+  value: unknown,
+): ReadonlyArray<RepositoryPullRequest> =>
+  Option.match(S.decodeUnknownOption(PullRequestListResponse)(value), {
+    onNone: () => [],
+    onSome: (items) => items.map(repositoryPullRequest),
+  });
+
+export const loadRepositoryPullRequests = (
+  repository: Readonly<{ owner: string; name: string }>,
+  state: PullRequestFilter,
+  page: number,
+) =>
+  Effect.gen(function* () {
+    const response = yield* executeGitHub(
+      `https://api.github.com/repos/${repository.owner}/${repository.name}/pulls?state=${state}&sort=updated&direction=desc&per_page=50&page=${page}`,
+      "application/vnd.github+json",
+    );
+    const value: unknown = yield* response.json;
+    const items = yield* decodeGitHubJson(
+      PullRequestListResponse,
+      value,
+      "repository pull request",
+    );
+    return {
+      state,
+      page,
+      hasMore: items.length === 50,
+      pullRequests: items.map(repositoryPullRequest),
+    };
   });
 
 const loadTargetRefs = (target: GitHubTarget) =>

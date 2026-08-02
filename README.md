@@ -17,7 +17,8 @@ The stack is Effect end to end:
 - `src/model.ts`, `src/message.ts`, `src/state.ts` — application-level review
   state machine and route orchestration
 - `src/page/repository/` — self-contained Foldkit Submodel with its own model,
-  messages, commands, update, view, namespace, and story tests
+  messages, commands, update, view modules (including the repository PR list),
+  namespace, and story tests
 - `src/page/settings/` — server-backed settings Submodel and settings page
 - `src/features/github-location/` — reusable GitHub-location Submodel
 - `src/features/commits.ts` — commit-list and commit-diff commands
@@ -136,9 +137,10 @@ GitHub-flavored Markdown through a typed syntax tree; raw HTML is displayed as
 text instead of being injected.
 
 The top bar accepts repository, pull request, compare, commit, PR-commit, and
-blob URLs and opens the most specific Hunker view. The repository name links to
-a local repository browser at `/:owner/:repository`. By default Hunker resolves
-clones below `~/src`, including both `~/src/repository` and
+blob URLs and opens the most specific Hunker view. GitHub `/pulls` URLs map to
+Hunker’s `/:owner/:repository/pulls` repository PR list. The repository name
+links to a local repository browser at `/:owner/:repository`. By default Hunker
+resolves clones below `~/src`, including both `~/src/repository` and
 `~/src/owner/repository` layouts. Open `/settings` to change that root, the
 temporary clone root, and all review defaults. Settings are validated with
 Effect Schema and saved atomically to `~/.config/hunker/settings.json`, so they
@@ -168,6 +170,11 @@ local `gh` authentication, including access to private repositories. New clones
 start with only the default branch tip and use Git's partial-clone support;
 missing immutable objects are fetched on demand, while the commits view deepens
 the PR history progressively.
+
+The repository Pull Requests tab is GitHub-backed and does not require a local
+clone. It uses the server’s local `gh` authentication for private repositories,
+supports open, closed, and combined views, loads 50 recently updated PRs per
+page, and links each row directly to Hunker’s review view.
 
 After a checkout or cache clone exists, Hunker automatically uses its Git object
 database for PR and commit diffs, file revisions, and commit logs. Each loaded

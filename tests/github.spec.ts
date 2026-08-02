@@ -1,7 +1,11 @@
 import { expect, test } from "@playwright/test";
 import { Effect } from "effect";
 
-import { decodePullCommits, parseGitHubUrl } from "../backend/github";
+import {
+  decodePullCommits,
+  decodeRepositoryPullRequests,
+  parseGitHubUrl,
+} from "../backend/github";
 
 test("parses commit URLs as first-class diff targets", async () => {
   await expect(
@@ -42,6 +46,38 @@ test("decodes the commit metadata used by the commits view", () => {
       avatarUrl: "https://example.com/avatar.png",
       authoredAt: "2026-08-01T12:00:00Z",
       htmlUrl: "https://github.com/example/hunker/commit/abcdef1",
+    },
+  ]);
+});
+
+test("decodes repository pull requests and distinguishes merged PRs", () => {
+  expect(
+    decodeRepositoryPullRequests([
+      {
+        number: 42,
+        title: "Refine the diff viewer",
+        state: "closed",
+        draft: false,
+        user: { login: "review-agent", avatar_url: "https://avatar.test/42" },
+        updated_at: "2026-08-02T12:00:00Z",
+        merged_at: "2026-08-02T13:00:00Z",
+        base: { ref: "main" },
+        head: { label: "review-agent:feature/review" },
+        labels: [{ name: "frontend" }],
+      },
+    ]),
+  ).toEqual([
+    {
+      number: 42,
+      title: "Refine the diff viewer",
+      author: "review-agent",
+      avatarUrl: "https://avatar.test/42",
+      state: "merged",
+      draft: false,
+      updatedAt: "2026-08-02T12:00:00Z",
+      base: "main",
+      head: "review-agent:feature/review",
+      labels: ["frontend"],
     },
   ]);
 });

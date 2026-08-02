@@ -2,6 +2,10 @@ import { Schema as S } from "effect";
 import { m } from "foldkit/message";
 
 import { RepositorySearchMode } from "../../features/code-search";
+import {
+  PullRequestFilter,
+  RepositoryPullRequest,
+} from "../../features/repository-pulls";
 import { Commit, File, SearchMatch } from "./model";
 
 export const CompletedNavigate = m("CompletedNavigate");
@@ -67,8 +71,31 @@ export const ToggledRepositoryFolder = m("ToggledRepositoryFolder", {
   path: S.String,
 });
 export const SelectedRepositoryTab = m("SelectedRepositoryTab", {
-  tab: S.Literals(["files", "commits"]),
+  tab: S.Literals(["files", "pulls", "commits"]),
 });
+export const SelectedPullRequestFilter = m("SelectedPullRequestFilter", {
+  state: PullRequestFilter,
+});
+export const ClickedLoadMorePullRequests = m("ClickedLoadMorePullRequests");
+export const SucceededFetchRepositoryPullRequests = m(
+  "SucceededFetchRepositoryPullRequests",
+  {
+    repository: S.String,
+    state: PullRequestFilter,
+    page: S.Number,
+    hasMore: S.Boolean,
+    pullRequests: S.Array(RepositoryPullRequest),
+  },
+);
+export const FailedFetchRepositoryPullRequests = m(
+  "FailedFetchRepositoryPullRequests",
+  {
+    repository: S.String,
+    state: PullRequestFilter,
+    page: S.Number,
+    error: S.String,
+  },
+);
 export const SucceededFetchRepositoryCommits = m(
   "SucceededFetchRepositoryCommits",
   {
@@ -101,6 +128,10 @@ export const Message = S.Union([
   FailedFetchRepositoryFile,
   ToggledRepositoryFolder,
   SelectedRepositoryTab,
+  SelectedPullRequestFilter,
+  ClickedLoadMorePullRequests,
+  SucceededFetchRepositoryPullRequests,
+  FailedFetchRepositoryPullRequests,
   SucceededFetchRepositoryCommits,
   FailedFetchRepositoryCommits,
 ]);

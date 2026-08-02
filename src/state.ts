@@ -803,6 +803,12 @@ export const update = (
                 { owner, name: repository },
                 Repository.repositoryOptionsFromRoute(route, search),
               ),
+            RepositoryPulls: ({ owner, repository }) =>
+              loadRepositoryLocation(
+                model,
+                { owner, name: repository },
+                Repository.repositoryOptionsFromRoute(route, search),
+              ),
             RepositoryCommits: ({ owner, repository }) =>
               loadRepositoryLocation(
                 model,
@@ -1506,6 +1512,15 @@ export const init: Runtime.RoutingApplicationInit<ModelType, Message> = (
         initialSettingsCommand(),
       ],
       Repository: ({ owner, repository }) =>
+        (() => {
+          const [model, commands] = loadRepositoryLocation(
+            initialModel("", defaultReviewOptions),
+            { owner, name: repository },
+            Repository.repositoryOptionsFromRoute(route, search),
+          );
+          return [model, [...initialSettingsCommand(), ...commands]];
+        })(),
+      RepositoryPulls: ({ owner, repository }) =>
         (() => {
           const [model, commands] = loadRepositoryLocation(
             initialModel("", defaultReviewOptions),

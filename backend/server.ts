@@ -15,12 +15,18 @@ import {
 
 import { isGeneratedDiffPath, parseGitDiff } from "../src/diff";
 import { RepositorySearchMode } from "../src/features/code-search";
+import { PullRequestFilter } from "../src/features/repository-pulls";
 import {
   CharacterDiffEngine,
   CharacterDiffFailed,
   layer as characterDiffLayer,
 } from "./character-diff-engine";
-import { loadPullCommits, loadReviewMetadata, parseGitHubUrl } from "./github";
+import {
+  loadPullCommits,
+  loadRepositoryPullRequests,
+  loadReviewMetadata,
+  parseGitHubUrl,
+} from "./github";
 import type { FileStatus } from "./github";
 import { layer as githubAuthLayer } from "./github-auth";
 import { LocalGit, LocalGitFailed, layer as localGitLayer } from "./local-git";
@@ -279,6 +285,45 @@ const handleRepositoryCommits = (
           ),
         ),
       LocalRepositoryFailed: localRepositoryError,
+    }),
+  );
+
+const handleRepositoryPullRequests = (
+  request: HttpServerRequest.HttpServerRequest,
+) =>
+  Effect.gen(function* () {
+    const { requestUrl, repository } = yield* localRepositoryRequest(request);
+    const state = Option.getOrElse(
+      S.decodeUnknownOption(PullRequestFilter)(
+        requestUrl.searchParams.get("state") ?? "open",
+      ),
+      (): "open" => "open",
+    );
+    const page = Number(requestUrl.searchParams.get("page") ?? "1");
+    if (!Number.isInteger(page) || page < 1 || page > 1_000) {
+      return yield* new InvalidReviewRequest({
+        message: "Pull request page must be between 1 and 1000.",
+      });
+    }
+    return HttpServerResponse.jsonUnsafe(
+      yield* loadRepositoryPullRequests(repository, state, page),
+    );
+  }).pipe(
+    Effect.catchTags({
+      InvalidReviewRequest: (error) =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
+        ),
+      GitHubFetchFailed: (error) =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: error.status },
+          ),
+        ),
     }),
   );
 
@@ -763,6 +808,7 @@ const routesLayer = Layer.mergeAll(
   HttpRouter.add("GET", "/api/commits", handleCommits),
   HttpRouter.add("GET", "/api/repository/files", handleRepositoryFiles),
   HttpRouter.add("GET", "/api/repository/commits", handleRepositoryCommits),
+  HttpRouter.add("GET", "/api/repository/pulls", handleRepositoryPullRequests),
   HttpRouter.add("GET", "/api/repository/search", handleRepositorySearch),
   HttpRouter.add("GET", "/api/repository/file", handleRepositoryFile),
   HttpRouter.add("POST", "/api/repository/clone", handleCloneRepository),

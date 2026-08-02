@@ -39,6 +39,12 @@
   with Effect Schema, model command-specific exit statuses (for example, a
   search command's no-match status), and normalize tool paths to the app's
   canonical repository-relative form before they enter domain state.
+- Keep independent repository-page data sources independent in state and view
+  logic. A GitHub-backed tab must not be blocked by a missing local clone, and a
+  local Git failure should only replace views that actually depend on it.
+- For paginated Foldkit data, keep accumulated rows visible with `Refreshing`
+  while the next page loads and use `Stale` for a later-page failure. Correlate
+  responses with the repository, filter, and page before appending them.
 - Use Bun for dependency management and scripts.
 - Keep the project on TypeScript 7 and strict typing. Do not introduce `any`.
 - Use Oxfmt for formatting and Oxlint with type-aware linting. Do not add

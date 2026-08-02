@@ -2,6 +2,10 @@ import { Schema as S } from "effect";
 import { AsyncData } from "foldkit";
 
 import { RepositorySearchMode } from "../../features/code-search";
+import {
+  PullRequestFilter,
+  RepositoryPullRequestsPage,
+} from "../../features/repository-pulls";
 
 export const File = S.Struct({
   path: S.String,
@@ -62,10 +66,16 @@ export const CommitsData = S.Struct({
 });
 export const Commits = AsyncData.Schema(CommitsData, S.String);
 
+export const PullRequests = AsyncData.Schema(
+  RepositoryPullRequestsPage,
+  S.String,
+);
+
 export const Model = S.Struct({
   owner: S.String,
   name: S.String,
-  tab: S.Literals(["files", "commits"]),
+  tab: S.Literals(["files", "pulls", "commits"]),
+  pullRequestFilter: PullRequestFilter,
   query: S.String,
   searchMode: RepositorySearchMode,
   selectedPath: S.String,
@@ -75,6 +85,7 @@ export const Model = S.Struct({
   file: FileContent.schema,
   clone: Clone.schema,
   commits: Commits.schema,
+  pullRequests: PullRequests.schema,
 });
 export type Model = typeof Model.Type;
 
@@ -83,6 +94,7 @@ export const empty = (): Model =>
     owner: "",
     name: "",
     tab: "files",
+    pullRequestFilter: "open",
     query: "",
     searchMode: "literal",
     selectedPath: "",
@@ -92,4 +104,5 @@ export const empty = (): Model =>
     file: FileContent.Idle(),
     clone: Clone.Idle(),
     commits: Commits.Idle(),
+    pullRequests: PullRequests.Idle(),
   });

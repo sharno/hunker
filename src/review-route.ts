@@ -10,6 +10,7 @@ import {
   pullFilesRouter,
   repositoryCommitsRouter,
   repositoryFileRouter,
+  repositoryPullsRouter,
   repositoryRouter,
   reviewRouteToGitHubUrl,
   reviewRouteToLocalPath,
@@ -205,6 +206,9 @@ export const localLocationFromGitHubUrl = (
   }
   if (resource === "commits") {
     return withHash(repositoryCommitsRouter({ owner, repository }), url.hash);
+  }
+  if (resource === "pulls") {
+    return withHash(repositoryPullsRouter({ owner, repository }), url.hash);
   }
   if (resource === "blob" && identifier !== undefined && remaining.length > 0) {
     return withHash(

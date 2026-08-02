@@ -25,6 +25,7 @@ import type {
 import { syntaxHighlightedContent } from "../../view/syntax-highlight";
 import { fileTreeView } from "../../view/file-tree-view";
 import { commitRouter } from "../../app-route";
+import { repositoryPullRequestsView } from "./pulls-view";
 
 export type ViewInputs = Readonly<{
   homeHref: string;
@@ -467,6 +468,17 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
                   [
                     h.Type("button"),
                     h.Class(
+                      `segmented-button${model.tab === "pulls" ? " is-active" : ""}`,
+                    ),
+                    h.OnClick(SelectedRepositoryTab({ tab: "pulls" })),
+                  ],
+                  ["Pull requests"],
+                ),
+                button(
+                  h,
+                  [
+                    h.Type("button"),
+                    h.Class(
                       `segmented-button${model.tab === "commits" ? " is-active" : ""}`,
                     ),
                     h.OnClick(SelectedRepositoryTab({ tab: "commits" })),
@@ -479,7 +491,7 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
             h.form(
               [
                 h.Class(
-                  `repository-search${model.tab === "commits" ? " is-hidden" : ""}`,
+                  `repository-search${model.tab !== "files" ? " is-hidden" : ""}`,
                 ),
                 h.OnSubmit(SubmittedRepositorySearch()),
               ],
@@ -535,7 +547,7 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
             ),
           ],
         ),
-        filesError !== undefined && !filesError.missing
+        model.tab !== "pulls" && filesError !== undefined && !filesError.missing
           ? h.div(
               [h.Class("error-banner"), h.Role("alert")],
               [filesError.message],
@@ -544,7 +556,7 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
         h.div(
           [
             h.Class(
-              `repository-workspace${model.tab === "commits" ? " is-commits" : ""}`,
+              `repository-workspace${model.tab !== "files" ? " is-commits" : ""}`,
             ),
           ],
           [
@@ -583,27 +595,29 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
             h.div(
               [h.Class("repository-main")],
               [
-                filesError?.missing === true
-                  ? repositoryCloneView(model, h)
-                  : model.tab === "commits"
-                    ? repositoryCommitsView(model, h)
-                    : model.selectedPath !== ""
-                      ? repositoryFileView(model, h)
-                      : model.query !== ""
-                        ? repositorySearchResults(model, h)
-                        : h.section(
-                            [h.Class("repository-welcome")],
-                            [
-                              h.span([], ["FFF"]),
-                              h.h1([], [`Browse ${model.name}`]),
-                              h.p(
-                                [],
-                                [
-                                  "Choose a file from the local index, or fuzzy search filenames and code contents.",
-                                ],
-                              ),
-                            ],
-                          ),
+                model.tab === "pulls"
+                  ? repositoryPullRequestsView(model, h)
+                  : filesError?.missing === true
+                    ? repositoryCloneView(model, h)
+                    : model.tab === "commits"
+                      ? repositoryCommitsView(model, h)
+                      : model.selectedPath !== ""
+                        ? repositoryFileView(model, h)
+                        : model.query !== ""
+                          ? repositorySearchResults(model, h)
+                          : h.section(
+                              [h.Class("repository-welcome")],
+                              [
+                                h.span([], ["RG"]),
+                                h.h1([], [`Browse ${model.name}`]),
+                                h.p(
+                                  [],
+                                  [
+                                    "Choose a file from the local index, search exact code with ripgrep, or switch to fuzzy discovery.",
+                                  ],
+                                ),
+                              ],
+                            ),
               ],
             ),
           ],
