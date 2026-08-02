@@ -19,7 +19,7 @@ import yaml from "highlight.js/lib/languages/yaml";
 import type { Html, HtmlBuilder } from "foldkit/html";
 import { createLowlight } from "lowlight";
 
-import type { CharacterRange, Message } from "../domain";
+import type { CharacterRange } from "../domain";
 
 type SyntaxToken = Readonly<{
   text: string;
@@ -147,7 +147,7 @@ const highlightedTokens = (language: string, source: string) => {
   return tokens;
 };
 
-const tokenPiece = (
+const tokenPiece = <Message>(
   text: string,
   classes: ReadonlyArray<string>,
   changed: boolean,
@@ -157,7 +157,7 @@ const tokenPiece = (
   return className === "" ? text : h.span([h.Class(className)], [text]);
 };
 
-const renderToken = (
+const renderToken = <Message>(
   token: SyntaxToken,
   offset: number,
   changed: ReadonlyArray<CharacterRange>,
@@ -195,7 +195,7 @@ const renderToken = (
 
 // NOTE: Offset is a function-local cursor across immutable tokens; it avoids
 // repeatedly summing prefixes while preserving a pure render result.
-export const syntaxHighlightedContent = (
+export const syntaxHighlightedContent = <Message>(
   path: string,
   source: string,
   enabled: boolean,

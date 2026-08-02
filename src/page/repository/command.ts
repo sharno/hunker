@@ -1,25 +1,25 @@
 import { Data, Effect, Schema as S } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
-import { Command, Http } from "foldkit";
+import { Command, Http, Navigation } from "foldkit";
 
-import { requestError, responseError } from "../api";
+import { requestError, responseError } from "../../api";
 import {
+  CompletedNavigate,
   FailedCloneRepository,
   FailedFetchRepositoryFile,
   FailedFetchRepositoryFiles,
   FailedSearchRepository,
-  RepositoryFile,
-  RepositorySearchMatch,
   SucceededCloneRepository,
   SucceededFetchRepositoryFile,
   SucceededFetchRepositoryFiles,
   SucceededSearchRepository,
-} from "../domain";
+} from "./message";
+import { File, SearchMatch } from "./model";
 
-const filesResponse = S.Struct({ files: S.Array(RepositoryFile) });
+const filesResponse = S.Struct({ files: S.Array(File) });
 const searchResponse = S.Struct({
-  files: S.Array(RepositoryFile),
-  matches: S.Array(RepositorySearchMatch),
+  files: S.Array(File),
+  matches: S.Array(SearchMatch),
 });
 const fileResponse = S.Struct({
   path: S.String,
@@ -192,4 +192,11 @@ export const FetchRepositoryFile = Command.define("FetchRepositoryFile", {
       ),
       Effect.provide(Http.layer),
     ),
+});
+
+export const NavigateRepository = Command.define("NavigateRepository", {
+  args: { href: S.String },
+  messages: [CompletedNavigate],
+  execute: ({ href }) =>
+    Navigation.replaceUrl(href).pipe(Effect.as(CompletedNavigate())),
 });

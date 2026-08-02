@@ -1,0 +1,69 @@
+import { Schema as S } from "effect";
+import { AsyncData } from "foldkit";
+
+export const File = S.Struct({
+  path: S.String,
+  size: S.Number,
+  gitStatus: S.String,
+});
+export type File = typeof File.Type;
+
+export const SearchMatch = S.Struct({
+  path: S.String,
+  line: S.Number,
+  column: S.Number,
+  lineContent: S.String,
+  contextBefore: S.Array(S.String),
+  contextAfter: S.Array(S.String),
+  ranges: S.Array(S.Tuple([S.Number, S.Number])),
+  definition: S.Boolean,
+});
+export type SearchMatch = typeof SearchMatch.Type;
+
+export const FilesError = S.Struct({
+  message: S.String,
+  missing: S.Boolean,
+});
+export const Files = AsyncData.Schema(S.Array(File), FilesError);
+
+export const SearchData = S.Struct({
+  query: S.String,
+  files: S.Array(File),
+  matches: S.Array(SearchMatch),
+});
+export const Search = AsyncData.Schema(SearchData, S.String);
+
+export const FileData = S.Struct({
+  path: S.String,
+  content: S.String,
+  truncated: S.Boolean,
+});
+export const FileContent = AsyncData.Schema(FileData, S.String);
+
+export const Clone = AsyncData.Schema(S.Struct({ path: S.String }), S.String);
+
+export const Model = S.Struct({
+  owner: S.String,
+  name: S.String,
+  query: S.String,
+  selectedPath: S.String,
+  collapsedFolders: S.Array(S.String),
+  files: Files.schema,
+  search: Search.schema,
+  file: FileContent.schema,
+  clone: Clone.schema,
+});
+export type Model = typeof Model.Type;
+
+export const empty = (): Model =>
+  Model.make({
+    owner: "",
+    name: "",
+    query: "",
+    selectedPath: "",
+    collapsedFolders: [],
+    files: Files.Idle(),
+    search: Search.Idle(),
+    file: FileContent.Idle(),
+    clone: Clone.Idle(),
+  });

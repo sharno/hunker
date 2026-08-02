@@ -5,6 +5,7 @@ import { UrlRequest } from "foldkit/navigation";
 import { Popover } from "@foldkit/ui";
 
 import * as GitHubLocation from "./features/github-location";
+import * as Repository from "./page/repository";
 import {
   CharacterDiffResult,
   FileChange,
@@ -12,8 +13,6 @@ import {
   InlineDiffMode,
   MovedBlock,
   PullCommit,
-  RepositoryFile,
-  RepositorySearchMatch,
   ReviewEvent,
   ReviewMeta,
   SemanticResult,
@@ -21,6 +20,9 @@ import {
 
 export const GotGitHubLocationMessage = m("GotGitHubLocationMessage", {
   message: GitHubLocation.Message,
+});
+export const GotRepositoryMessage = m("GotRepositoryMessage", {
+  message: Repository.Message,
 });
 export const ClickedRefreshReview = m("ClickedRefreshReview");
 export const TickedRevisionPoll = m("TickedRevisionPoll");
@@ -75,59 +77,6 @@ export const FailedFetchCommitDiff = m("FailedFetchCommitDiff", {
   sha: S.String,
   error: S.String,
 });
-export const SucceededFetchRepositoryFiles = m(
-  "SucceededFetchRepositoryFiles",
-  {
-    repository: S.String,
-    files: S.Array(RepositoryFile),
-  },
-);
-export const FailedFetchRepositoryFiles = m("FailedFetchRepositoryFiles", {
-  repository: S.String,
-  error: S.String,
-  missing: S.Boolean,
-});
-export const ClickedCloneRepository = m("ClickedCloneRepository", {
-  destination: S.Literals(["temporary", "configured"]),
-});
-export const SucceededCloneRepository = m("SucceededCloneRepository", {
-  repository: S.String,
-  path: S.String,
-});
-export const FailedCloneRepository = m("FailedCloneRepository", {
-  repository: S.String,
-  error: S.String,
-});
-export const UpdatedRepositoryQuery = m("UpdatedRepositoryQuery", {
-  value: S.String,
-});
-export const SubmittedRepositorySearch = m("SubmittedRepositorySearch");
-export const SucceededSearchRepository = m("SucceededSearchRepository", {
-  repository: S.String,
-  query: S.String,
-  files: S.Array(RepositoryFile),
-  matches: S.Array(RepositorySearchMatch),
-});
-export const FailedSearchRepository = m("FailedSearchRepository", {
-  repository: S.String,
-  query: S.String,
-  error: S.String,
-});
-export const SelectedRepositoryFile = m("SelectedRepositoryFile", {
-  path: S.String,
-});
-export const ClickedCloseRepositoryFile = m("ClickedCloseRepositoryFile");
-export const SucceededFetchRepositoryFile = m("SucceededFetchRepositoryFile", {
-  repository: S.String,
-  path: S.String,
-  content: S.String,
-  truncated: S.Boolean,
-});
-export const FailedFetchRepositoryFile = m("FailedFetchRepositoryFile", {
-  repository: S.String,
-  path: S.String,
-  error: S.String,
-});
 export const SucceededFetchSemantic = m("SucceededFetchSemantic", {
   requestedUrl: S.String,
   path: S.String,
@@ -178,7 +127,6 @@ export const SelectedInlineDiffMode = m("SelectedInlineDiffMode", {
 export const ToggledSyntaxHighlighting = m("ToggledSyntaxHighlighting");
 export const ToggledSidebar = m("ToggledSidebar");
 export const ToggledFileTreeFolder = m("ToggledFileTreeFolder", {
-  scope: S.Literals(["review", "repository"]),
   path: S.String,
 });
 export const ToggledReviewed = m("ToggledReviewed", { path: S.String });
@@ -239,6 +187,7 @@ export const FailedPostPullRequestReview = m("FailedPostPullRequestReview", {
 
 export const Message = S.Union([
   GotGitHubLocationMessage,
+  GotRepositoryMessage,
   ClickedRefreshReview,
   TickedRevisionPoll,
   ClickedCheckReviewRevision,
@@ -256,19 +205,6 @@ export const Message = S.Union([
   FailedFetchCommits,
   SucceededFetchCommitDiff,
   FailedFetchCommitDiff,
-  SucceededFetchRepositoryFiles,
-  FailedFetchRepositoryFiles,
-  ClickedCloneRepository,
-  SucceededCloneRepository,
-  FailedCloneRepository,
-  UpdatedRepositoryQuery,
-  SubmittedRepositorySearch,
-  SucceededSearchRepository,
-  FailedSearchRepository,
-  SelectedRepositoryFile,
-  ClickedCloseRepositoryFile,
-  SucceededFetchRepositoryFile,
-  FailedFetchRepositoryFile,
   SucceededFetchSemantic,
   FailedFetchSemantic,
   SucceededFetchMoves,

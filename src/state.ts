@@ -24,13 +24,10 @@ import {
   GotDiffOptionsPopoverMessage,
   GotGitHubLocationMessage,
   GotOpenReviewPopoverMessage,
+  GotRepositoryMessage,
   Model,
   PullCommits,
   ClickedLink,
-  RepositoryClone,
-  RepositoryFileContent,
-  RepositoryFiles,
-  RepositorySearch,
   ReplyFailed,
   ReplyLoading,
   ReviewFailed,
@@ -56,23 +53,7 @@ import {
   FetchCommits,
 } from "./features/commits";
 import { CheckReviewRevision } from "./features/revision";
-import {
-  changeRepositoryQuery,
-  closeRepositoryFile,
-  loadRepositoryLocation,
-  repositoryFileFailed,
-  repositoryFileLoaded,
-  repositoryCloneFailed,
-  repositoryCloned,
-  repositoryFilesFailed,
-  repositoryFilesLoaded,
-  repositoryOptionsFromSearch,
-  repositorySearchFailed,
-  repositorySearchLoaded,
-  requestRepositoryClone,
-  selectRepositoryFile,
-  submitRepositorySearch,
-} from "./features/repository";
+import * as Repository from "./page/repository";
 import {
   defaultReviewOptions,
   isPullRequestUrl,
@@ -524,6 +505,32 @@ const showNotFound = (model: ModelType): UpdateReturn => [
   [],
 ];
 
+const loadRepositoryLocation = (
+  model: ModelType,
+  route: Repository.RepositoryRoute,
+  options: Repository.RepositoryOptions,
+): UpdateReturn => {
+  const [repositoryBrowser, commands] = Repository.load(
+    model.repositoryBrowser,
+    route,
+    options,
+  );
+  return [
+    evo(model, {
+      page: () => "repository" as const,
+      githubLocation: () =>
+        GitHubLocation.replaceValue(
+          `https://github.com/${route.owner}/${route.name}`,
+          false,
+        ),
+      repositoryBrowser: () => repositoryBrowser,
+    }),
+    Command.mapMessages(commands, (message) =>
+      GotRepositoryMessage({ message }),
+    ),
+  ];
+};
+
 const requestRevisionCheck = (model: ModelType): UpdateReturn => {
   if (
     model.page !== "review" ||
@@ -598,6 +605,18 @@ export const update = (
           },
         });
       },
+      GotRepositoryMessage: ({ message }) => {
+        const [repositoryBrowser, commands] = Repository.update(
+          model.repositoryBrowser,
+          message,
+        );
+        return [
+          evo(model, { repositoryBrowser: () => repositoryBrowser }),
+          Command.mapMessages(commands, (childMessage) =>
+            GotRepositoryMessage({ message: childMessage }),
+          ),
+        ];
+      },
       ClickedRefreshReview: () => {
         if (model.phase._tag === "Loading" || model.prUrl.trim() === "")
           return [model, []];
@@ -644,7 +663,7 @@ export const update = (
               loadRepositoryLocation(
                 model,
                 { owner, name: repository },
-                repositoryOptionsFromSearch(search),
+                Repository.repositoryOptionsFromSearch(search),
               ),
             Pull: (route) =>
               changeReviewLocation(
@@ -824,29 +843,6 @@ export const update = (
               [],
             ]
           : [model, []],
-      SucceededFetchRepositoryFiles: ({ repository, files }) =>
-        repositoryFilesLoaded(model, repository, files),
-      FailedFetchRepositoryFiles: ({ repository, error, missing }) =>
-        repositoryFilesFailed(model, repository, error, missing),
-      ClickedCloneRepository: ({ destination }) =>
-        requestRepositoryClone(model, destination),
-      SucceededCloneRepository: ({ repository, path }) =>
-        repositoryCloned(model, repository, path),
-      FailedCloneRepository: ({ repository, error }) =>
-        repositoryCloneFailed(model, repository, error),
-      UpdatedRepositoryQuery: ({ value }) =>
-        changeRepositoryQuery(model, value),
-      SubmittedRepositorySearch: () => submitRepositorySearch(model),
-      SucceededSearchRepository: (input) =>
-        repositorySearchLoaded(model, input),
-      FailedSearchRepository: ({ repository, query, error }) =>
-        repositorySearchFailed(model, repository, query, error),
-      SelectedRepositoryFile: ({ path }) => selectRepositoryFile(model, path),
-      ClickedCloseRepositoryFile: () => closeRepositoryFile(model),
-      SucceededFetchRepositoryFile: (input) =>
-        repositoryFileLoaded(model, input),
-      FailedFetchRepositoryFile: ({ repository, path, error }) =>
-        repositoryFileFailed(model, repository, path, error),
       SucceededFetchSemantic: ({ requestedUrl, path, result }) =>
         isCurrentDiffRequest(model, requestedUrl)
           ? [
@@ -1183,25 +1179,13 @@ export const update = (
           evo(model, { sidebarCollapsed: (value) => !value }),
           [],
         ),
-      ToggledFileTreeFolder: ({ scope, path }) =>
-        scope === "review"
-          ? [
-              evo(model, {
-                collapsedFileTreeFolders: (folders) =>
-                  toggleMembership(folders, path),
-              }),
-              [],
-            ]
-          : [
-              evo(model, {
-                repositoryBrowser: (browser) =>
-                  evo(browser, {
-                    collapsedFolders: (folders) =>
-                      toggleMembership(folders, path),
-                  }),
-              }),
-              [],
-            ],
+      ToggledFileTreeFolder: ({ path }) => [
+        evo(model, {
+          collapsedFileTreeFolders: (folders) =>
+            toggleMembership(folders, path),
+        }),
+        [],
+      ],
       ToggledGitHubReviews: () => {
         const next = evo(model, { showGitHubReviews: (value) => !value });
         const [updated, commands] = requestGitHubReviews(next);
@@ -1290,17 +1274,7 @@ const initialModel = (prUrl: string, options: ReviewOptions) =>
     commits: PullCommits.Idle(),
     selectedCommit: options.selectedCommit,
     commitDiff: CommitDiff.Idle(),
-    repositoryBrowser: {
-      owner: "",
-      name: "",
-      query: "",
-      selectedPath: "",
-      collapsedFolders: [],
-      files: RepositoryFiles.Idle(),
-      search: RepositorySearch.Idle(),
-      file: RepositoryFileContent.Idle(),
-      clone: RepositoryClone.Idle(),
-    },
+    repositoryBrowser: Repository.empty(),
     diffOptionsPopover: initialDiffOptionsPopover(),
     openReviewPopover: initialOpenReviewPopover(),
     toolbarCompact: false,
@@ -1339,7 +1313,9 @@ export const init: Runtime.RoutingApplicationInit<ModelType, Message> = (url) =>
         loadRepositoryLocation(
           initialModel("", defaultReviewOptions),
           { owner, name: repository },
-          repositoryOptionsFromSearch(Option.getOrElse(url.search, () => "")),
+          Repository.repositoryOptionsFromSearch(
+            Option.getOrElse(url.search, () => ""),
+          ),
         ),
       Pull: (route) => {
         const reviewUrl = reviewRouteToGitHubUrl(route);

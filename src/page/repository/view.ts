@@ -1,27 +1,30 @@
 import { Array, Option } from "effect";
-import { AsyncData } from "foldkit";
+import { AsyncData, Submodel } from "foldkit";
 import { createLazy } from "foldkit/html";
 import type { Html, HtmlBuilder } from "foldkit/html";
 
-import { homeRouter } from "../app-route";
-import { button, input } from "./control";
+import { button, input } from "../../view/control";
 import {
-  UpdatedRepositoryQuery,
   ClickedCloseRepositoryFile,
   ClickedCloneRepository,
+  type Message,
   SelectedRepositoryFile,
   SubmittedRepositorySearch,
-  ToggledFileTreeFolder,
-} from "../domain";
+  ToggledRepositoryFolder,
+  UpdatedRepositoryQuery,
+} from "./message";
 import type {
-  Message,
+  File as RepositoryFile,
   Model,
-  RepositoryFile,
-  RepositorySearchMatch,
-} from "../domain";
-import { syntaxHighlightedContent } from "./syntax-highlight";
-import { githubLocationForm } from "./github-location-view";
-import { fileTreeView } from "./file-tree-view";
+  SearchMatch as RepositorySearchMatch,
+} from "./model";
+import { syntaxHighlightedContent } from "../../view/syntax-highlight";
+import { fileTreeView } from "../../view/file-tree-view";
+
+export type ViewInputs = Readonly<{
+  homeHref: string;
+  renderLocationForm: () => Html;
+}>;
 
 const formatSize = (bytes: number) =>
   bytes < 1_024
@@ -62,8 +65,7 @@ const repositoryFileTree = (
       files,
       pathOf: (file) => file.path,
       collapsedFolders,
-      onToggleFolder: (path) =>
-        ToggledFileTreeFolder({ scope: "repository", path }),
+      onToggleFolder: (path) => ToggledRepositoryFolder({ path }),
       renderFile: (file, name, builder) =>
         repositoryFileButton(file, name, file.path === selectedPath, builder),
     },
@@ -123,12 +125,12 @@ const repositorySearchResults = (
   model: Model,
   h: HtmlBuilder<Message>,
 ): Html => {
-  const state = model.repositoryBrowser.search;
+  const state = model.search;
   if (AsyncData.isPending(state)) {
     return h.div(
       [h.Class("repository-results-state")],
       [
-        h.strong([], [`Searching for “${model.repositoryBrowser.query}”…`]),
+        h.strong([], [`Searching for “${model.query}”…`]),
         h.span(
           [],
           ["FFF is ranking filenames and matching file contents locally."],
@@ -160,7 +162,7 @@ const repositorySearchResults = (
                   repositoryFileButton(
                     file,
                     file.path,
-                    file.path === model.repositoryBrowser.selectedPath,
+                    file.path === model.selectedPath,
                     h,
                   ),
                 ),
@@ -187,11 +189,11 @@ const repositorySearchResults = (
 };
 
 const repositoryFileView = (model: Model, h: HtmlBuilder<Message>): Html => {
-  const state = model.repositoryBrowser.file;
+  const state = model.file;
   if (AsyncData.isPending(state)) {
     return h.div(
       [h.Class("repository-results-state")],
-      [h.strong([], [`Opening ${model.repositoryBrowser.selectedPath}…`])],
+      [h.strong([], [`Opening ${model.selectedPath}…`])],
     );
   }
   if (AsyncData.isFailure(state)) {
@@ -215,11 +217,7 @@ const repositoryFileView = (model: Model, h: HtmlBuilder<Message>): Html => {
               h.Class("commit-back"),
               h.OnClick(ClickedCloseRepositoryFile()),
             ],
-            [
-              model.repositoryBrowser.query === ""
-                ? "← File list"
-                : "← Search results",
-            ],
+            [model.query === "" ? "← File list" : "← Search results"],
           ),
           h.strong([], [data.path]),
           data.truncated
@@ -241,7 +239,7 @@ const repositoryFileView = (model: Model, h: HtmlBuilder<Message>): Html => {
 };
 
 const repositoryCloneView = (model: Model, h: HtmlBuilder<Message>): Html => {
-  const clone = model.repositoryBrowser.clone;
+  const clone = model.clone;
   const loading = AsyncData.isPending(clone);
   const error = Option.getOrUndefined(AsyncData.getError(clone));
   return h.section(
@@ -291,124 +289,125 @@ const repositoryCloneView = (model: Model, h: HtmlBuilder<Message>): Html => {
   );
 };
 
-export const repositoryView = (model: Model, h: HtmlBuilder<Message>): Html => {
-  const browser = model.repositoryBrowser;
-  const files = AsyncData.getOrElse(browser.files, () => []);
-  const filesError = Option.getOrUndefined(AsyncData.getError(browser.files));
-  return h.main(
-    [h.Class("repository-shell")],
-    [
-      h.header(
-        [h.Class("repository-toolbar")],
-        [
-          h.a(
-            [h.Class("compact-brand"), h.Href(homeRouter())],
-            [
-              h.span([h.Class("brand-mark")], ["H"]),
-              h.span([h.Class("brand-name")], ["hunker"]),
-            ],
-          ),
-          h.div(
-            [h.Class("repository-identity")],
-            [
-              h.span([], ["Local repository"]),
-              h.strong([], [`${browser.owner}/${browser.name}`]),
-            ],
-          ),
-          githubLocationForm(model, "repository-github-loader", h),
-          h.form(
-            [
-              h.Class("repository-search"),
-              h.OnSubmit(SubmittedRepositorySearch()),
-            ],
-            [
-              h.span([], ["⌕"]),
-              input("repository-query", h, [
-                h.Type("search"),
-                h.Value(browser.query),
-                h.Placeholder("Fuzzy search files and contents"),
-                h.AriaLabel("Search repository files and contents"),
-                h.OnInput((value) => UpdatedRepositoryQuery({ value })),
-              ]),
-              button(h, [h.Type("submit")], ["Search"]),
-            ],
-          ),
-          h.a(
-            [
-              h.Class("repository-github-link"),
-              h.Href(`https://github.com/${browser.owner}/${browser.name}`),
-              h.Target("_blank"),
-              h.Rel("noopener noreferrer"),
-            ],
-            ["GitHub ↗"],
-          ),
-        ],
-      ),
-      filesError !== undefined && !filesError.missing
-        ? h.div(
-            [h.Class("error-banner"), h.Role("alert")],
-            [filesError.message],
-          )
-        : h.empty,
-      h.div(
-        [h.Class("repository-workspace")],
-        [
-          h.aside(
-            [h.Class("repository-tree")],
-            [
-              h.div(
-                [h.Class("repository-tree-heading")],
-                [
-                  h.strong([], ["Files"]),
-                  h.span(
-                    [],
-                    [
-                      AsyncData.isPending(browser.files)
-                        ? "Indexing…"
-                        : String(files.length),
-                    ],
-                  ),
-                ],
-              ),
-              h.nav(
-                [h.AriaLabel("Repository files")],
-                [
-                  lazyRepositoryFileTree(repositoryFileTree, [
-                    files,
-                    browser.selectedPath,
-                    browser.collapsedFolders,
-                    h,
-                  ]),
-                ],
-              ),
-            ],
-          ),
-          h.div(
-            [h.Class("repository-main")],
-            [
-              filesError?.missing === true
-                ? repositoryCloneView(model, h)
-                : browser.selectedPath !== ""
-                  ? repositoryFileView(model, h)
-                  : browser.query !== ""
-                    ? repositorySearchResults(model, h)
-                    : h.section(
-                        [h.Class("repository-welcome")],
-                        [
-                          h.span([], ["FFF"]),
-                          h.h1([], [`Browse ${browser.name}`]),
-                          h.p(
-                            [],
-                            [
-                              "Choose a file from the local index, or fuzzy search filenames and code contents.",
-                            ],
-                          ),
-                        ],
-                      ),
-            ],
-          ),
-        ],
-      ),
-    ],
-  );
-};
+export const view = Submodel.defineView<Model, Message, ViewInputs>(
+  (model, viewInputs, h) => {
+    const files = AsyncData.getOrElse(model.files, () => []);
+    const filesError = Option.getOrUndefined(AsyncData.getError(model.files));
+    return h.main(
+      [h.Class("repository-shell")],
+      [
+        h.header(
+          [h.Class("repository-toolbar")],
+          [
+            h.a(
+              [h.Class("compact-brand"), h.Href(viewInputs.homeHref)],
+              [
+                h.span([h.Class("brand-mark")], ["H"]),
+                h.span([h.Class("brand-name")], ["hunker"]),
+              ],
+            ),
+            h.div(
+              [h.Class("repository-identity")],
+              [
+                h.span([], ["Local repository"]),
+                h.strong([], [`${model.owner}/${model.name}`]),
+              ],
+            ),
+            viewInputs.renderLocationForm(),
+            h.form(
+              [
+                h.Class("repository-search"),
+                h.OnSubmit(SubmittedRepositorySearch()),
+              ],
+              [
+                h.span([], ["⌕"]),
+                input("repository-query", h, [
+                  h.Type("search"),
+                  h.Value(model.query),
+                  h.Placeholder("Fuzzy search files and contents"),
+                  h.AriaLabel("Search repository files and contents"),
+                  h.OnInput((value) => UpdatedRepositoryQuery({ value })),
+                ]),
+                button(h, [h.Type("submit")], ["Search"]),
+              ],
+            ),
+            h.a(
+              [
+                h.Class("repository-github-link"),
+                h.Href(`https://github.com/${model.owner}/${model.name}`),
+                h.Target("_blank"),
+                h.Rel("noopener noreferrer"),
+              ],
+              ["GitHub ↗"],
+            ),
+          ],
+        ),
+        filesError !== undefined && !filesError.missing
+          ? h.div(
+              [h.Class("error-banner"), h.Role("alert")],
+              [filesError.message],
+            )
+          : h.empty,
+        h.div(
+          [h.Class("repository-workspace")],
+          [
+            h.aside(
+              [h.Class("repository-tree")],
+              [
+                h.div(
+                  [h.Class("repository-tree-heading")],
+                  [
+                    h.strong([], ["Files"]),
+                    h.span(
+                      [],
+                      [
+                        AsyncData.isPending(model.files)
+                          ? "Indexing…"
+                          : String(files.length),
+                      ],
+                    ),
+                  ],
+                ),
+                h.nav(
+                  [h.AriaLabel("Repository files")],
+                  [
+                    lazyRepositoryFileTree(repositoryFileTree, [
+                      files,
+                      model.selectedPath,
+                      model.collapsedFolders,
+                      h,
+                    ]),
+                  ],
+                ),
+              ],
+            ),
+            h.div(
+              [h.Class("repository-main")],
+              [
+                filesError?.missing === true
+                  ? repositoryCloneView(model, h)
+                  : model.selectedPath !== ""
+                    ? repositoryFileView(model, h)
+                    : model.query !== ""
+                      ? repositorySearchResults(model, h)
+                      : h.section(
+                          [h.Class("repository-welcome")],
+                          [
+                            h.span([], ["FFF"]),
+                            h.h1([], [`Browse ${model.name}`]),
+                            h.p(
+                              [],
+                              [
+                                "Choose a file from the local index, or fuzzy search filenames and code contents.",
+                              ],
+                            ),
+                          ],
+                        ),
+              ],
+            ),
+          ],
+        ),
+      ],
+    );
+  },
+);

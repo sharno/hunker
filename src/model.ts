@@ -4,6 +4,7 @@ import { ts } from "foldkit/schema";
 import { Popover } from "@foldkit/ui";
 
 import * as GitHubLocation from "./features/github-location";
+import * as Repository from "./page/repository";
 
 export const FileChange = S.Struct({
   path: S.String,
@@ -70,72 +71,6 @@ export const CommitDiffData = S.Struct({
   files: S.Array(FileChange),
 });
 export const CommitDiff = AsyncData.Schema(CommitDiffData, S.String);
-
-export const RepositoryFile = S.Struct({
-  path: S.String,
-  size: S.Number,
-  gitStatus: S.String,
-});
-export type RepositoryFile = typeof RepositoryFile.Type;
-
-export const RepositorySearchMatch = S.Struct({
-  path: S.String,
-  line: S.Number,
-  column: S.Number,
-  lineContent: S.String,
-  contextBefore: S.Array(S.String),
-  contextAfter: S.Array(S.String),
-  ranges: S.Array(S.Tuple([S.Number, S.Number])),
-  definition: S.Boolean,
-});
-export type RepositorySearchMatch = typeof RepositorySearchMatch.Type;
-
-export const RepositoryFilesError = S.Struct({
-  message: S.String,
-  missing: S.Boolean,
-});
-export const RepositoryFiles = AsyncData.Schema(
-  S.Array(RepositoryFile),
-  RepositoryFilesError,
-);
-
-export const RepositorySearchData = S.Struct({
-  query: S.String,
-  files: S.Array(RepositoryFile),
-  matches: S.Array(RepositorySearchMatch),
-});
-export const RepositorySearch = AsyncData.Schema(
-  RepositorySearchData,
-  S.String,
-);
-
-export const RepositoryFileData = S.Struct({
-  path: S.String,
-  content: S.String,
-  truncated: S.Boolean,
-});
-export const RepositoryFileContent = AsyncData.Schema(
-  RepositoryFileData,
-  S.String,
-);
-
-export const RepositoryClone = AsyncData.Schema(
-  S.Struct({ path: S.String }),
-  S.String,
-);
-
-export const RepositoryBrowser = S.Struct({
-  owner: S.String,
-  name: S.String,
-  query: S.String,
-  selectedPath: S.String,
-  collapsedFolders: S.Array(S.String),
-  files: RepositoryFiles.schema,
-  search: RepositorySearch.schema,
-  file: RepositoryFileContent.schema,
-  clone: RepositoryClone.schema,
-});
-export type RepositoryBrowser = typeof RepositoryBrowser.Type;
 
 export const SourceRange = S.Struct({
   startLine: S.Number,
@@ -341,7 +276,7 @@ export const Model = S.Struct({
   commits: PullCommits.schema,
   selectedCommit: S.String,
   commitDiff: CommitDiff.schema,
-  repositoryBrowser: RepositoryBrowser,
+  repositoryBrowser: Repository.Model,
   diffOptionsPopover: Popover.Model,
   openReviewPopover: Popover.Model,
   toolbarCompact: S.Boolean,

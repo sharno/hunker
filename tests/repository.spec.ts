@@ -4,7 +4,7 @@ import {
   localRepositoryUrl,
   repositoryOptionsFromSearch,
   repositoryRouteFromPathname,
-} from "../src/features/repository";
+} from "../src/page/repository";
 
 const repository = "example/hunker-demo";
 const files = [

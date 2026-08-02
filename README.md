@@ -14,18 +14,17 @@ The stack is Effect end to end:
 
 ## Project structure
 
-- `src/domain.ts` — schemas, model, and messages
-- `src/state.ts` — root review reducer and route orchestration
+- `src/model.ts`, `src/message.ts`, `src/state.ts` — application-level review
+  state machine and route orchestration
+- `src/page/repository/` — self-contained Foldkit Submodel with its own model,
+  messages, commands, update, view, namespace, and story tests
+- `src/features/github-location/` — reusable GitHub-location Submodel
 - `src/features/commits.ts` — commit-list and commit-diff commands
 - `src/features/revision.ts` — local PR freshness command and two-minute
   subscription
-- `src/features/repository.ts` — local-repository routes, commands, and reducer
-  transitions
 - `src/file-tree.ts` — shared typed file/folder hierarchy and ancestor expansion
 - `src/diff.ts` — unified-diff parsing and full-file context stitching
 - `src/view/commits-view.ts` — PR commit timeline and selected-commit workspace
-- `src/view/repository-view.ts` — FFF-backed local file browser and search
-  results
 - `src/view/file-tree-view.ts` — shared collapsible tree renderer for repository
   and review files
 - `src/view/diff-view.ts` — unified/side-by-side rendering and hunk interaction
@@ -53,6 +52,11 @@ The stack is Effect end to end:
 - `backend/character-diff-engine.ts` — native Git whole-file alignment and
   inline token/character ranges
 - `backend/server.ts` — Effect HTTP route composition
+
+The review workflow remains the application-level Foldkit Model because it
+coordinates routing and cross-cutting review state. Page-sized features become
+Submodels only when they own an independent state machine; stateless diff, tree,
+Markdown, and syntax renderers remain ordinary shared modules.
 
 ## Run locally
 

@@ -24,6 +24,7 @@ import {
   ToggledSyntaxHighlighting,
   GotDiffOptionsPopoverMessage,
   GotOpenReviewPopoverMessage,
+  GotRepositoryMessage,
   ToggledWhitespace,
 } from "../domain";
 import type {
@@ -35,7 +36,8 @@ import type {
   SemanticResult,
 } from "../domain";
 import { toDiffLines, toFullDiffLines } from "../diff";
-import { localRepositoryUrl } from "../features/repository";
+import { homeRouter } from "../app-route";
+import * as Repository from "../page/repository";
 import { isPullRequestUrl } from "../review-route";
 import { splitDiffView, unifiedDiffView } from "./diff-view";
 import type { MovedRanges } from "./diff-view";
@@ -48,7 +50,6 @@ import {
   detachedReviewThreads,
   reviewComposerView,
 } from "./github-review-view";
-import { repositoryView } from "./repository-view";
 import { githubLocationForm } from "./github-location-view";
 import { fileTreeView } from "./file-tree-view";
 
@@ -173,8 +174,7 @@ const reviewFileTree = (
       files,
       pathOf: (file) => file.path,
       collapsedFolders,
-      onToggleFolder: (path) =>
-        ToggledFileTreeFolder({ scope: "review", path }),
+      onToggleFolder: (path) => ToggledFileTreeFolder({ path }),
       renderFile: (file, name, builder) =>
         fileRow(file, name, selectedPath, reviewedPaths, builder),
     },
@@ -576,7 +576,7 @@ const reviewHeaderView = (model: Model, h: HtmlBuilder<Message>): Html => {
                     [
                       h.Class("repo-name"),
                       h.Href(
-                        localRepositoryUrl({
+                        Repository.localRepositoryUrl({
                           owner: repositoryOwner,
                           name: repositoryName,
                         }),
@@ -1360,7 +1360,19 @@ const diffPanelView = (
 };
 
 export const view = (model: Model, h: HtmlBuilder<Message>): Html => {
-  if (model.page === "repository") return repositoryView(model, h);
+  if (model.page === "repository") {
+    return h.submodel({
+      slotId: "repository",
+      model: model.repositoryBrowser,
+      view: Repository.view,
+      viewInputs: {
+        homeHref: homeRouter(),
+        renderLocationForm: () =>
+          githubLocationForm(model, "repository-github-loader", h),
+      },
+      toParentMessage: (message) => GotRepositoryMessage({ message }),
+    });
+  }
   if (model.phase._tag === "Loading") {
     return h.main(
       [h.Class("app-shell")],
