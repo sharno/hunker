@@ -2,7 +2,13 @@ import { Array, Match as M, Option } from "effect";
 import { AsyncData, Command, Update } from "foldkit";
 import { evo } from "foldkit/struct";
 
-import { locationToAppRoute, repositoryRouter } from "../../app-route";
+import {
+  locationToAppRoute,
+  repositoryCommitsRouter,
+  repositoryFileRouter,
+  repositoryRouter,
+} from "../../app-route";
+import type { AppRoute } from "../../app-route";
 import type { Message } from "./message";
 import {
   CloneRepository,
@@ -33,18 +39,30 @@ export type RepositoryOptions = Readonly<{
   tab: "files" | "commits";
 }>;
 
+const decodeRepositoryRoute = (owner: string, repository: string) =>
+  Option.all({
+    owner: Option.liftThrowable(decodeURIComponent)(owner),
+    name: Option.liftThrowable(decodeURIComponent)(repository),
+  }).pipe(Option.getOrUndefined);
+
 export const repositoryRouteFromPathname = (
   pathname: string,
-): RepositoryRoute | undefined =>
-  M.value(locationToAppRoute(pathname)).pipe(
-    M.tag("Repository", ({ owner, repository }) =>
-      Option.all({
-        owner: Option.liftThrowable(decodeURIComponent)(owner),
-        name: Option.liftThrowable(decodeURIComponent)(repository),
-      }).pipe(Option.getOrUndefined),
-    ),
+): RepositoryRoute | undefined => {
+  return M.value(locationToAppRoute(pathname)).pipe(
+    M.withReturnType<RepositoryRoute | undefined>(),
+    M.tags({
+      Repository: ({ owner, repository }) =>
+        decodeRepositoryRoute(owner, repository),
+      RepositoryCommits: ({ owner, repository }) =>
+        decodeRepositoryRoute(owner, repository),
+      RepositoryCommitsRef: ({ owner, repository }) =>
+        decodeRepositoryRoute(owner, repository),
+      RepositoryFile: ({ owner, repository }) =>
+        decodeRepositoryRoute(owner, repository),
+    }),
     M.orElse(() => undefined),
   );
+};
 
 export const repositoryOptionsFromSearch = (
   search: string,
@@ -57,19 +75,60 @@ export const repositoryOptionsFromSearch = (
   };
 };
 
+export const repositoryOptionsFromRoute = (
+  route: AppRoute,
+  search: string,
+): RepositoryOptions => {
+  const legacy = repositoryOptionsFromSearch(search);
+  return M.value(route).pipe(
+    M.withReturnType<RepositoryOptions>(),
+    M.tags({
+      Repository: () => legacy,
+      RepositoryCommits: () => ({
+        query: legacy.query,
+        file: "",
+        tab: "commits",
+      }),
+      RepositoryCommitsRef: () => ({
+        query: legacy.query,
+        file: "",
+        tab: "commits",
+      }),
+      RepositoryFile: ({ path }) => ({
+        query: legacy.query,
+        file: path,
+        tab: "files",
+      }),
+    }),
+    M.orElse(() => legacy),
+  );
+};
+
 export const localRepositoryUrl = (
   repository: RepositoryRoute,
   options: RepositoryOptions = { query: "", file: "", tab: "files" },
 ) => {
   const params = new URLSearchParams();
   if (options.query !== "") params.set("q", options.query);
-  if (options.file !== "") params.set("file", options.file);
-  if (options.tab === "commits") params.set("view", "commits");
   const search = params.size === 0 ? "" : `?${params.toString()}`;
-  return `${repositoryRouter({
-    owner: repository.owner,
-    repository: repository.name,
-  })}${search}`;
+  const location =
+    options.tab === "commits"
+      ? repositoryCommitsRouter({
+          owner: repository.owner,
+          repository: repository.name,
+        })
+      : options.file !== ""
+        ? repositoryFileRouter({
+            owner: repository.owner,
+            repository: repository.name,
+            ref: "HEAD",
+            path: options.file,
+          })
+        : repositoryRouter({
+            owner: repository.owner,
+            repository: repository.name,
+          });
+  return `${location}${search}`;
 };
 
 type RepositoryUpdate = Update.Return<Model, Message>;

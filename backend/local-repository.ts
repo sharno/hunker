@@ -1,17 +1,8 @@
-import { homedir, tmpdir } from "node:os";
-
 import { FileFinder } from "@ff-labs/fff-node";
-import {
-  Config,
-  Context,
-  Data,
-  Effect,
-  FileSystem,
-  Layer,
-  Path,
-  Stream,
-} from "effect";
+import { Context, Data, Effect, FileSystem, Layer, Path, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+
+import { loadSettings, resolveConfiguredPath } from "./settings";
 
 export type RepositoryFile = Readonly<{
   path: string;
@@ -121,19 +112,15 @@ export const layer = Layer.effect(
     const fs = yield* FileSystem.FileSystem;
     const paths = yield* Path.Path;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const configuredRoot = yield* Config.string("HUNKER_REPOS_ROOT").pipe(
-      Config.withDefault(paths.join(homedir(), "src")),
-    );
-    const repositoriesRoot = paths.resolve(
-      configuredRoot.startsWith("~/")
-        ? paths.join(homedir(), configuredRoot.slice(2))
-        : configuredRoot,
-    );
-    const configuredCacheRoot = yield* Config.string("HUNKER_CACHE_ROOT").pipe(
-      Config.withDefault(paths.join(tmpdir(), "hunker", "repositories")),
-    );
-    const cacheRoot = paths.resolve(configuredCacheRoot);
     const finders = new Map<string, FileFinder>();
+    const currentSettings = loadSettings.pipe(
+      Effect.provideService(FileSystem.FileSystem, fs),
+      Effect.provideService(Path.Path, paths),
+    );
+    const configuredPath = (value: string) =>
+      resolveConfiguredPath(value).pipe(
+        Effect.provideService(Path.Path, paths),
+      );
 
     const runGit = (
       repositoryPath: string,
@@ -180,6 +167,13 @@ export const layer = Layer.effect(
         ) {
           return yield* failure("That repository name is not valid.", 400);
         }
+        const { settings } = yield* currentSettings.pipe(
+          Effect.mapError((error) => failure(error.message)),
+        );
+        const repositoriesRoot = yield* configuredPath(
+          settings.repositoriesRoot,
+        );
+        const cacheRoot = yield* configuredPath(settings.cacheRoot);
         const flat = paths.resolve(repositoriesRoot, repository.name);
         const nested = paths.resolve(
           repositoriesRoot,
@@ -230,6 +224,13 @@ export const layer = Layer.effect(
         ) {
           return yield* failure("That repository name is not valid.", 400);
         }
+        const { settings } = yield* currentSettings.pipe(
+          Effect.mapError((error) => failure(error.message)),
+        );
+        const repositoriesRoot = yield* configuredPath(
+          settings.repositoriesRoot,
+        );
+        const cacheRoot = yield* configuredPath(settings.cacheRoot);
         const root =
           destination === "configured" ? repositoriesRoot : cacheRoot;
         const target =

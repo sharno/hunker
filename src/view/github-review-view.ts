@@ -107,6 +107,7 @@ const threadView = (
   return h.section(
     [
       h.Key(`review-thread-${root.id}`),
+      h.Id(`discussion_r${root.id}`),
       h.Class(`github-review-thread${collapsed ? " is-collapsed" : ""}`),
     ],
     [

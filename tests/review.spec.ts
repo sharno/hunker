@@ -1,4 +1,7 @@
 import { expect, test } from "@playwright/test";
+import { Schema as S } from "effect";
+
+import { HunkerSettings } from "../src/settings";
 
 import {
   commitDiffResponse,
@@ -9,11 +12,26 @@ import {
   reviewResponse,
   reviewUrl,
   semanticResponse,
+  settingsResponse,
 } from "./fixtures";
 
 const classToken = (token: string) => new RegExp(`(?:^|\\s)${token}(?:\\s|$)`);
+const settingsWrite = S.Struct({ settings: HunkerSettings });
 
 test.beforeEach(async ({ page }) => {
+  await page.route("**/api/settings", (route) => {
+    const body: unknown = route.request().postDataJSON();
+    const decoded =
+      body === null ? undefined : S.decodeUnknownSync(settingsWrite)(body);
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json:
+        decoded === undefined
+          ? settingsResponse
+          : { ...settingsResponse, settings: decoded.settings },
+    });
+  });
   await page.route("**/api/characters?**", (route) => {
     const requestUrl = new URL(route.request().url());
     const path = requestUrl.searchParams.get("path") ?? "";
@@ -209,10 +227,8 @@ test("loads a PR and renders ast-grep intelligence in both review layouts", asyn
 
   await expect(page).toHaveURL(
     (url) =>
-      url.pathname === "/example/hunker-demo/pull/42" &&
-      url.searchParams.get("scope") === "file" &&
-      url.searchParams.get("view") === "split" &&
-      url.searchParams.get("file") === "src/greet.ts",
+      url.pathname === "/example/hunker-demo/pull/42/files/src/greet.ts" &&
+      url.search === "",
   );
   await expect(
     page.getByRole("heading", { name: reviewResponse.title }),
@@ -250,11 +266,11 @@ test("loads a PR and renders ast-grep intelligence in both review layouts", asyn
   await characterMode.click();
   await expect(characterMode).toHaveClass(classToken("is-active"));
   await expect(page).toHaveURL(
-    (url) => url.searchParams.get("inline") === "character",
+    "/example/hunker-demo/pull/42/files/src/greet.ts",
   );
   await tokenMode.click();
   await expect(page).toHaveURL(
-    (url) => url.searchParams.get("inline") === "token",
+    "/example/hunker-demo/pull/42/files/src/greet.ts",
   );
   const syntaxToggle = page.getByRole("button", {
     name: "Syntax",
@@ -263,12 +279,12 @@ test("loads a PR and renders ast-grep intelligence in both review layouts", asyn
   await syntaxToggle.click();
   await expect(page.locator('.diff-lines [class*="hljs-"]')).toHaveCount(0);
   await expect(page).toHaveURL(
-    (url) => url.searchParams.get("syntax") === "off",
+    "/example/hunker-demo/pull/42/files/src/greet.ts",
   );
   await syntaxToggle.click();
   await expect(page.locator(".split-lines .hljs-keyword")).not.toHaveCount(0);
   await expect(page).toHaveURL(
-    (url) => url.searchParams.get("syntax") === "on",
+    "/example/hunker-demo/pull/42/files/src/greet.ts",
   );
   await page.locator(".toolbar-backdrop").click({ position: { x: 1, y: 1 } });
   await expect(page.locator(".toolbar-options-panel")).toHaveCount(0);
@@ -299,16 +315,8 @@ test("loads a PR and renders ast-grep intelligence in both review layouts", asyn
   await expect(page.locator(".unified-lines")).toHaveCount(2);
   await expect(page).toHaveURL(
     (url) =>
-      url.pathname === "/example/hunker-demo/pull/42" &&
-      url.searchParams.get("scope") === "full" &&
-      url.searchParams.get("view") === "unified" &&
-      url.searchParams.get("whitespace") === "ignore" &&
-      url.searchParams.get("semantic") === "off" &&
-      url.searchParams.get("inline") === "token" &&
-      url.searchParams.get("syntax") === "on" &&
-      url.searchParams.get("sidebar") === "expanded" &&
-      url.searchParams.get("tab") === "files" &&
-      url.searchParams.get("file") === "src/greet.ts",
+      url.pathname === "/example/hunker-demo/pull/42/files/src/greet.ts" &&
+      url.search === "",
   );
 });
 
@@ -365,7 +373,9 @@ test("loads a copied review route and refreshes it from GitHub", async ({
   await expect(toolbar).toHaveClass(classToken("is-expanded"));
   await expect(toolbar).toHaveCSS("height", "68px");
   await expect(page.locator(".controlbar")).toHaveCount(0);
-  await expect(page).toHaveURL(sharedRoute);
+  await expect(page).toHaveURL(
+    "/example/hunker-demo/pull/42/files/src/message.ts",
+  );
   await expect(page.getByRole("button", { name: "Full diff" })).toHaveClass(
     classToken("is-active"),
   );
@@ -400,21 +410,29 @@ test("loads a copied review route and refreshes it from GitHub", async ({
   );
   await page.getByRole("button", { name: "Full diff" }).click();
   await expect(page.locator(".full-diff .diff-panel")).toHaveCount(2);
-  await expect(page).toHaveURL(sharedRoute);
+  await expect(page).toHaveURL(
+    "/example/hunker-demo/pull/42/files/src/message.ts",
+  );
 
   await page.getByRole("button", { name: "Refresh diff from GitHub" }).click();
   await expect(
     page.getByRole("heading", { name: "Review revision 2" }),
   ).toBeVisible();
-  await expect(page).toHaveURL(sharedRoute);
+  await expect(page).toHaveURL(
+    "/example/hunker-demo/pull/42/files/src/message.ts",
+  );
 
   await page.reload();
   await expect(
     page.getByRole("heading", { name: "Review revision 3" }),
   ).toBeVisible();
-  await expect(page).toHaveURL(sharedRoute);
+  await expect(page).toHaveURL(
+    "/example/hunker-demo/pull/42/files/src/message.ts",
+  );
   expect(reviewRequests).toBe(3);
-  expect(semanticRequests).toBe(0);
+  // The legacy link's display overrides last only until it canonicalizes;
+  // reloading the clean URL correctly uses the server-backed defaults.
+  expect(semanticRequests).toBe(1);
 });
 
 test("lists PR commits and opens a URL-persisted commit diff", async ({
@@ -454,14 +472,12 @@ test("lists PR commits and opens a URL-persisted commit diff", async ({
   await page.goto("/example/hunker-demo/pull/42");
   await expect(
     page.getByRole("link", { name: "example/hunker-demo", exact: true }),
-  ).toHaveAttribute("href", "/repo/example/hunker-demo");
+  ).toHaveAttribute("href", "/example/hunker-demo");
 
   const tabPicker = page.locator(".review-tab-picker");
   const filesPosition = await tabPicker.boundingBox();
   await page.getByRole("button", { name: "Commits", exact: true }).click();
-  await expect(page).toHaveURL(
-    (url) => url.searchParams.get("tab") === "commits",
-  );
+  await expect(page).toHaveURL("/example/hunker-demo/pull/42/commits");
   const commitsPosition = await tabPicker.boundingBox();
   expect(commitsPosition?.x).toBeCloseTo(filesPosition?.x ?? 0, 0);
   await expect(page.locator(".commit-row")).toHaveCount(2);
@@ -471,7 +487,7 @@ test("lists PR commits and opens a URL-persisted commit diff", async ({
 
   await page.getByRole("button", { name: /Use a template literal/ }).click();
   await expect(page).toHaveURL(
-    (url) => url.searchParams.get("commit") === commitsResponse.commits[1].sha,
+    `/example/hunker-demo/pull/42/commits/${commitsResponse.commits[1].sha}`,
   );
   await expect(page.locator(".commit-detail-header")).toContainText("2222222");
   await expect(page.locator(".diff-panel")).toHaveCount(1);
@@ -491,9 +507,7 @@ test("lists PR commits and opens a URL-persisted commit diff", async ({
 
   await page.getByRole("button", { name: "← All commits" }).click();
   await expect(page.locator(".commit-row")).toHaveCount(2);
-  await expect(page).toHaveURL(
-    (url) => url.searchParams.get("commit") === null,
-  );
+  await expect(page).toHaveURL("/example/hunker-demo/pull/42/commits");
   await page.getByRole("button", { name: "Files", exact: true }).click();
   await expect(page.locator(".diff-panel")).toHaveCount(1);
   await expect(page.locator(".diff-panel")).toContainText("const message");
@@ -558,16 +572,10 @@ test("drops a stale commit when restoring URL state for another PR", async ({
     }),
   );
 
-  await page.goto(
-    "/example/hunker-demo/pull/42?scope=full&view=unified&whitespace=show&semantic=off&inline=off&syntax=off&sidebar=collapsed&reviews=hide&tab=commits&commit=deadbee&file=src%2Fstale.ts",
-  );
+  await page.goto("/example/hunker-demo/pull/42/commits/deadbee");
 
   await expect(page.locator(".commit-row")).toHaveCount(2);
-  await expect(page).toHaveURL(
-    (url) =>
-      url.searchParams.get("tab") === "commits" &&
-      url.searchParams.get("commit") === null,
-  );
+  await expect(page).toHaveURL("/example/hunker-demo/pull/42/commits");
   expect(commitDiffRequests).toBe(0);
 });
 
@@ -694,7 +702,7 @@ test("shows and hides inline GitHub reviews and posts replies and review decisio
   await reviewsToggle.click();
   await expect(page.locator(".github-review-thread")).toHaveCount(0);
   await expect(page).toHaveURL(
-    (url) => url.searchParams.get("reviews") === "hide",
+    "/example/hunker-demo/pull/42/files/src/greet.ts",
   );
   await reviewsToggle.click();
   await expect(page.locator(".github-review-thread")).toHaveCount(2);

@@ -47,6 +47,12 @@ import {
   loadReviewData,
   pinnedRefs,
 } from "./review-backing";
+import {
+  HunkerSettings,
+  SettingsFailed,
+  loadSettings,
+  saveSettings,
+} from "./settings";
 
 class InvalidFileRequest extends Data.TaggedError("InvalidFileRequest")<{
   readonly message: string;
@@ -132,6 +138,8 @@ const CloneRepositoryBody = S.Struct({
   repository: S.String,
   destination: S.Literals(["temporary", "configured"]),
 });
+
+const SaveSettingsBody = S.Struct({ settings: HunkerSettings });
 
 const decodeBody = <A, I>(
   request: HttpServerRequest.HttpServerRequest,
@@ -348,6 +356,32 @@ const handleCloneRepository = (request: HttpServerRequest.HttpServerRequest) =>
           ),
         ),
       LocalRepositoryFailed: localRepositoryError,
+    }),
+  );
+
+const settingsError = (error: SettingsFailed) =>
+  Effect.succeed(
+    HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 500 }),
+  );
+
+const handleSettings = Effect.gen(function* () {
+  return HttpServerResponse.jsonUnsafe(yield* loadSettings);
+}).pipe(Effect.catchTag("SettingsFailed", settingsError));
+
+const handleSaveSettings = (request: HttpServerRequest.HttpServerRequest) =>
+  Effect.gen(function* () {
+    const { settings } = yield* decodeBody(request, SaveSettingsBody);
+    return HttpServerResponse.jsonUnsafe(yield* saveSettings(settings));
+  }).pipe(
+    Effect.catchTags({
+      InvalidReviewRequest: (error) =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
+        ),
+      SettingsFailed: settingsError,
     }),
   );
 
@@ -715,6 +749,8 @@ const applicationLayer = Layer.mergeAll(
 const runtimeLayer = Layer.mergeAll(platformLayer, applicationLayer);
 
 const routesLayer = Layer.mergeAll(
+  HttpRouter.add("GET", "/api/settings", handleSettings),
+  HttpRouter.add("PUT", "/api/settings", handleSaveSettings),
   HttpRouter.add("GET", "/api/diff", handleDiff),
   HttpRouter.add("GET", "/api/revision", handleRevision),
   HttpRouter.add("GET", "/api/commits", handleCommits),

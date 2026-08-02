@@ -1,10 +1,31 @@
 import { expect, test } from "@playwright/test";
+import { Schema as S } from "effect";
 
 import {
   localRepositoryUrl,
   repositoryOptionsFromSearch,
   repositoryRouteFromPathname,
 } from "../src/page/repository";
+import { HunkerSettings } from "../src/settings";
+import { settingsResponse } from "./fixtures";
+
+const settingsWrite = S.Struct({ settings: HunkerSettings });
+
+test.beforeEach(async ({ page }) => {
+  await page.route("**/api/settings", (route) => {
+    const body: unknown = route.request().postDataJSON();
+    const decoded =
+      body === null ? undefined : S.decodeUnknownSync(settingsWrite)(body);
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json:
+        decoded === undefined
+          ? settingsResponse
+          : { ...settingsResponse, settings: decoded.settings },
+    });
+  });
+});
 
 const repository = "example/hunker-demo";
 const files = [
@@ -14,17 +35,27 @@ const files = [
 ];
 
 test("round-trips repository routes and browser options", () => {
+  expect(repositoryRouteFromPathname("/radarlabs/server")).toEqual({
+    owner: "radarlabs",
+    name: "server",
+  });
   expect(repositoryRouteFromPathname("/repo/radarlabs/server")).toEqual({
     owner: "radarlabs",
     name: "server",
   });
+  expect(repositoryRouteFromPathname("/radarlabs/server/commits/main")).toEqual(
+    {
+      owner: "radarlabs",
+      name: "server",
+    },
+  );
   expect(repositoryRouteFromPathname("/repo/%E0%A4%A/server")).toBeUndefined();
   expect(
     localRepositoryUrl(
       { owner: "radarlabs", name: "server" },
       { query: "config key", file: "src/config.ts", tab: "files" },
     ),
-  ).toBe("/repo/radarlabs/server?q=config+key&file=src%2Fconfig.ts");
+  ).toBe("/radarlabs/server/blob/HEAD/src/config.ts?q=config+key");
   expect(
     repositoryOptionsFromSearch("?q=config+key&file=src%2Fconfig.ts"),
   ).toEqual({
@@ -65,7 +96,7 @@ test("offers a temporary or configured clone when a repository is missing", asyn
     });
   });
 
-  await page.goto("/repo/example/hunker-demo");
+  await page.goto("/example/hunker-demo");
   await expect(
     page.getByRole("heading", {
       name: "Clone this repository for local browsing",
@@ -102,12 +133,12 @@ test("opens repository links without accepting a late response from the previous
     });
   });
 
-  await page.goto("/repo/example/first");
+  await page.goto("/example/first");
   await page
     .getByPlaceholder("Paste any GitHub URL")
     .fill("https://github.com/example/second");
   await page.getByRole("button", { name: "Open", exact: true }).click();
-  await expect(page).toHaveURL("/repo/example/second");
+  await expect(page).toHaveURL("/example/second");
   await expect(page.locator(".repository-file-row")).toContainText("second.ts");
 
   firstGate.resolve();
@@ -151,11 +182,9 @@ test("lists local repository commits and links them to commit review", async ({
     });
   });
 
-  await page.goto("/repo/example/hunker-demo");
+  await page.goto("/example/hunker-demo");
   await page.getByRole("button", { name: "Commits", exact: true }).click();
-  await expect(page).toHaveURL(
-    (url) => url.searchParams.get("view") === "commits",
-  );
+  await expect(page).toHaveURL("/example/hunker-demo/commits");
   const commit = page.getByRole("link", {
     name: /Add repository commit history/,
   });
@@ -216,7 +245,7 @@ test("browses local files and shows fuzzy content results with context", async (
     }),
   );
 
-  await page.goto("/repo/example/hunker-demo");
+  await page.goto("/example/hunker-demo");
   await expect(
     page.getByRole("navigation", { name: "Repository files" }),
   ).not.toContainText("greet.ts");
@@ -248,7 +277,7 @@ test("browses local files and shows fuzzy content results with context", async (
 
   await match.click();
   await expect(page).toHaveURL(
-    (url) => url.searchParams.get("file") === "src/greet.ts",
+    (url) => url.pathname === "/example/hunker-demo/blob/HEAD/src/greet.ts",
   );
   await expect(page.locator(".repository-file-view")).toContainText(
     "src/greet.ts",
@@ -262,6 +291,6 @@ test("browses local files and shows fuzzy content results with context", async (
   await expect(page).toHaveURL(
     (url) =>
       url.searchParams.get("q") === "gret person" &&
-      url.searchParams.get("file") === null,
+      url.pathname === "/example/hunker-demo",
   );
 });

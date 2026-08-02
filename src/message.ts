@@ -6,6 +6,7 @@ import { Popover } from "@foldkit/ui";
 
 import * as GitHubLocation from "./features/github-location";
 import * as Repository from "./page/repository";
+import * as Settings from "./page/settings";
 import {
   CharacterDiffResult,
   FileChange,
@@ -23,6 +24,9 @@ export const GotGitHubLocationMessage = m("GotGitHubLocationMessage", {
 });
 export const GotRepositoryMessage = m("GotRepositoryMessage", {
   message: Repository.Message,
+});
+export const GotSettingsMessage = m("GotSettingsMessage", {
+  message: Settings.Message,
 });
 export const ClickedRefreshReview = m("ClickedRefreshReview");
 export const TickedRevisionPoll = m("TickedRevisionPoll");
@@ -188,6 +192,7 @@ export const FailedPostPullRequestReview = m("FailedPostPullRequestReview", {
 export const Message = S.Union([
   GotGitHubLocationMessage,
   GotRepositoryMessage,
+  GotSettingsMessage,
   ClickedRefreshReview,
   TickedRevisionPoll,
   ClickedCheckReviewRevision,

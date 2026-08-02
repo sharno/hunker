@@ -26,6 +26,7 @@ import { commitRouter } from "../../app-route";
 
 export type ViewInputs = Readonly<{
   homeHref: string;
+  settingsHref: string;
   renderLocationForm: () => Html;
 }>;
 
@@ -488,6 +489,13 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
                 h.Rel("noopener noreferrer"),
               ],
               ["GitHub ↗"],
+            ),
+            h.a(
+              [
+                h.Class("repository-github-link"),
+                h.Href(viewInputs.settingsHref),
+              ],
+              ["Settings"],
             ),
           ],
         ),

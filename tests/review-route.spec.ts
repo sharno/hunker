@@ -37,29 +37,29 @@ test("round-trips pull, compare, and commit review routes", () => {
 
 test("selects the best Hunker view for common GitHub links", () => {
   expect(localLocationFromGitHubUrl("github.com/radarlabs/server")).toBe(
-    "/repo/radarlabs/server",
+    "/radarlabs/server",
   );
   expect(
     localLocationFromGitHubUrl(
       "https://github.com/radarlabs/server/blob/main/src/config.ts#L10",
     ),
-  ).toBe("/repo/radarlabs/server?file=src%2Fconfig.ts");
+  ).toBe("/radarlabs/server/blob/main/src/config.ts#L10");
   expect(
     localLocationFromGitHubUrl(
       "https://github.com/radarlabs/server/pull/7848/commits/abcdef1234567890",
     ),
-  ).toContain("tab=commits");
+  ).toBe("/radarlabs/server/pull/7848/commits/abcdef1234567890");
   expect(
     localLocationFromGitHubUrl(
       "https://github.com/radarlabs/server/pull/7848/commits/abcdef1234567890",
     ),
-  ).toContain("commit=abcdef1234567890");
+  ).toContain("/commits/abcdef1234567890");
   expect(
     localLocationFromGitHubUrl("https://example.com/radarlabs/server"),
   ).toBeUndefined();
 });
 
-test("round-trips a complete review configuration through the query string", () => {
+test("keeps display configuration out of canonical review URLs", () => {
   const options = {
     reviewScope: "full",
     viewMode: "unified",
@@ -78,11 +78,27 @@ test("round-trips a complete review configuration through the query string", () 
     options,
   );
 
-  expect(href).toBe(
-    "/example/hunker-demo/pull/42?scope=full&view=unified&whitespace=show&semantic=off&inline=off&syntax=off&sidebar=collapsed&reviews=hide&tab=commits&file=src%2Fmessage+with+spaces.ts&commit=abcdef1234567890",
-  );
+  expect(href).toBe("/example/hunker-demo/pull/42/commits/abcdef1234567890");
+});
+
+test("still reads legacy option-heavy review links", () => {
+  const options = {
+    reviewScope: "full",
+    viewMode: "unified",
+    ignoreWhitespace: false,
+    semantic: false,
+    inlineDiffMode: "off",
+    syntaxHighlighting: false,
+    sidebarCollapsed: true,
+    showGitHubReviews: false,
+    selectedPath: "src/message with spaces.ts",
+    reviewTab: "commits",
+    selectedCommit: "abcdef1234567890",
+  } as const;
   expect(
-    reviewOptionsFromSearch(new URL(href!, "http://hunker.local").search),
+    reviewOptionsFromSearch(
+      "?scope=full&view=unified&whitespace=show&semantic=off&inline=off&syntax=off&sidebar=collapsed&reviews=hide&tab=commits&file=src%2Fmessage+with+spaces.ts&commit=abcdef1234567890",
+    ),
   ).toEqual(options);
 });
 

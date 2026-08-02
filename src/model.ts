@@ -5,6 +5,7 @@ import { Popover } from "@foldkit/ui";
 
 import * as GitHubLocation from "./features/github-location";
 import * as Repository from "./page/repository";
+import * as Settings from "./page/settings";
 
 export const FileChange = S.Struct({
   path: S.String,
@@ -263,7 +264,7 @@ export const ReviewFailed = ts("Failed", { error: S.String });
 export const ReviewPhase = S.Union([ReviewReady, ReviewLoading, ReviewFailed]);
 
 export const Model = S.Struct({
-  page: S.Literals(["review", "repository"]),
+  page: S.Literals(["review", "repository", "settings"]),
   phase: ReviewPhase,
   githubLocation: GitHubLocation.Model,
   prUrl: S.String,
@@ -277,6 +278,8 @@ export const Model = S.Struct({
   selectedCommit: S.String,
   commitDiff: CommitDiff.schema,
   repositoryBrowser: Repository.Model,
+  settings: Settings.Model,
+  legacyReviewSettings: S.Boolean,
   diffOptionsPopover: Popover.Model,
   openReviewPopover: Popover.Model,
   toolbarCompact: S.Boolean,

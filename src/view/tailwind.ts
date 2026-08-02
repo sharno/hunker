@@ -3,11 +3,11 @@ import type { HtmlBuilder } from "foldkit/html";
 const utilities: Readonly<Record<string, string>> = {
   "app-shell": "min-h-screen bg-canvas review-grid",
   topbar:
-    "sticky top-0 z-20 grid min-h-[68px] grid-cols-[minmax(260px,1fr)_minmax(400px,680px)_minmax(220px,1fr)] items-center bg-ink px-7 py-3 text-white shadow-[0_6px_22px_rgb(16_27_44/16%)] max-[1040px]:grid-cols-[auto_minmax(340px,1fr)] max-[760px]:static max-[760px]:grid-cols-1 max-[760px]:gap-2.5 max-[760px]:px-4 max-[760px]:py-[13px]",
+    "sticky top-0 z-20 grid min-h-[68px] grid-cols-[minmax(260px,1fr)_minmax(400px,680px)_auto_minmax(160px,1fr)] items-center gap-3 bg-ink px-7 py-3 text-white shadow-[0_6px_22px_rgb(16_27_44/16%)] max-[1040px]:grid-cols-[auto_minmax(340px,1fr)_auto] max-[1040px]:[&_.shortcut-hint]:hidden max-[760px]:static max-[760px]:grid-cols-[1fr_auto] max-[760px]:gap-2.5 max-[760px]:px-4 max-[760px]:py-[13px] max-[760px]:[&_.pr-loader]:order-3 max-[760px]:[&_.pr-loader]:col-span-2",
   "compact-review-toolbar":
     "sticky top-0 z-30 flex h-[68px] items-center gap-3 border-b border-[#3b4659] bg-ink px-4 text-white shadow-[0_5px_18px_rgb(16_27_44/18%)] transition-[height] duration-150 [&.is-compact]:h-12 [&.is-expanded_.brand-mark]:size-[34px] [&.is-expanded_.brand-name]:text-xl [&.is-expanded_.toolbar-review-identity_>strong]:text-xs [&.is-expanded_.toolbar-review-identity_>span]:text-[10px] max-[760px]:gap-2 max-[760px]:px-2.5",
   "compact-brand":
-    "flex shrink-0 items-center gap-2 [&_.brand-mark]:size-7 [&_.brand-mark]:text-[12px] [&_.brand-name]:text-base max-[920px]:[&_.brand-name]:hidden",
+    "flex shrink-0 items-center gap-2 text-white no-underline [&_.brand-mark]:size-7 [&_.brand-mark]:text-[12px] [&_.brand-name]:text-base max-[920px]:[&_.brand-name]:hidden",
   "toolbar-review-identity":
     "flex min-w-0 flex-1 flex-col text-white no-underline [&_strong]:overflow-hidden [&_strong]:text-[10px] [&_strong]:text-ellipsis [&_strong]:whitespace-nowrap [&_span]:overflow-hidden [&_span]:text-[9px] [&_span]:text-[#aeb6be] [&_span]:text-ellipsis [&_span]:whitespace-nowrap max-[1080px]:max-w-[180px] max-[1080px]:[&_span]:hidden max-[680px]:hidden",
   "toolbar-primary-controls":
@@ -34,6 +34,10 @@ const utilities: Readonly<Record<string, string>> = {
   "toolbar-refresh":
     "flex h-8 cursor-pointer items-center gap-1.5 rounded-[5px] border border-[#4a5669] bg-[#273348] px-2.5 text-[10px] font-[680] text-[#d8dde4] hover:border-[#69768b] disabled:cursor-wait disabled:opacity-65 max-[900px]:px-2 max-[900px]:[&_.toolbar-refresh-label]:hidden",
   "toolbar-refresh-label": "whitespace-nowrap",
+  "toolbar-settings-link":
+    "grid size-8 shrink-0 place-items-center rounded-[5px] border border-[#4a5669] bg-[#273348] text-sm text-[#d8dde4] no-underline hover:border-[#69768b]",
+  "topbar-settings-link":
+    "rounded-md border border-[#4a5669] px-3 py-2 text-[10px] font-[680] text-[#d8dde4] no-underline hover:border-[#69768b]",
   brand: "flex min-w-0 items-center gap-[9px]",
   "brand-mark":
     "grid size-[30px] -rotate-3 place-items-center rounded-[7px_2px_7px_2px] bg-lime font-black text-ink",
@@ -130,7 +134,7 @@ const utilities: Readonly<Record<string, string>> = {
     "cursor-pointer rounded-md border border-[#c9cbc4] bg-white px-2.5 py-1.5 text-[10px] font-[680] text-[#3f5060]",
   "repository-shell": "min-h-screen bg-canvas",
   "repository-toolbar":
-    "sticky top-0 z-30 grid min-h-14 grid-cols-[auto_auto_auto_minmax(220px,440px)_minmax(240px,1fr)_auto] items-center gap-3 border-b border-[#3b4659] bg-ink px-4 py-2 text-white shadow-[0_5px_18px_rgb(16_27_44/18%)] [&>.compact-brand]:text-white [&>.compact-brand]:no-underline max-[1100px]:grid-cols-[auto_auto_minmax(220px,1fr)_minmax(240px,1fr)_auto] max-[1100px]:[&_.repository-identity]:hidden max-[760px]:grid-cols-[auto_auto_1fr] max-[760px]:gap-2",
+    "sticky top-0 z-30 grid min-h-14 grid-cols-[auto_auto_auto_minmax(220px,440px)_minmax(240px,1fr)_auto_auto] items-center gap-3 border-b border-[#3b4659] bg-ink px-4 py-2 text-white shadow-[0_5px_18px_rgb(16_27_44/18%)] [&>.compact-brand]:text-white [&>.compact-brand]:no-underline max-[1100px]:grid-cols-[auto_auto_minmax(220px,1fr)_minmax(240px,1fr)_auto_auto] max-[1100px]:[&_.repository-identity]:hidden max-[760px]:grid-cols-[auto_auto_1fr] max-[760px]:gap-2",
   "repository-identity":
     "flex min-w-0 flex-col [&>span]:text-[8px] [&>span]:tracking-[0.08em] [&>span]:text-[#9da7b4] [&>span]:uppercase [&>strong]:overflow-hidden [&>strong]:text-xs [&>strong]:text-ellipsis [&>strong]:whitespace-nowrap",
   "repository-search":
@@ -164,6 +168,36 @@ const utilities: Readonly<Record<string, string>> = {
     "mt-4 flex flex-wrap justify-center gap-2 [&_button]:min-h-9 [&_button]:cursor-pointer [&_button]:rounded-md [&_button]:border [&_button]:border-[#aeb89a] [&_button]:bg-paper [&_button]:px-4 [&_button]:text-[11px] [&_button]:font-[700] [&_button]:text-ink [&_button:first-child]:bg-lime [&_button:disabled]:cursor-wait [&_button:disabled]:opacity-60",
   "repository-clone-error":
     "mt-3 rounded-md border border-[#e9aea3] bg-[#fff0ed] px-3 py-2 text-[10px] text-[#73251d]",
+  "settings-shell": "min-h-screen bg-canvas pb-14",
+  "settings-toolbar":
+    "sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-[#3b4659] bg-ink px-5 text-white shadow-[0_5px_18px_rgb(16_27_44/18%)] [&>.compact-brand]:mr-auto [&>span]:text-[10px] [&>span]:tracking-[0.08em] [&>span]:text-[#9da7b4] [&>span]:uppercase [&>a:last-child]:rounded-md [&>a:last-child]:border [&>a:last-child]:border-[#4a5669] [&>a:last-child]:px-3 [&>a:last-child]:py-2 [&>a:last-child]:text-[10px] [&>a:last-child]:font-[700] [&>a:last-child]:text-white [&>a:last-child]:no-underline",
+  "settings-heading":
+    "mx-auto w-[min(920px,calc(100%-32px))] pt-10 pb-6 [&>span]:font-mono [&>span]:text-[9px] [&>span]:font-[800] [&>span]:tracking-[0.1em] [&>span]:text-[#748047] [&_h1]:my-2 [&_h1]:text-4xl [&_h1]:tracking-[-0.04em] [&_p]:m-0 [&_p]:max-w-[620px] [&_p]:text-xs [&_p]:leading-6 [&_p]:text-muted",
+  "settings-state":
+    "mx-auto w-[min(920px,calc(100%-32px))] rounded-xl border border-line bg-paper px-5 py-8 text-sm shadow-[0_7px_24px_rgb(16_27_44/7%)] [&.is-error]:border-[#edcbc5] [&.is-error]:bg-[#fff0ed] [&>span]:mt-1 [&>span]:block [&>span]:text-[10px]",
+  "settings-form": "mx-auto grid w-[min(920px,calc(100%-32px))] gap-4",
+  "settings-section":
+    "overflow-hidden rounded-xl border border-line bg-paper px-6 py-5 shadow-[0_7px_24px_rgb(16_27_44/7%)] max-[620px]:px-4",
+  "settings-section-heading":
+    "mb-5 grid grid-cols-[34px_minmax(0,1fr)] gap-3 border-b border-line pb-4 [&>span]:grid [&>span]:size-8 [&>span]:place-items-center [&>span]:rounded-lg [&>span]:bg-lime [&>span]:font-mono [&>span]:text-[9px] [&>span]:font-[850] [&_h2]:m-0 [&_h2]:text-lg [&_p]:mt-1 [&_p]:mb-0 [&_p]:text-[10px] [&_p]:leading-5 [&_p]:text-muted",
+  "settings-field":
+    "mb-4 grid gap-1.5 [&>span]:text-[10px] [&>span]:font-[750] [&>input]:h-10 [&>input]:rounded-md [&>input]:border [&>input]:border-[#cfd0ca] [&>input]:bg-[#faf9f5] [&>input]:px-3 [&>input]:font-mono [&>input]:text-[11px] [&>input]:outline-none [&>input]:focus:border-[#9bbb2f] [&>small]:text-[9px] [&>small]:text-muted",
+  "settings-choice-row":
+    "flex items-center justify-between gap-4 border-b border-line py-3 last:border-b-0 max-[620px]:items-start max-[620px]:flex-col [&>span]:text-[11px] [&>span]:font-[720]",
+  "settings-choices": "flex flex-wrap rounded-lg bg-[#e8e8e2] p-1",
+  "settings-choice":
+    "cursor-pointer rounded-md border-0 bg-transparent px-3 py-2 text-[10px] font-[680] text-[#686e68] [&.is-active]:bg-white [&.is-active]:text-ink [&.is-active]:shadow-[0_1px_4px_rgb(16_27_44/15%)]",
+  "settings-toggle-grid": "mt-4 grid grid-cols-2 gap-2 max-[680px]:grid-cols-1",
+  "settings-toggle":
+    "flex cursor-pointer items-center justify-between gap-4 rounded-lg border border-line bg-[#f7f6f1] px-3 py-3 text-left [&>span:first-child]:flex [&>span:first-child]:flex-col [&_strong]:text-[10px] [&_small]:mt-1 [&_small]:text-[9px] [&_small]:font-normal [&_small]:text-muted [&.is-active]:border-[#b7c681] [&.is-active]:bg-[#f6f9ea]",
+  "settings-switch":
+    "relative h-5 w-9 shrink-0 rounded-full bg-[#c6c9c3] p-0.5 transition-colors [.is-active_&]:bg-[#9bbb2f] [&>i]:block [&>i]:size-4 [&>i]:rounded-full [&>i]:bg-white [&>i]:shadow-sm [&>i]:transition-transform [.is-active_&>i]:translate-x-4",
+  "settings-footer":
+    "sticky bottom-4 z-20 flex items-center gap-3 rounded-xl border border-[#c7c9c1] bg-[rgb(251_250_246/96%)] px-4 py-3 shadow-[0_10px_35px_rgb(16_27_44/15%)] backdrop-blur max-[620px]:flex-wrap [&>div]:mr-auto [&>div]:flex [&>div]:min-w-0 [&>div]:flex-col [&>div>span]:text-[9px] [&>div>span]:text-muted [&>div>code]:overflow-hidden [&>div>code]:max-w-[480px] [&>div>code]:font-mono [&>div>code]:text-[9px] [&>div>code]:text-ellipsis [&>div>code]:whitespace-nowrap",
+  "settings-save":
+    "min-h-9 cursor-pointer rounded-md border-0 bg-lime px-4 text-[11px] font-[780] text-ink disabled:cursor-wait disabled:opacity-60",
+  "settings-save-status":
+    "text-[10px] font-[700] text-[#557020] [&.is-error]:max-w-[280px] [&.is-error]:text-[#9d3f34]",
   "repository-results-state":
     "mx-5 mt-5 flex flex-col gap-1 rounded-lg border border-line bg-paper px-4 py-5 [&>strong]:text-xs [&>span]:text-[10px] [&>span]:text-muted [&.is-error]:border-[#edcbc5] [&.is-error]:bg-[#fff0ed]",
   "repository-search-results":

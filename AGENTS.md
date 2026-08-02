@@ -22,6 +22,12 @@
 - Foldkit Message bindings must exactly match their `m()` tags, and Command
   bindings must exactly match their `Command.define` names. Treat these names as
   stable DevTools identities rather than local aliases.
+- Update nested Foldkit records with a nested `evo`; spreading a nested record
+  inside a parent `evo` updater escapes the strict Model update path and is
+  rejected by the Foldkit Oxlint rule.
+- Use Foldkit `restString` for canonical URL resources that own a
+  slash-delimited path, and order more-specific routes before their parent route
+  in `oneOf`.
 - When Submodel `viewInputs` need parent-owned interactive markup, pass a
   top-level slot callback that builds the `Html`. Do not pass already-rendered
   `Html` containing nested event functions; Foldkit can only auto-scope

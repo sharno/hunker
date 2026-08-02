@@ -2,6 +2,7 @@ export {
   localRepositoryUrl,
   load,
   repositoryOptionsFromSearch,
+  repositoryOptionsFromRoute,
   repositoryRouteFromPathname,
   update,
 } from "./update";

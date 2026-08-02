@@ -25,6 +25,7 @@ import {
   GotDiffOptionsPopoverMessage,
   GotOpenReviewPopoverMessage,
   GotRepositoryMessage,
+  GotSettingsMessage,
   ToggledWhitespace,
 } from "../domain";
 import type {
@@ -36,8 +37,9 @@ import type {
   SemanticResult,
 } from "../domain";
 import { toDiffLines, toFullDiffLines } from "../diff";
-import { homeRouter } from "../app-route";
+import { homeRouter, settingsRouter } from "../app-route";
 import * as Repository from "../page/repository";
+import * as Settings from "../page/settings";
 import { isPullRequestUrl } from "../review-route";
 import { splitDiffView, unifiedDiffView } from "./diff-view";
 import type { MovedRanges } from "./diff-view";
@@ -423,8 +425,8 @@ const compactReviewToolbar = (model: Model, h: HtmlBuilder<Message>): Html => {
       ),
     ],
     [
-      h.div(
-        [h.Class("compact-brand")],
+      h.a(
+        [h.Class("compact-brand"), h.Href(homeRouter())],
         [
           h.span([h.Class("brand-mark")], ["H"]),
           h.span([h.Class("brand-name")], ["hunker"]),
@@ -484,6 +486,15 @@ const compactReviewToolbar = (model: Model, h: HtmlBuilder<Message>): Html => {
                 ],
               ),
           openReviewPopoverView(model, h),
+          h.a(
+            [
+              h.Class("toolbar-settings-link"),
+              h.Href(settingsRouter()),
+              h.Title("Hunker settings"),
+              h.AriaLabel("Hunker settings"),
+            ],
+            ["⚙"],
+          ),
           button(
             h,
             [
@@ -537,6 +548,10 @@ const topBarView = (model: Model, h: HtmlBuilder<Message>): Html =>
             ],
           ),
           githubLocationForm(model, "pr-loader", h),
+          h.a(
+            [h.Class("topbar-settings-link"), h.Href(settingsRouter())],
+            ["Settings"],
+          ),
           h.div(
             [h.Class("shortcut-hint")],
             [h.kbd([], ["⌘"]), h.kbd([], ["K"]), " Quick open"],
@@ -1360,6 +1375,15 @@ const diffPanelView = (
 };
 
 export const view = (model: Model, h: HtmlBuilder<Message>): Html => {
+  if (model.page === "settings") {
+    return h.submodel({
+      slotId: "settings",
+      model: model.settings,
+      view: Settings.view,
+      viewInputs: { homeHref: homeRouter() },
+      toParentMessage: (message) => GotSettingsMessage({ message }),
+    });
+  }
   if (model.page === "repository") {
     return h.submodel({
       slotId: "repository",
@@ -1367,6 +1391,7 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Html => {
       view: Repository.view,
       viewInputs: {
         homeHref: homeRouter(),
+        settingsHref: settingsRouter(),
         renderLocationForm: () =>
           githubLocationForm(model, "repository-github-loader", h),
       },

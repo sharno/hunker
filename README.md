@@ -18,6 +18,7 @@ The stack is Effect end to end:
   state machine and route orchestration
 - `src/page/repository/` — self-contained Foldkit Submodel with its own model,
   messages, commands, update, view, namespace, and story tests
+- `src/page/settings/` — server-backed settings Submodel and settings page
 - `src/features/github-location/` — reusable GitHub-location Submodel
 - `src/features/commits.ts` — commit-list and commit-diff commands
 - `src/features/revision.ts` — local PR freshness command and two-minute
@@ -45,6 +46,7 @@ The stack is Effect end to end:
   fallback
 - `backend/local-repository.ts` — scoped local clone discovery, FFF indexes, and
   file reads
+- `backend/settings.ts` — Effect-validated, atomically persisted local settings
 - `backend/ast-grep-analysis.ts` — parser selection, AST units, and structural
   fingerprints
 - `backend/semantic-engine.ts` — Effect service, semantic matching, and
@@ -72,14 +74,22 @@ bun run dev
 Open [http://localhost:5173](http://localhost:5173). The API runs on port `8787`
 and Vite proxies `/api` to it.
 
-Loading a review replaces the local address with a shareable route such as
-`http://localhost:5173/radarlabs/server/pull/7848`. Opening that route in
-another tab or reloading it fetches the review automatically. The query string
-records the selected file, full/file scope, layout, whitespace, semantic,
-inline-diff, syntax-highlighting, review, sidebar, active tab, and selected
-commit settings, so copying the address restores the same review view. Use the
-Refresh button in the review toolbar to discard cached semantic results and load
-the latest diff without losing those settings.
+Hunker deliberately mirrors the useful parts of GitHub's URL structure. Replace
+`github.com` with the Hunker host to open repository, blob, repository-commit,
+pull-request, PR-files, PR-commits, compare, and commit links. Hunker canonical
+paths include `/owner/repository`, `/owner/repository/commits`,
+`/owner/repository/blob/ref/path`, and
+`/owner/repository/pull/number/files/path`. PR comment fragments such as
+`#discussion_r123` are preserved and target the matching inline thread.
+
+URLs describe location, not personal display preferences. The selected PR file,
+PR commit, repository file, or repository commits list is encoded in the path,
+so copying, refreshing, and opening another tab returns to the same content.
+Review scope, layout, whitespace, semantic analysis, inline diff mode, syntax
+highlighting, sidebar state, and GitHub review visibility are saved on the local
+server. Old option-heavy Hunker query strings remain readable and canonicalize
+to the clean route after loading. Use Refresh to discard cached analysis and
+load the latest diff without changing the location.
 
 The Commits tab loads the PR commit timeline. Selecting a commit reuses the same
 diff workspace and controls for that commit's parent-to-commit change, and the
@@ -114,9 +124,9 @@ alignment, handles multi-line replacements, and composes with the whitespace
 setting. Results are cached by file contents and never expose temporary paths to
 the browser.
 
-GitHub review threads can be shown or hidden inline, and that choice is recorded
-in the review URL. Hunker can reply to an existing thread and submit Comment,
-Approve, or Request changes reviews through the same server-side GitHub
+GitHub review threads can be shown or hidden inline, and that choice is saved as
+a local review preference. Hunker can reply to an existing thread and submit
+Comment, Approve, or Request changes reviews through the same server-side GitHub
 credential used for private repositories. GitHub tokens need pull-request write
 permission for replies and review submission. Individual threads are
 collapsible; resolved GitHub threads are labeled and start collapsed so
@@ -126,10 +136,14 @@ text instead of being injected.
 
 The top bar accepts repository, pull request, compare, commit, PR-commit, and
 blob URLs and opens the most specific Hunker view. The repository name links to
-a local repository browser at `/repo/:owner/:repository`. By default Hunker
-resolves clones below `~/src`, including both `~/src/repository` and
-`~/src/owner/repository` layouts. Set `HUNKER_REPOS_ROOT` before starting the
-API to use another root:
+a local repository browser at `/:owner/:repository`. By default Hunker resolves
+clones below `~/src`, including both `~/src/repository` and
+`~/src/owner/repository` layouts. Open `/settings` to change that root, the
+temporary clone root, and all review defaults. Settings are validated with
+Effect Schema and saved atomically to `~/.config/hunker/settings.json`, so they
+follow the local Hunker server across browsers. Set `HUNKER_CONFIG_FILE` to use
+another settings document. `HUNKER_REPOS_ROOT` and `HUNKER_CACHE_ROOT` supply
+defaults when no settings file exists:
 
 ```bash
 HUNKER_REPOS_ROOT=/path/to/clones bun run dev
@@ -138,17 +152,17 @@ HUNKER_REPOS_ROOT=/path/to/clones bun run dev
 Repository search is entirely local. FFF maintains a native fuzzy index for
 filename ranking and content matches; Hunker adds surrounding source lines and
 opens matched files with the same safe syntax highlighter used by diffs. Search
-queries, selected files, and the Files/Commits view are stored in the repository
-URL. The Commits view reads up to 100 commits from the local checkout's `HEAD`
-and links each immutable OID to Hunker's existing commit-diff view. The API
-validates repository and file paths against the configured root before reading
-them. When a repository is unavailable, the browser offers to clone it either
-below the configured repos root or into `/tmp/hunker/repositories`. Set
-`HUNKER_CACHE_ROOT` to move temporary Hunker clones elsewhere. Cloning uses the
-local `gh` authentication, including access to private repositories. New clones
-start with only the default branch tip and use Git's partial-clone support;
-missing immutable objects are fetched on demand, while the commits view deepens
-the PR history progressively.
+queries remain in the query string, while selected files and the Files/Commits
+view use GitHub-shaped paths. The Commits view reads up to 100 commits from the
+local checkout's `HEAD` and links each immutable OID to Hunker's existing
+commit-diff view. The API validates repository and file paths against the
+configured root before reading them. When a repository is unavailable, the
+browser offers to clone it either below the configured repos root or into
+`/tmp/hunker/repositories`. Set `HUNKER_CACHE_ROOT` to move temporary Hunker
+clones elsewhere. Cloning uses the local `gh` authentication, including access
+to private repositories. New clones start with only the default branch tip and
+use Git's partial-clone support; missing immutable objects are fetched on
+demand, while the commits view deepens the PR history progressively.
 
 After a checkout or cache clone exists, Hunker automatically uses its Git object
 database for PR and commit diffs, file revisions, and commit logs. Each loaded

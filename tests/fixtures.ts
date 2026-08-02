@@ -2,6 +2,22 @@ import type { CharacterDiffResult, SemanticResult } from "../src/domain";
 
 export const reviewUrl = "https://github.com/example/hunker-demo/pull/42";
 
+export const settingsResponse = {
+  settings: {
+    repositoriesRoot: "~/src",
+    cacheRoot: "/tmp/hunker/repositories",
+    reviewScope: "file",
+    viewMode: "split",
+    ignoreWhitespace: true,
+    semantic: true,
+    inlineDiffMode: "token",
+    syntaxHighlighting: true,
+    sidebarCollapsed: false,
+    showGitHubReviews: true,
+  },
+  configPath: "/tmp/hunker-test-settings.json",
+} as const;
+
 export const reviewResponse = {
   title: "Use a template literal for greetings",
   repository: "example/hunker-demo",

@@ -1,14 +1,28 @@
-import { Array as EffectArray, Match as M, Option } from "effect";
+import { Match as M, Option } from "effect";
 
 import {
+  PullRoute,
+  commitRouter,
   locationToAppRoute,
+  pullCommitRouter,
+  pullCommitsRouter,
+  pullFileRouter,
+  pullFilesRouter,
+  repositoryCommitsRouter,
+  repositoryFileRouter,
   repositoryRouter,
   reviewRouteToGitHubUrl,
   reviewRouteToLocalPath,
 } from "./app-route";
-import type { CommitRoute, CompareRoute, PullRoute } from "./app-route";
+import type {
+  AppRoute,
+  CommitRoute as CommitRouteType,
+  CompareRoute,
+  PullRoute as PullRouteType,
+} from "./app-route";
+import type { HunkerSettings } from "./settings";
 
-export type ReviewRoute = PullRoute | CompareRoute | CommitRoute;
+export type ReviewRoute = PullRouteType | CompareRoute | CommitRouteType;
 
 export type ReviewOptions = Readonly<{
   reviewScope: "file" | "full";
@@ -38,28 +52,55 @@ export const defaultReviewOptions: ReviewOptions = {
   selectedCommit: "",
 };
 
-const decodeSegment = (segment: string) =>
-  Option.getOrElse(
-    Option.liftThrowable(decodeURIComponent)(segment),
-    () => segment,
+export const reviewOptionsFromSettings = (
+  settings: HunkerSettings,
+): ReviewOptions => ({
+  reviewScope: settings.reviewScope,
+  viewMode: settings.viewMode,
+  ignoreWhitespace: settings.ignoreWhitespace,
+  semantic: settings.semantic,
+  inlineDiffMode: settings.inlineDiffMode,
+  syntaxHighlighting: settings.syntaxHighlighting,
+  sidebarCollapsed: settings.sidebarCollapsed,
+  showGitHubReviews: settings.showGitHubReviews,
+  selectedPath: "",
+  reviewTab: "files",
+  selectedCommit: "",
+});
+
+const pullBase = (route: {
+  readonly owner: string;
+  readonly repository: string;
+  readonly number: number;
+}) =>
+  PullRoute({
+    owner: route.owner,
+    repository: route.repository,
+    number: route.number,
+  });
+
+export const reviewRouteFromAppRoute = (
+  route: AppRoute,
+): ReviewRoute | undefined =>
+  M.value(route).pipe(
+    M.withReturnType<ReviewRoute | undefined>(),
+    M.tags({
+      Pull: (value) => value,
+      PullFiles: pullBase,
+      PullFile: pullBase,
+      PullCommits: pullBase,
+      PullCommit: pullBase,
+      Compare: (value) => (value.range.length > 2 ? value : undefined),
+      Commit: (value) =>
+        /^[0-9a-f]{7,64}$/i.test(value.sha) ? value : undefined,
+    }),
+    M.orElse(() => undefined),
   );
 
 export const reviewRouteFromPathname = (
   pathname: string,
-): ReviewRoute | undefined => {
-  const appRoute = locationToAppRoute(pathname);
-  return M.value(appRoute).pipe(
-    M.withReturnType<ReviewRoute | undefined>(),
-    M.tags({
-      Pull: (pullRoute) => pullRoute,
-      Compare: (compareRoute) =>
-        compareRoute.range.length > 2 ? compareRoute : undefined,
-      Commit: (commitRoute) =>
-        /^[0-9a-f]{7,64}$/i.test(commitRoute.sha) ? commitRoute : undefined,
-    }),
-    M.orElse(() => undefined),
-  );
-};
+): ReviewRoute | undefined =>
+  reviewRouteFromAppRoute(locationToAppRoute(pathname));
 
 export const githubUrlFromPathname = (pathname: string) => {
   const route = reviewRouteFromPathname(pathname);
@@ -93,6 +134,14 @@ const normalizedGitHubUrl = (input: string) => {
   return trimmed;
 };
 
+const decodeSegment = (segment: string) =>
+  Option.getOrElse(
+    Option.liftThrowable(decodeURIComponent)(segment),
+    () => segment,
+  );
+
+const withHash = (path: string, hash: string) => `${path}${hash}`;
+
 export const localLocationFromGitHubUrl = (
   input: string,
   options: ReviewOptions = defaultReviewOptions,
@@ -102,8 +151,7 @@ export const localLocationFromGitHubUrl = (
       normalizedGitHubUrl(input),
     ),
   );
-  if (url === undefined) return undefined;
-  if (url.hostname !== "github.com") return undefined;
+  if (url === undefined || url.hostname !== "github.com") return undefined;
   const [owner, repository, resource, identifier, ...remaining] = url.pathname
     .split("/")
     .filter(Boolean)
@@ -115,24 +163,34 @@ export const localLocationFromGitHubUrl = (
     identifier !== undefined &&
     /^\d+$/.test(identifier)
   ) {
-    const commitIndex = remaining.indexOf("commits");
-    const selectedCommit =
-      commitIndex >= 0 ? (remaining[commitIndex + 1] ?? "") : "";
-    return localReviewUrl(
-      `https://github.com/${owner}/${repository}/pull/${identifier}`,
-      selectedCommit === ""
-        ? { ...options, selectedCommit: "" }
-        : { ...options, reviewTab: "commits", selectedCommit },
-    );
+    const number = Number(identifier);
+    const [section, detail] = remaining;
+    const path =
+      section === "commits" &&
+      detail !== undefined &&
+      /^[0-9a-f]{7,64}$/i.test(detail)
+        ? pullCommitRouter({ owner, repository, number, sha: detail })
+        : section === "commits"
+          ? pullCommitsRouter({ owner, repository, number })
+          : section === "files"
+            ? pullFilesRouter({ owner, repository, number })
+            : localReviewUrl(
+                `https://github.com/${owner}/${repository}/pull/${number}`,
+                options,
+              );
+    return path === undefined ? undefined : withHash(path, url.hash);
   }
   if (
     resource === "compare" &&
     identifier !== undefined &&
     identifier.length > 2
   ) {
-    return localReviewUrl(
-      `https://github.com/${owner}/${repository}/compare/${identifier}`,
-      options,
+    return withHash(
+      localReviewUrl(
+        `https://github.com/${owner}/${repository}/compare/${identifier}`,
+        options,
+      ) ?? "",
+      url.hash,
     );
   }
   if (
@@ -140,22 +198,26 @@ export const localLocationFromGitHubUrl = (
     identifier !== undefined &&
     /^[0-9a-f]{7,64}$/i.test(identifier)
   ) {
-    return localReviewUrl(
-      `https://github.com/${owner}/${repository}/commit/${identifier}`,
-      options,
+    return withHash(
+      commitRouter({ owner, repository, sha: identifier }),
+      url.hash,
     );
   }
-  const selectedFile =
-    resource === "blob" && identifier !== undefined
-      ? EffectArray.match(remaining, {
-          onEmpty: () => "",
-          onNonEmpty: (segments) => segments.join("/"),
-        })
-      : "";
-  const repositoryPath = repositoryRouter({ owner, repository });
-  return `${repositoryPath}${
-    selectedFile === "" ? "" : `?file=${encodeURIComponent(selectedFile)}`
-  }`;
+  if (resource === "commits") {
+    return withHash(repositoryCommitsRouter({ owner, repository }), url.hash);
+  }
+  if (resource === "blob" && identifier !== undefined && remaining.length > 0) {
+    return withHash(
+      repositoryFileRouter({
+        owner,
+        repository,
+        ref: identifier,
+        path: remaining.join("/"),
+      }),
+      url.hash,
+    );
+  }
+  return withHash(repositoryRouter({ owner, repository }), url.hash);
 };
 
 const optionBoolean = (
@@ -166,7 +228,29 @@ const optionBoolean = (
 ) =>
   value === enabledValue ? true : value === disabledValue ? false : fallback;
 
-export const reviewOptionsFromSearch = (search: string): ReviewOptions => {
+const legacyReviewSettingKeys = [
+  "scope",
+  "view",
+  "whitespace",
+  "semantic",
+  "inline",
+  "characters",
+  "syntax",
+  "sidebar",
+  "reviews",
+] as const;
+
+export const hasLegacyReviewSettings = (search: string): boolean => {
+  const params = new URLSearchParams(search);
+  return legacyReviewSettingKeys.some((key) => params.has(key));
+};
+
+// Query parsing remains for compatibility with old shared Hunker links. New
+// links encode only review location in their pathname.
+export const reviewOptionsFromSearch = (
+  search: string,
+  defaults: ReviewOptions = defaultReviewOptions,
+): ReviewOptions => {
   const params = new URLSearchParams(search);
   const scope = params.get("scope");
   const view = params.get("view");
@@ -180,54 +264,121 @@ export const reviewOptionsFromSearch = (search: string): ReviewOptions => {
         ? "character"
         : legacyCharacters === "off"
           ? "off"
-          : "token";
+          : defaults.inlineDiffMode;
   return {
-    reviewScope: scope === "full" || scope === "file" ? scope : "file",
-    viewMode: view === "unified" || view === "split" ? view : "split",
+    reviewScope:
+      scope === "full" || scope === "file" ? scope : defaults.reviewScope,
+    viewMode: view === "unified" || view === "split" ? view : defaults.viewMode,
     ignoreWhitespace: optionBoolean(
       params.get("whitespace"),
       "ignore",
       "show",
-      true,
+      defaults.ignoreWhitespace,
     ),
-    semantic: optionBoolean(params.get("semantic"), "on", "off", true),
+    semantic: optionBoolean(
+      params.get("semantic"),
+      "on",
+      "off",
+      defaults.semantic,
+    ),
     inlineDiffMode,
-    syntaxHighlighting: optionBoolean(params.get("syntax"), "on", "off", true),
+    syntaxHighlighting: optionBoolean(
+      params.get("syntax"),
+      "on",
+      "off",
+      defaults.syntaxHighlighting,
+    ),
     sidebarCollapsed: optionBoolean(
       params.get("sidebar"),
       "collapsed",
       "expanded",
-      false,
+      defaults.sidebarCollapsed,
     ),
     showGitHubReviews: optionBoolean(
       params.get("reviews"),
       "show",
       "hide",
-      true,
+      defaults.showGitHubReviews,
     ),
-    selectedPath: params.get("file") ?? "",
-    reviewTab: tab === "commits" ? "commits" : "files",
-    selectedCommit: params.get("commit") ?? "",
+    selectedPath: params.get("file") ?? defaults.selectedPath,
+    reviewTab:
+      tab === "commits"
+        ? "commits"
+        : tab === "files"
+          ? "files"
+          : defaults.reviewTab,
+    selectedCommit: params.get("commit") ?? defaults.selectedCommit,
   };
 };
 
+export const reviewOptionsFromRoute = (
+  route: AppRoute,
+  search: string,
+  defaults: ReviewOptions = defaultReviewOptions,
+): ReviewOptions => {
+  const legacy = reviewOptionsFromSearch(search, defaults);
+  return M.value(route).pipe(
+    M.withReturnType<ReviewOptions>(),
+    M.tags({
+      Pull: () => legacy,
+      PullFiles: () => ({
+        ...legacy,
+        reviewTab: "files",
+        selectedCommit: "",
+      }),
+      PullFile: ({ path }) => ({
+        ...legacy,
+        reviewTab: "files",
+        selectedPath: path,
+        selectedCommit: "",
+      }),
+      PullCommits: () => ({
+        ...legacy,
+        reviewTab: "commits",
+        selectedPath: "",
+        selectedCommit: "",
+      }),
+      PullCommit: ({ sha }) => ({
+        ...legacy,
+        reviewTab: "commits",
+        selectedPath: "",
+        selectedCommit: sha,
+      }),
+    }),
+    M.orElse(() => legacy),
+  );
+};
+
 export const localReviewUrl = (githubUrl: string, options: ReviewOptions) => {
-  const path = localPathFromGitHubUrl(githubUrl);
-  if (path === undefined) return undefined;
-  const params = new URLSearchParams({
-    scope: options.reviewScope,
-    view: options.viewMode,
-    whitespace: options.ignoreWhitespace ? "ignore" : "show",
-    semantic: options.semantic ? "on" : "off",
-    inline: options.inlineDiffMode,
-    syntax: options.syntaxHighlighting ? "on" : "off",
-    sidebar: options.sidebarCollapsed ? "collapsed" : "expanded",
-    reviews: options.showGitHubReviews ? "show" : "hide",
-    tab: options.reviewTab,
-  });
-  if (options.selectedPath !== "") params.set("file", options.selectedPath);
-  if (options.reviewTab === "commits" && options.selectedCommit !== "") {
-    params.set("commit", options.selectedCommit);
-  }
-  return `${path}?${params.toString()}`;
+  const route = Option.getOrUndefined(
+    Option.liftThrowable((value: string) => new URL(value))(githubUrl).pipe(
+      Option.flatMapNullishOr((url) => reviewRouteFromPathname(url.pathname)),
+    ),
+  );
+  if (route === undefined) return undefined;
+  return M.value(route).pipe(
+    M.withReturnType<string>(),
+    M.tagsExhaustive({
+      Pull: ({ owner, repository, number }) =>
+        options.reviewTab === "commits"
+          ? options.selectedCommit === ""
+            ? pullCommitsRouter({ owner, repository, number })
+            : pullCommitRouter({
+                owner,
+                repository,
+                number,
+                sha: options.selectedCommit,
+              })
+          : options.selectedPath === ""
+            ? pullFilesRouter({ owner, repository, number })
+            : pullFileRouter({
+                owner,
+                repository,
+                number,
+                path: options.selectedPath,
+              }),
+      Compare: (value) => reviewRouteToLocalPath(value),
+      Commit: (value) => reviewRouteToLocalPath(value),
+    }),
+  );
 };
