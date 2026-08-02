@@ -42,9 +42,27 @@ export const FileContent = AsyncData.Schema(FileData, S.String);
 
 export const Clone = AsyncData.Schema(S.Struct({ path: S.String }), S.String);
 
+export const Commit = S.Struct({
+  sha: S.String,
+  parents: S.Array(S.String),
+  authorName: S.String,
+  authorEmail: S.String,
+  authoredAt: S.String,
+  subject: S.String,
+});
+export type Commit = typeof Commit.Type;
+
+export const CommitsData = S.Struct({
+  ref: S.String,
+  shallow: S.Boolean,
+  commits: S.Array(Commit),
+});
+export const Commits = AsyncData.Schema(CommitsData, S.String);
+
 export const Model = S.Struct({
   owner: S.String,
   name: S.String,
+  tab: S.Literals(["files", "commits"]),
   query: S.String,
   selectedPath: S.String,
   collapsedFolders: S.Array(S.String),
@@ -52,6 +70,7 @@ export const Model = S.Struct({
   search: Search.schema,
   file: FileContent.schema,
   clone: Clone.schema,
+  commits: Commits.schema,
 });
 export type Model = typeof Model.Type;
 
@@ -59,6 +78,7 @@ export const empty = (): Model =>
   Model.make({
     owner: "",
     name: "",
+    tab: "files",
     query: "",
     selectedPath: "",
     collapsedFolders: [],
@@ -66,4 +86,5 @@ export const empty = (): Model =>
     search: Search.Idle(),
     file: FileContent.Idle(),
     clone: Clone.Idle(),
+    commits: Commits.Idle(),
   });

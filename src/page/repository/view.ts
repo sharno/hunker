@@ -9,17 +9,20 @@ import {
   ClickedCloneRepository,
   type Message,
   SelectedRepositoryFile,
+  SelectedRepositoryTab,
   SubmittedRepositorySearch,
   ToggledRepositoryFolder,
   UpdatedRepositoryQuery,
 } from "./message";
 import type {
+  Commit,
   File as RepositoryFile,
   Model,
   SearchMatch as RepositorySearchMatch,
 } from "./model";
 import { syntaxHighlightedContent } from "../../view/syntax-highlight";
 import { fileTreeView } from "../../view/file-tree-view";
+import { commitRouter } from "../../app-route";
 
 export type ViewInputs = Readonly<{
   homeHref: string;
@@ -32,6 +35,123 @@ const formatSize = (bytes: number) =>
     : bytes < 1_048_576
       ? `${Math.round(bytes / 1_024)} KB`
       : `${(bytes / 1_048_576).toFixed(1)} MB`;
+
+const authoredDate = (value: string) => {
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf())
+    ? value
+    : new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(date);
+};
+
+const repositoryCommitRow = (
+  model: Model,
+  commit: Commit,
+  h: HtmlBuilder<Message>,
+): Html =>
+  h.a(
+    [
+      h.Key(commit.sha),
+      h.Class("commit-row repository-commit-row"),
+      h.Href(
+        commitRouter({
+          owner: model.owner,
+          repository: model.name,
+          sha: commit.sha,
+        }),
+      ),
+    ],
+    [
+      h.span(
+        [h.Class("commit-avatar")],
+        [commit.authorName.slice(0, 2).toUpperCase()],
+      ),
+      h.span(
+        [h.Class("commit-copy")],
+        [
+          h.strong([], [commit.subject]),
+          h.small(
+            [],
+            [
+              `${commit.authorName} committed ${authoredDate(commit.authoredAt)}`,
+            ],
+          ),
+        ],
+      ),
+      h.code([h.Class("commit-sha")], [commit.sha.slice(0, 7)]),
+      h.span([h.Class("commit-open-arrow")], ["→"]),
+    ],
+  );
+
+const repositoryCommitsView = (model: Model, h: HtmlBuilder<Message>): Html => {
+  if (AsyncData.isPending(model.commits)) {
+    return h.section(
+      [h.Class("commits-state"), h.Role("status")],
+      [
+        h.span([h.Class("semantic-icon")], ["◌"]),
+        h.strong([], ["Loading commits…"]),
+        h.span([], ["Reading the checked-out Git history locally."]),
+      ],
+    );
+  }
+  if (AsyncData.isFailure(model.commits)) {
+    return h.section(
+      [h.Class("commits-state is-error"), h.Role("alert")],
+      [
+        h.span([h.Class("semantic-icon")], ["!"]),
+        h.strong([], ["Could not load commits"]),
+        h.span([], [model.commits.error]),
+        button(
+          h,
+          [
+            h.Type("button"),
+            h.Class("context-button"),
+            h.OnClick(SelectedRepositoryTab({ tab: "commits" })),
+          ],
+          ["Retry"],
+        ),
+      ],
+    );
+  }
+  const data = Option.getOrUndefined(AsyncData.getData(model.commits));
+  if (data === undefined) return h.empty;
+  return h.section(
+    [h.Class("commits-browser repository-commits-browser")],
+    [
+      h.div(
+        [h.Class("commits-heading")],
+        [
+          h.div(
+            [],
+            [
+              h.h2(
+                [],
+                [
+                  `${data.commits.length} ${data.commits.length === 1 ? "commit" : "commits"}`,
+                ],
+              ),
+              h.p(
+                [],
+                [
+                  `On ${data.ref}${data.shallow ? " · shallow history" : ""}. Select a commit to review its diff.`,
+                ],
+              ),
+            ],
+          ),
+          h.span([], ["Newest → oldest"]),
+        ],
+      ),
+      data.commits.length === 0
+        ? h.div([h.Class("commits-empty")], ["No commits found at HEAD."])
+        : h.div(
+            [h.Class("commit-list")],
+            data.commits.map((commit) => repositoryCommitRow(model, commit, h)),
+          ),
+    ],
+  );
+};
 
 const repositoryFileButton = (
   file: RepositoryFile,
@@ -313,10 +433,39 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
                 h.strong([], [`${model.owner}/${model.name}`]),
               ],
             ),
+            h.div(
+              [h.Class("segmented repository-view-tabs")],
+              [
+                button(
+                  h,
+                  [
+                    h.Type("button"),
+                    h.Class(
+                      `segmented-button${model.tab === "files" ? " is-active" : ""}`,
+                    ),
+                    h.OnClick(SelectedRepositoryTab({ tab: "files" })),
+                  ],
+                  ["Files"],
+                ),
+                button(
+                  h,
+                  [
+                    h.Type("button"),
+                    h.Class(
+                      `segmented-button${model.tab === "commits" ? " is-active" : ""}`,
+                    ),
+                    h.OnClick(SelectedRepositoryTab({ tab: "commits" })),
+                  ],
+                  ["Commits"],
+                ),
+              ],
+            ),
             viewInputs.renderLocationForm(),
             h.form(
               [
-                h.Class("repository-search"),
+                h.Class(
+                  `repository-search${model.tab === "commits" ? " is-hidden" : ""}`,
+                ),
                 h.OnSubmit(SubmittedRepositorySearch()),
               ],
               [
@@ -349,60 +498,68 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
             )
           : h.empty,
         h.div(
-          [h.Class("repository-workspace")],
           [
-            h.aside(
-              [h.Class("repository-tree")],
-              [
-                h.div(
-                  [h.Class("repository-tree-heading")],
+            h.Class(
+              `repository-workspace${model.tab === "commits" ? " is-commits" : ""}`,
+            ),
+          ],
+          [
+            model.tab === "files"
+              ? h.aside(
+                  [h.Class("repository-tree")],
                   [
-                    h.strong([], ["Files"]),
-                    h.span(
-                      [],
+                    h.div(
+                      [h.Class("repository-tree-heading")],
                       [
-                        AsyncData.isPending(model.files)
-                          ? "Indexing…"
-                          : String(files.length),
+                        h.strong([], ["Files"]),
+                        h.span(
+                          [],
+                          [
+                            AsyncData.isPending(model.files)
+                              ? "Indexing…"
+                              : String(files.length),
+                          ],
+                        ),
+                      ],
+                    ),
+                    h.nav(
+                      [h.AriaLabel("Repository files")],
+                      [
+                        lazyRepositoryFileTree(repositoryFileTree, [
+                          files,
+                          model.selectedPath,
+                          model.collapsedFolders,
+                          h,
+                        ]),
                       ],
                     ),
                   ],
-                ),
-                h.nav(
-                  [h.AriaLabel("Repository files")],
-                  [
-                    lazyRepositoryFileTree(repositoryFileTree, [
-                      files,
-                      model.selectedPath,
-                      model.collapsedFolders,
-                      h,
-                    ]),
-                  ],
-                ),
-              ],
-            ),
+                )
+              : h.empty,
             h.div(
               [h.Class("repository-main")],
               [
                 filesError?.missing === true
                   ? repositoryCloneView(model, h)
-                  : model.selectedPath !== ""
-                    ? repositoryFileView(model, h)
-                    : model.query !== ""
-                      ? repositorySearchResults(model, h)
-                      : h.section(
-                          [h.Class("repository-welcome")],
-                          [
-                            h.span([], ["FFF"]),
-                            h.h1([], [`Browse ${model.name}`]),
-                            h.p(
-                              [],
-                              [
-                                "Choose a file from the local index, or fuzzy search filenames and code contents.",
-                              ],
-                            ),
-                          ],
-                        ),
+                  : model.tab === "commits"
+                    ? repositoryCommitsView(model, h)
+                    : model.selectedPath !== ""
+                      ? repositoryFileView(model, h)
+                      : model.query !== ""
+                        ? repositorySearchResults(model, h)
+                        : h.section(
+                            [h.Class("repository-welcome")],
+                            [
+                              h.span([], ["FFF"]),
+                              h.h1([], [`Browse ${model.name}`]),
+                              h.p(
+                                [],
+                                [
+                                  "Choose a file from the local index, or fuzzy search filenames and code contents.",
+                                ],
+                              ),
+                            ],
+                          ),
               ],
             ),
           ],

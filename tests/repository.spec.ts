@@ -22,7 +22,7 @@ test("round-trips repository routes and browser options", () => {
   expect(
     localRepositoryUrl(
       { owner: "radarlabs", name: "server" },
-      { query: "config key", file: "src/config.ts" },
+      { query: "config key", file: "src/config.ts", tab: "files" },
     ),
   ).toBe("/repo/radarlabs/server?q=config+key&file=src%2Fconfig.ts");
   expect(
@@ -30,7 +30,9 @@ test("round-trips repository routes and browser options", () => {
   ).toEqual({
     query: "config key",
     file: "src/config.ts",
+    tab: "files",
   });
+  expect(repositoryOptionsFromSearch("?view=commits").tab).toBe("commits");
 });
 
 test("offers a temporary or configured clone when a repository is missing", async ({
@@ -113,6 +115,56 @@ test("opens repository links without accepting a late response from the previous
   await expect(page.locator(".repository-file-row")).not.toContainText(
     "first.ts",
   );
+});
+
+test("lists local repository commits and links them to commit review", async ({
+  page,
+}) => {
+  await page.route("**/api/repository/files?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: { files },
+    }),
+  );
+  await page.route("**/api/repository/commits?**", (route) => {
+    expect(new URL(route.request().url()).searchParams.get("repository")).toBe(
+      repository,
+    );
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: {
+        ref: "main",
+        shallow: false,
+        commits: [
+          {
+            sha: "abcdef1234567890abcdef1234567890abcdef12",
+            parents: ["1234567890abcdef1234567890abcdef12345678"],
+            authorName: "Octo Cat",
+            authorEmail: "octo@example.com",
+            authoredAt: "2026-08-02T12:00:00Z",
+            subject: "Add repository commit history",
+          },
+        ],
+      },
+    });
+  });
+
+  await page.goto("/repo/example/hunker-demo");
+  await page.getByRole("button", { name: "Commits", exact: true }).click();
+  await expect(page).toHaveURL(
+    (url) => url.searchParams.get("view") === "commits",
+  );
+  const commit = page.getByRole("link", {
+    name: /Add repository commit history/,
+  });
+  await expect(commit).toContainText("abcdef1");
+  await expect(commit).toHaveAttribute(
+    "href",
+    "/example/hunker-demo/commit/abcdef1234567890abcdef1234567890abcdef12",
+  );
+  await expect(page.getByText("On main")).toBeVisible();
 });
 
 test("browses local files and shows fuzzy content results with context", async ({

@@ -253,6 +253,26 @@ const handleRepositoryFiles = (request: HttpServerRequest.HttpServerRequest) =>
     }),
   );
 
+const handleRepositoryCommits = (
+  request: HttpServerRequest.HttpServerRequest,
+) =>
+  Effect.gen(function* () {
+    const { repository } = yield* localRepositoryRequest(request);
+    const local = yield* LocalRepository;
+    return HttpServerResponse.jsonUnsafe(yield* local.listCommits(repository));
+  }).pipe(
+    Effect.catchTags({
+      InvalidReviewRequest: (error) =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
+        ),
+      LocalRepositoryFailed: localRepositoryError,
+    }),
+  );
+
 const handleRepositorySearch = (request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
     const { requestUrl, repository } = yield* localRepositoryRequest(request);
@@ -699,6 +719,7 @@ const routesLayer = Layer.mergeAll(
   HttpRouter.add("GET", "/api/revision", handleRevision),
   HttpRouter.add("GET", "/api/commits", handleCommits),
   HttpRouter.add("GET", "/api/repository/files", handleRepositoryFiles),
+  HttpRouter.add("GET", "/api/repository/commits", handleRepositoryCommits),
   HttpRouter.add("GET", "/api/repository/search", handleRepositorySearch),
   HttpRouter.add("GET", "/api/repository/file", handleRepositoryFile),
   HttpRouter.add("POST", "/api/repository/clone", handleCloneRepository),

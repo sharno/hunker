@@ -138,10 +138,12 @@ HUNKER_REPOS_ROOT=/path/to/clones bun run dev
 Repository search is entirely local. FFF maintains a native fuzzy index for
 filename ranking and content matches; Hunker adds surrounding source lines and
 opens matched files with the same safe syntax highlighter used by diffs. Search
-queries and selected files are stored in the repository URL. The API validates
-repository and file paths against the configured root before reading them. When
-a repository is unavailable, the browser offers to clone it either below the
-configured repos root or into `/tmp/hunker/repositories`. Set
+queries, selected files, and the Files/Commits view are stored in the repository
+URL. The Commits view reads up to 100 commits from the local checkout's `HEAD`
+and links each immutable OID to Hunker's existing commit-diff view. The API
+validates repository and file paths against the configured root before reading
+them. When a repository is unavailable, the browser offers to clone it either
+below the configured repos root or into `/tmp/hunker/repositories`. Set
 `HUNKER_CACHE_ROOT` to move temporary Hunker clones elsewhere. Cloning uses the
 local `gh` authentication, including access to private repositories. New clones
 start with only the default branch tip and use Git's partial-clone support;

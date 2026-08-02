@@ -8,13 +8,15 @@ import {
   FailedCloneRepository,
   FailedFetchRepositoryFile,
   FailedFetchRepositoryFiles,
+  FailedFetchRepositoryCommits,
   FailedSearchRepository,
   SucceededCloneRepository,
   SucceededFetchRepositoryFile,
   SucceededFetchRepositoryFiles,
+  SucceededFetchRepositoryCommits,
   SucceededSearchRepository,
 } from "./message";
-import { File, SearchMatch } from "./model";
+import { Commit, File, SearchMatch } from "./model";
 
 const filesResponse = S.Struct({ files: S.Array(File) });
 const searchResponse = S.Struct({
@@ -27,6 +29,11 @@ const fileResponse = S.Struct({
   truncated: S.Boolean,
 });
 const cloneResponse = S.Struct({ path: S.String });
+const commitsResponse = S.Struct({
+  ref: S.String,
+  shallow: S.Boolean,
+  commits: S.Array(Commit),
+});
 
 class RepositoryFilesRequestFailed extends Data.TaggedError(
   "RepositoryFilesRequestFailed",
@@ -77,6 +84,38 @@ export const FetchRepositoryFiles = Command.define("FetchRepositoryFiles", {
             repository,
             error: requestError(error, "Could not list files."),
             missing: false,
+          }),
+        ),
+      ),
+      Effect.provide(Http.layer),
+    ),
+});
+
+export const FetchRepositoryCommits = Command.define("FetchRepositoryCommits", {
+  args: { repository: S.String },
+  messages: [SucceededFetchRepositoryCommits, FailedFetchRepositoryCommits],
+  execute: ({ repository }) =>
+    Effect.gen(function* () {
+      const client = yield* HttpClient.HttpClient;
+      const response = yield* client.execute(
+        HttpClientRequest.get(
+          `/api/repository/commits?repository=${encodeURIComponent(repository)}`,
+        ),
+      );
+      const data: unknown = yield* response.json;
+      if (response.status < 200 || response.status >= 300) {
+        return yield* Effect.fail(
+          new Error(responseError(data, "Could not list local commits.")),
+        );
+      }
+      const decoded = yield* S.decodeUnknownEffect(commitsResponse)(data);
+      return SucceededFetchRepositoryCommits({ repository, ...decoded });
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.succeed(
+          FailedFetchRepositoryCommits({
+            repository,
+            error: requestError(error, "Could not list commits."),
           }),
         ),
       ),

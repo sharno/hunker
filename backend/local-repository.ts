@@ -30,6 +30,21 @@ export type RepositorySearchMatch = Readonly<{
   definition: boolean;
 }>;
 
+export type RepositoryCommit = Readonly<{
+  sha: string;
+  parents: ReadonlyArray<string>;
+  authorName: string;
+  authorEmail: string;
+  authoredAt: string;
+  subject: string;
+}>;
+
+export type RepositoryCommits = Readonly<{
+  ref: string;
+  shallow: boolean;
+  commits: ReadonlyArray<RepositoryCommit>;
+}>;
+
 type RepositoryId = Readonly<{ owner: string; name: string }>;
 export type RepositoryCloneDestination = "temporary" | "configured";
 
@@ -54,6 +69,9 @@ type LocalRepositoryShape = Readonly<{
     Readonly<{ path: string; content: string; truncated: boolean }>,
     LocalRepositoryFailed
   >;
+  listCommits: (
+    repository: RepositoryId,
+  ) => Effect.Effect<RepositoryCommits, LocalRepositoryFailed>;
   clone: (
     repository: RepositoryId,
     destination: RepositoryCloneDestination,
@@ -116,6 +134,36 @@ export const layer = Layer.effect(
     );
     const cacheRoot = paths.resolve(configuredCacheRoot);
     const finders = new Map<string, FileFinder>();
+
+    const runGit = (
+      repositoryPath: string,
+      arguments_: ReadonlyArray<string>,
+    ) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const handle = yield* spawner.spawn(
+            ChildProcess.make("git", arguments_, { cwd: repositoryPath }),
+          );
+          const [output, exitCode] = yield* Effect.all(
+            [Stream.mkString(Stream.decodeText(handle.all)), handle.exitCode],
+            { concurrency: "unbounded" },
+          );
+          if (exitCode !== ChildProcessSpawner.ExitCode(0)) {
+            return yield* failure(
+              output.trim() ||
+                `Git ${arguments_[0] ?? "command"} exited with status ${exitCode}.`,
+              502,
+            );
+          }
+          return output;
+        }),
+      ).pipe(
+        Effect.mapError((error) =>
+          error instanceof LocalRepositoryFailed
+            ? error
+            : failure(`Could not run Git: ${String(error)}`, 502),
+        ),
+      );
 
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
@@ -383,6 +431,55 @@ export const layer = Layer.effect(
         };
       });
 
-    return LocalRepository.of({ listFiles, search, readFile, clone });
+    const listCommits = (repository: RepositoryId) =>
+      Effect.gen(function* () {
+        const root = yield* repositoryPath(repository);
+        const [rawCommits, rawRef, rawShallow] = yield* Effect.all([
+          runGit(root, [
+            "log",
+            "-100",
+            "--no-show-signature",
+            "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e",
+            "HEAD",
+          ]),
+          runGit(root, ["rev-parse", "--abbrev-ref", "HEAD"]),
+          runGit(root, ["rev-parse", "--is-shallow-repository"]),
+        ]);
+        const commits = rawCommits
+          .split("\x1e")
+          .map((record) => record.trim())
+          .filter((record) => record !== "")
+          .map((record) => {
+            const [
+              sha = "",
+              parents = "",
+              authorName = "",
+              authorEmail = "",
+              authoredAt = "",
+              subject = "",
+            ] = record.split("\x1f");
+            return {
+              sha,
+              parents: parents.split(" ").filter((parent) => parent !== ""),
+              authorName,
+              authorEmail,
+              authoredAt,
+              subject,
+            };
+          });
+        return {
+          ref: rawRef.trim(),
+          shallow: rawShallow.trim() === "true",
+          commits,
+        };
+      });
+
+    return LocalRepository.of({
+      listFiles,
+      search,
+      readFile,
+      listCommits,
+      clone,
+    });
   }),
 );

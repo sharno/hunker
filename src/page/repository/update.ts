@@ -6,6 +6,7 @@ import { locationToAppRoute, repositoryRouter } from "../../app-route";
 import type { Message } from "./message";
 import {
   CloneRepository,
+  FetchRepositoryCommits,
   FetchRepositoryFile,
   FetchRepositoryFiles,
   NavigateRepository,
@@ -13,6 +14,8 @@ import {
 } from "./command";
 import {
   Clone as CloneState,
+  type Commit,
+  Commits,
   FileContent,
   Files,
   type File as RepositoryFileType,
@@ -24,7 +27,11 @@ import {
 import { directoryPaths, revealFileInTree } from "../../file-tree";
 
 export type RepositoryRoute = Readonly<{ owner: string; name: string }>;
-export type RepositoryOptions = Readonly<{ query: string; file: string }>;
+export type RepositoryOptions = Readonly<{
+  query: string;
+  file: string;
+  tab: "files" | "commits";
+}>;
 
 export const repositoryRouteFromPathname = (
   pathname: string,
@@ -43,16 +50,21 @@ export const repositoryOptionsFromSearch = (
   search: string,
 ): RepositoryOptions => {
   const params = new URLSearchParams(search);
-  return { query: params.get("q") ?? "", file: params.get("file") ?? "" };
+  return {
+    query: params.get("q") ?? "",
+    file: params.get("file") ?? "",
+    tab: params.get("view") === "commits" ? "commits" : "files",
+  };
 };
 
 export const localRepositoryUrl = (
   repository: RepositoryRoute,
-  options: RepositoryOptions = { query: "", file: "" },
+  options: RepositoryOptions = { query: "", file: "", tab: "files" },
 ) => {
   const params = new URLSearchParams();
   if (options.query !== "") params.set("q", options.query);
   if (options.file !== "") params.set("file", options.file);
+  if (options.tab === "commits") params.set("view", "commits");
   const search = params.size === 0 ? "" : `?${params.toString()}`;
   return `${repositoryRouter({
     owner: repository.owner,
@@ -70,7 +82,7 @@ const synchronizeRepositoryUrl = (
 ): RepositoryUpdate => {
   const href = localRepositoryUrl(
     { owner: model.owner, name: model.name },
-    { query: model.query, file: model.selectedPath },
+    { query: model.query, file: model.selectedPath, tab: model.tab },
   );
   return [model, [...commands, NavigateRepository({ href })]];
 };
@@ -86,6 +98,7 @@ export const load = (
     ? evo(model, {
         query: () => options.query,
         selectedPath: () => options.file,
+        tab: () => options.tab,
         collapsedFolders: (folders) =>
           options.file === ""
             ? folders
@@ -94,6 +107,7 @@ export const load = (
     : ModelSchema.make({
         owner: route.owner,
         name: route.name,
+        tab: options.tab,
         query: options.query,
         selectedPath: options.file,
         collapsedFolders: [],
@@ -101,6 +115,7 @@ export const load = (
         search: options.query === "" ? Search.Idle() : Search.Loading(),
         file: options.file === "" ? FileContent.Idle() : FileContent.Loading(),
         clone: CloneState.Idle(),
+        commits: options.tab === "commits" ? Commits.Loading() : Commits.Idle(),
       });
   const maybeFilesCommand: Option.Option<Command.Command<Message>> =
     sameRepository &&
@@ -141,17 +156,31 @@ export const load = (
             path: options.file,
           }),
         );
+  const maybeCommitsCommand: Option.Option<Command.Command<Message>> =
+    options.tab !== "commits" ||
+    (sameRepository &&
+      (AsyncData.isPending(current.commits) ||
+        AsyncData.hasData(current.commits)))
+      ? Option.none()
+      : Option.some(
+          FetchRepositoryCommits({
+            repository: `${route.owner}/${route.name}`,
+          }),
+        );
   return [
     evo(current, {
       search: (state) =>
         Option.isSome(maybeSearchCommand) ? Search.Loading() : state,
       file: (state) =>
         Option.isSome(maybeFileCommand) ? FileContent.Loading() : state,
+      commits: (state) =>
+        Option.isSome(maybeCommitsCommand) ? Commits.Loading() : state,
     }),
     [
       ...Array.fromOption(maybeFilesCommand),
       ...Array.fromOption(maybeSearchCommand),
       ...Array.fromOption(maybeFileCommand),
+      ...Array.fromOption(maybeCommitsCommand),
     ],
   ];
 };
@@ -220,8 +249,18 @@ const cloned = (
   const next = evo(model, {
     files: () => Files.Loading(),
     clone: () => CloneState.Success({ data: { path } }),
+    commits: () =>
+      model.tab === "commits" ? Commits.Loading() : model.commits,
   });
-  return [next, [FetchRepositoryFiles({ repository: repositoryName(next) })]];
+  return [
+    next,
+    [
+      FetchRepositoryFiles({ repository: repositoryName(next) }),
+      ...(model.tab === "commits"
+        ? [FetchRepositoryCommits({ repository: repositoryName(next) })]
+        : []),
+    ],
+  ];
 };
 
 const cloneFailed = (
@@ -349,6 +388,65 @@ const fileFailed = (
     ? [evo(model, { file: () => FileContent.Failure({ error }) }), []]
     : [model, []];
 
+const selectTab = (
+  model: Model,
+  tab: "files" | "commits",
+): RepositoryUpdate => {
+  if (
+    model.tab === tab &&
+    !(tab === "commits" && AsyncData.isFailure(model.commits))
+  ) {
+    return [model, []];
+  }
+  const shouldLoadCommits =
+    tab === "commits" &&
+    !AsyncData.isPending(model.commits) &&
+    !AsyncData.hasData(model.commits);
+  return synchronizeRepositoryUrl(
+    evo(model, {
+      tab: () => tab,
+      commits: (state) => (shouldLoadCommits ? Commits.Loading() : state),
+    }),
+    shouldLoadCommits
+      ? [FetchRepositoryCommits({ repository: repositoryName(model) })]
+      : [],
+  );
+};
+
+const commitsLoaded = (
+  model: Model,
+  input: Readonly<{
+    repository: string;
+    ref: string;
+    shallow: boolean;
+    commits: ReadonlyArray<Commit>;
+  }>,
+): RepositoryUpdate =>
+  repositoryName(model) === input.repository
+    ? [
+        evo(model, {
+          commits: () =>
+            Commits.Success({
+              data: {
+                ref: input.ref,
+                shallow: input.shallow,
+                commits: input.commits,
+              },
+            }),
+        }),
+        [],
+      ]
+    : [model, []];
+
+const commitsFailed = (
+  model: Model,
+  repository: string,
+  error: string,
+): RepositoryUpdate =>
+  repositoryName(model) === repository
+    ? [evo(model, { commits: () => Commits.Failure({ error }) }), []]
+    : [model, []];
+
 export const update = (model: Model, message: Message): RepositoryUpdate =>
   M.value(message).pipe(
     M.withReturnType<RepositoryUpdate>(),
@@ -383,5 +481,9 @@ export const update = (model: Model, message: Message): RepositoryUpdate =>
         }),
         [],
       ],
+      SelectedRepositoryTab: ({ tab }) => selectTab(model, tab),
+      SucceededFetchRepositoryCommits: (input) => commitsLoaded(model, input),
+      FailedFetchRepositoryCommits: ({ repository, error }) =>
+        commitsFailed(model, repository, error),
     }),
   );

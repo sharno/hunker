@@ -1,7 +1,7 @@
 import { Schema as S } from "effect";
 import { m } from "foldkit/message";
 
-import { File, SearchMatch } from "./model";
+import { Commit, File, SearchMatch } from "./model";
 
 export const CompletedNavigate = m("CompletedNavigate");
 export const SucceededFetchRepositoryFiles = m(
@@ -60,6 +60,22 @@ export const FailedFetchRepositoryFile = m("FailedFetchRepositoryFile", {
 export const ToggledRepositoryFolder = m("ToggledRepositoryFolder", {
   path: S.String,
 });
+export const SelectedRepositoryTab = m("SelectedRepositoryTab", {
+  tab: S.Literals(["files", "commits"]),
+});
+export const SucceededFetchRepositoryCommits = m(
+  "SucceededFetchRepositoryCommits",
+  {
+    repository: S.String,
+    ref: S.String,
+    shallow: S.Boolean,
+    commits: S.Array(Commit),
+  },
+);
+export const FailedFetchRepositoryCommits = m("FailedFetchRepositoryCommits", {
+  repository: S.String,
+  error: S.String,
+});
 
 export const Message = S.Union([
   CompletedNavigate,
@@ -77,5 +93,8 @@ export const Message = S.Union([
   SucceededFetchRepositoryFile,
   FailedFetchRepositoryFile,
   ToggledRepositoryFolder,
+  SelectedRepositoryTab,
+  SucceededFetchRepositoryCommits,
+  FailedFetchRepositoryCommits,
 ]);
 export type Message = typeof Message.Type;

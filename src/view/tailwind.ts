@@ -130,17 +130,21 @@ const utilities: Readonly<Record<string, string>> = {
     "cursor-pointer rounded-md border border-[#c9cbc4] bg-white px-2.5 py-1.5 text-[10px] font-[680] text-[#3f5060]",
   "repository-shell": "min-h-screen bg-canvas",
   "repository-toolbar":
-    "sticky top-0 z-30 grid min-h-14 grid-cols-[auto_auto_minmax(260px,520px)_minmax(260px,620px)_auto] items-center gap-3 border-b border-[#3b4659] bg-ink px-4 py-2 text-white shadow-[0_5px_18px_rgb(16_27_44/18%)] [&>.compact-brand]:text-white [&>.compact-brand]:no-underline max-[1100px]:grid-cols-[auto_minmax(240px,1fr)_minmax(260px,1fr)_auto] max-[1100px]:[&_.repository-identity]:hidden max-[760px]:grid-cols-[auto_1fr] max-[760px]:gap-2",
+    "sticky top-0 z-30 grid min-h-14 grid-cols-[auto_auto_auto_minmax(220px,440px)_minmax(240px,1fr)_auto] items-center gap-3 border-b border-[#3b4659] bg-ink px-4 py-2 text-white shadow-[0_5px_18px_rgb(16_27_44/18%)] [&>.compact-brand]:text-white [&>.compact-brand]:no-underline max-[1100px]:grid-cols-[auto_auto_minmax(220px,1fr)_minmax(240px,1fr)_auto] max-[1100px]:[&_.repository-identity]:hidden max-[760px]:grid-cols-[auto_auto_1fr] max-[760px]:gap-2",
   "repository-identity":
     "flex min-w-0 flex-col [&>span]:text-[8px] [&>span]:tracking-[0.08em] [&>span]:text-[#9da7b4] [&>span]:uppercase [&>strong]:overflow-hidden [&>strong]:text-xs [&>strong]:text-ellipsis [&>strong]:whitespace-nowrap",
   "repository-search":
-    "grid h-9 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-[#4a5669] bg-[#263247] pl-3 [&>span]:text-[#aeb6be] [&_input]:min-w-0 [&_input]:border-0 [&_input]:bg-transparent [&_input]:text-[12px] [&_input]:text-white [&_input]:outline-none [&_input]:focus-visible:outline-2 [&_input]:focus-visible:outline-offset-2 [&_input]:focus-visible:outline-lime [&_input::placeholder]:text-[#8f9baa] [&_button]:h-7 [&_button]:cursor-pointer [&_button]:rounded-[4px] [&_button]:border-0 [&_button]:bg-lime [&_button]:px-3 [&_button]:text-[10px] [&_button]:font-[750] [&_button]:text-ink max-[760px]:order-3 max-[760px]:col-span-2",
+    "grid h-9 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-[#4a5669] bg-[#263247] pl-3 [&>span]:text-[#aeb6be] [&_input]:min-w-0 [&_input]:border-0 [&_input]:bg-transparent [&_input]:text-[12px] [&_input]:text-white [&_input]:outline-none [&_input]:focus-visible:outline-2 [&_input]:focus-visible:outline-offset-2 [&_input]:focus-visible:outline-lime [&_input::placeholder]:text-[#8f9baa] [&_button]:h-7 [&_button]:cursor-pointer [&_button]:rounded-[4px] [&_button]:border-0 [&_button]:bg-lime [&_button]:px-3 [&_button]:text-[10px] [&_button]:font-[750] [&_button]:text-ink [&.is-hidden]:invisible [&.is-hidden]:pointer-events-none max-[760px]:order-3 max-[760px]:col-span-3",
+  "repository-view-tabs":
+    "shrink-0 bg-[#303b50] [&_.segmented-button]:px-2.5 [&_.segmented-button]:py-1.5 [&_.segmented-button]:text-[10px] [&_.segmented-button]:text-[#b9c0cb] [&_.segmented-button.is-active]:bg-[#f7f7f3] [&_.segmented-button.is-active]:text-ink",
   "repository-github-loader":
     "grid h-9 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-[#4a5669] bg-[#263247] pr-1 pl-2.5 [&.is-error]:border-[#dc8c7f] [&_input]:min-w-0 [&_input]:border-0 [&_input]:bg-transparent [&_input]:text-[11px] [&_input]:text-white [&_input]:outline-none [&_input]:focus-visible:outline-2 [&_input]:focus-visible:outline-offset-2 [&_input]:focus-visible:outline-lime [&_input::placeholder]:text-[#8f9baa] [&_.load-button]:min-h-7 [&_.load-button]:px-3 max-[760px]:order-2",
   "repository-github-link":
     "rounded-md border border-[#4a5669] px-3 py-2 text-[10px] font-[650] text-[#d8dde4] no-underline hover:border-[#7d899b]",
   "repository-workspace":
-    "grid min-h-[calc(100vh-56px)] grid-cols-[330px_minmax(0,1fr)] max-[760px]:grid-cols-1",
+    "grid min-h-[calc(100vh-56px)] grid-cols-[330px_minmax(0,1fr)] [&.is-commits]:grid-cols-1 max-[760px]:grid-cols-1",
+  "repository-commit-row": "text-ink no-underline",
+  "repository-commits-browser": "my-8",
   "repository-tree":
     "sticky top-14 flex h-[calc(100vh-56px)] flex-col overflow-hidden border-r border-line bg-[#ecebe5] max-[760px]:static max-[760px]:h-[300px] max-[760px]:border-r-0 max-[760px]:border-b [&>nav]:overflow-auto [&>nav]:px-2 [&>nav]:pb-3",
   "repository-tree-heading":
