@@ -114,16 +114,19 @@ repository and file paths against the configured root before reading them.
 When a repository is unavailable, the browser offers to clone it either below
 the configured repos root or into `/tmp/hunker/repositories`. Set
 `HUNKER_CACHE_ROOT` to move temporary Hunker clones elsewhere. Cloning uses the
-local `gh` authentication, including access to private repositories.
+local `gh` authentication, including access to private repositories. New clones
+start with only the default branch tip and use Git's partial-clone support;
+missing immutable objects are fetched on demand, while the commits view deepens
+the PR history progressively.
 
 After a checkout or cache clone exists, Hunker automatically uses its Git object
 database for PR and commit diffs, file revisions, and commit logs. Each loaded
 review is pinned to immutable base/head OIDs, so separate tabs never switch a
 shared checkout or silently change an already-rendered diff. Locally backed PRs
-fetch at most every two minutes and show “New revision available” when the
-tracked PR ref advances. GitHub remains the source for PR metadata and review
-actions and is the fallback when a local object is unavailable. The design and
-remaining repository-status/worktree work are documented in
+fetch only their tracked PR ref at most every two minutes and show “New revision
+available” when that ref advances. GitHub remains the source for PR metadata and
+review actions and is the fallback when a local object is unavailable. The
+design and remaining repository-status/worktree work are documented in
 [`docs/local-git-backing.md`](docs/local-git-backing.md).
 
 ## Useful commands

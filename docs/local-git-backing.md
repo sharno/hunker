@@ -33,11 +33,18 @@ GitHub remains responsible for PR metadata, review threads, and posting review
 actions. It is also the fallback while a local clone or required object is not
 available.
 
+Hunker-created clones start at depth one with a blobless partial-clone filter.
+Diff and file requests hydrate their exact immutable OIDs without broadening
+branch history. Opening the commits view progressively deepens only the tracked
+pull ref until Git can connect the pinned base and head. This keeps the common
+repository-browsing path cheap without allowing a truncated local commit list.
+
 ## Freshness
 
 Visible repository views should poll status every two minutes. The server may
-run `git fetch --prune` when its last successful fetch is older than two
-minutes. It must not automatically run `git pull` in a user checkout.
+fetch the relevant branch or pull ref when its last successful fetch is older
+than two minutes. It must not automatically run `git pull` in a user checkout
+or broadly fetch unrelated refs.
 
 The UI should show the tracked branch, current OID, dirty state, upstream, and
 ahead/behind counts. When a clean checkout is behind, it can offer an explicit
@@ -77,6 +84,9 @@ The read-only review path is now wired in:
 - PR heads are fetched into `refs/hunker/pull/<number>/head` at most once every
   two minutes. The browser remains pinned and offers a refresh when that ref
   advances.
+- Hunker clones are shallow, blobless partial clones. Exact pinned objects are
+  hydrated for diff/file views, and commit history is progressively deepened on
+  demand.
 - Follow-up browser requests carry the pinned OIDs, so full-file and analysis
   requests cannot drift to a newer PR revision.
 

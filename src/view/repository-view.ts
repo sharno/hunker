@@ -258,7 +258,7 @@ const repositoryCloneView = (model: Model, h: HtmlBuilder<Message>): Html => {
       h.small(
         [],
         [
-          "Private repositories use the same local gh authentication as PR loading.",
+          "Clones start shallow and fetch older history or blobs only when a view needs them. Private repositories use the same local gh authentication as PR loading.",
         ],
       ),
     ],

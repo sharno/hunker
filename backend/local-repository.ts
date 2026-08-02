@@ -75,6 +75,21 @@ export class LocalRepository extends Context.Service<
 const validSegment = /^[a-zA-Z0-9._-]+$/;
 const maxFileCharacters = 500_000;
 
+export const cloneArguments = (
+  repository: RepositoryId,
+  target: string,
+): ReadonlyArray<string> => [
+  "repo",
+  "clone",
+  `${repository.owner}/${repository.name}`,
+  target,
+  "--",
+  "--depth=1",
+  "--single-branch",
+  "--filter=blob:none",
+  "--no-tags",
+];
+
 const failure = (message: string, status = 500) =>
   new LocalRepositoryFailed({ message, status });
 
@@ -182,18 +197,9 @@ export const layer = Layer.effect(
           );
         const handle = yield* spawner
           .spawn(
-            ChildProcess.make(
-              "gh",
-              [
-                "repo",
-                "clone",
-                `${repository.owner}/${repository.name}`,
-                target,
-                "--",
-                "--filter=blob:none",
-              ],
-              { cwd: paths.dirname(target) },
-            ),
+            ChildProcess.make("gh", cloneArguments(repository, target), {
+              cwd: paths.dirname(target),
+            }),
           )
           .pipe(
             Effect.mapError((error) =>

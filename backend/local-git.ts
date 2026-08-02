@@ -85,6 +85,7 @@ export class LocalGit extends Context.Service<LocalGit, LocalGitShape>()(
 const validSegment = /^[a-zA-Z0-9._-]+$/;
 const validOid = /^[0-9a-f]{40,64}$/i;
 const fetchIntervalMs = 120_000;
+const historyDeepenSteps = [32, 128, 512, 2_048] as const;
 
 const failure = (message: string, status = 500) =>
   new LocalGitFailed({ message, status });
@@ -210,6 +211,27 @@ export const layer = Layer.effect(
           )
         : Effect.succeed(false);
 
+    const isShallow = (repositoryPath: string) =>
+      runGitChecked(repositoryPath, [
+        "rev-parse",
+        "--is-shallow-repository",
+      ]).pipe(Effect.map((output) => output.trim() === "true"));
+
+    const fetchObject = (repositoryPath: string, oid: string) =>
+      Effect.gen(function* () {
+        if (!validOid.test(oid)) {
+          return yield* failure("That Git object ID is not valid.", 400);
+        }
+        const shallow = yield* isShallow(repositoryPath);
+        return yield* runGitChecked(repositoryPath, [
+          "fetch",
+          "--no-tags",
+          ...(shallow ? ["--depth=1"] : []),
+          "origin",
+          oid,
+        ]);
+      });
+
     const fetchPull = (
       repository: LocalGitRepository,
       pullNumber: string,
@@ -217,16 +239,57 @@ export const layer = Layer.effect(
     ) =>
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
-        const previous = lastFetch.get(repository.path) ?? 0;
+        const fetchKey = `${repository.path}\0${pullNumber}`;
+        const previous = lastFetch.get(fetchKey) ?? 0;
         if (!force && now - previous < fetchIntervalMs) return now;
-        yield* runGitChecked(repository.path, ["fetch", "--prune", "origin"]);
-        lastFetch.set(repository.path, now);
+        const shallow = yield* isShallow(repository.path);
         yield* runGitChecked(repository.path, [
           "fetch",
+          "--no-tags",
+          ...(shallow ? ["--depth=1"] : []),
           "origin",
           `+refs/pull/${pullNumber}/head:refs/hunker/pull/${pullNumber}/head`,
         ]);
+        lastFetch.set(fetchKey, now);
         return now;
+      });
+
+    const hydrateObjects = (
+      repository: LocalGitRepository,
+      input: LoadDiffInput,
+    ) =>
+      Effect.gen(function* () {
+        const initial = yield* Effect.all([
+          hasObject(repository.path, input.baseOid),
+          hasObject(repository.path, input.headOid),
+        ]);
+        if (input.pullNumber !== undefined && (!initial[0] || !initial[1])) {
+          yield* fetchPull(repository, input.pullNumber, true).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning(error.message).pipe(Effect.as(undefined)),
+            ),
+          );
+        }
+        const afterPull = yield* Effect.all([
+          hasObject(repository.path, input.baseOid),
+          hasObject(repository.path, input.headOid),
+        ]);
+        yield* Effect.forEach(
+          [
+            [input.baseOid, afterPull[0]],
+            [input.headOid, afterPull[1]],
+          ] as const,
+          ([oid, present]) =>
+            present
+              ? Effect.void
+              : fetchObject(repository.path, oid).pipe(
+                  Effect.catch((error) =>
+                    Effect.logWarning(error.message).pipe(Effect.as(undefined)),
+                  ),
+                ),
+          // Git fetches share shallow/ref lock files within one object database.
+          { concurrency: 1 },
+        );
       });
 
     const prepare = (input: LoadDiffInput) =>
@@ -237,26 +300,65 @@ export const layer = Layer.effect(
         const located = yield* find(input.repository);
         if (Option.isNone(located)) return located;
         const repository = located.value;
-        const [hasBase, hasHead] = yield* Effect.all([
-          hasObject(repository.path, input.baseOid),
-          hasObject(repository.path, input.headOid),
-        ]);
-        if (input.pullNumber !== undefined) {
-          yield* fetchPull(
-            repository,
-            input.pullNumber,
-            !hasBase || !hasHead,
-          ).pipe(
-            Effect.catch((error) =>
-              Effect.logWarning(error.message).pipe(Effect.as(undefined)),
-            ),
-          );
-        }
+        yield* hydrateObjects(repository, input);
         const [preparedBase, preparedHead] = yield* Effect.all([
           hasObject(repository.path, input.baseOid),
           hasObject(repository.path, input.headOid),
         ]);
         return preparedBase && preparedHead ? located : Option.none();
+      });
+
+    const hasCommonAncestor = (
+      repositoryPath: string,
+      baseOid: string,
+      headOid: string,
+    ) =>
+      runGit(repositoryPath, ["merge-base", baseOid, headOid]).pipe(
+        Effect.map((result) => result.status === 0),
+      );
+
+    const hydrateCommitHistory = (
+      repository: LocalGitRepository,
+      input: LoadDiffInput,
+    ) =>
+      Effect.gen(function* () {
+        if (
+          yield* hasCommonAncestor(
+            repository.path,
+            input.baseOid,
+            input.headOid,
+          )
+        ) {
+          return true;
+        }
+        if (input.pullNumber === undefined) return false;
+        for (const deepen of historyDeepenSteps) {
+          if (!(yield* isShallow(repository.path))) return false;
+          const fetched = yield* runGit(repository.path, [
+            "fetch",
+            "--no-tags",
+            `--deepen=${deepen}`,
+            "origin",
+            `+refs/pull/${input.pullNumber}/head:refs/hunker/pull/${input.pullNumber}/head`,
+          ]);
+          if (fetched.status !== 0) {
+            yield* Effect.logWarning(
+              fetched.stderr.trim() ||
+                `Could not deepen pull request history by ${deepen} commits.`,
+            );
+            return false;
+          }
+          if (
+            yield* hasCommonAncestor(
+              repository.path,
+              input.baseOid,
+              input.headOid,
+            )
+          ) {
+            return true;
+          }
+        }
+        return false;
       });
 
     const loadDiff = (input: LoadDiffInput) =>
@@ -311,6 +413,13 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         const repository = yield* prepare(input);
         if (Option.isNone(repository)) {
+          return Option.none<ReadonlyArray<PullCommit>>();
+        }
+        const historyAvailable = yield* hydrateCommitHistory(
+          repository.value,
+          input,
+        );
+        if (!historyAvailable) {
           return Option.none<ReadonlyArray<PullCommit>>();
         }
         const output = yield* runGitChecked(repository.value.path, [

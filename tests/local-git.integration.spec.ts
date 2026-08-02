@@ -8,6 +8,7 @@ import { expect, test } from "@playwright/test";
 import { ConfigProvider, Effect, Layer, Option } from "effect";
 
 import { LocalGit, layer as localGitLayer } from "../backend/local-git";
+import { cloneArguments } from "../backend/local-repository";
 
 const git = (cwd: string, ...arguments_: ReadonlyArray<string>) =>
   execFileSync("git", arguments_, { cwd, encoding: "utf8" }).trim();
@@ -38,6 +39,20 @@ const runLocalGit = <A>(
       ),
     ),
   );
+
+test("creates shallow partial clones without tags or unrelated branches", () => {
+  expect(cloneArguments({ owner: "acme", name: "demo" }, "/tmp/demo")).toEqual([
+    "repo",
+    "clone",
+    "acme/demo",
+    "/tmp/demo",
+    "--",
+    "--depth=1",
+    "--single-branch",
+    "--filter=blob:none",
+    "--no-tags",
+  ]);
+});
 
 test("reads pinned diffs, blobs, and commits without switching the checkout", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunker-local-git-"));
@@ -115,6 +130,70 @@ test("fetches a tracked pull ref and reports a newer immutable head", async () =
     expect(Option.getOrThrow(status)).toEqual(
       expect.objectContaining({ pinnedHeadOid, latestHeadOid }),
     );
+    expect(git(repository, "rev-parse", "--is-shallow-repository")).toBe(
+      "false",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("hydrates exact objects for a shallow diff and deepens history for commits", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunker-local-shallow-"));
+  const source = join(root, "source");
+  const remote = join(root, "remote.git");
+  const repository = join(root, "acme", "demo");
+  mkdirSync(source, { recursive: true });
+  mkdirSync(join(root, "acme"), { recursive: true });
+  try {
+    git(source, "init", "-b", "main");
+    git(source, "config", "user.email", "hunker@example.com");
+    git(source, "config", "user.name", "Hunker Test");
+    const baseOid = commit(source, "base", "base\n");
+    git(source, "checkout", "-b", "feature");
+    commit(source, "feature one", "one\n");
+    const headOid = commit(source, "feature two", "two\n");
+    git(source, "checkout", "main");
+    const checkoutOid = commit(source, "main advanced", "main\n");
+    execFileSync("git", ["init", "--bare", "--initial-branch=main", remote]);
+    git(source, "remote", "add", "origin", remote);
+    git(source, "push", "origin", "main");
+    git(source, "push", "origin", `${headOid}:refs/pull/9/head`);
+    execFileSync("git", [
+      "clone",
+      "--depth=1",
+      "--single-branch",
+      `file://${remote}`,
+      repository,
+    ]);
+
+    expect(git(repository, "rev-parse", "--is-shallow-repository")).toBe(
+      "true",
+    );
+    expect(() =>
+      git(repository, "cat-file", "-e", `${baseOid}^{commit}`),
+    ).toThrow();
+
+    const result = await runLocalGit(root, (service) =>
+      Effect.gen(function* () {
+        const input = {
+          repository: { owner: "acme", name: "demo" },
+          pullNumber: "9",
+          baseOid,
+          headOid,
+        };
+        const diff = yield* service.loadDiff(input);
+        const commits = yield* service.loadCommits(input);
+        return { diff, commits };
+      }),
+    );
+
+    expect(Option.getOrThrow(result.diff).diff).toContain("+two");
+    expect(
+      Option.getOrThrow(result.commits).map((item) => item.message),
+    ).toEqual(["feature one", "feature two"]);
+    expect(git(repository, "rev-parse", "HEAD")).toBe(checkoutOid);
+    expect(git(repository, "cat-file", "-e", `${baseOid}^{commit}`)).toBe("");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
