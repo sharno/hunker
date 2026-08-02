@@ -1,7 +1,7 @@
 import { homedir, tmpdir } from "node:os";
 
 import { FileFinder } from "@ff-labs/fff-node";
-import { Config, Context, Data, Effect, FileSystem, Layer, Path, Scope, Stream } from "effect";
+import { Config, Context, Data, Effect, FileSystem, Layer, Path, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 export type RepositoryFile = Readonly<{
@@ -67,7 +67,7 @@ const maxFileCharacters = 500_000;
 const failure = (message: string, status = 500) =>
   new LocalRepositoryFailed({ message, status });
 
-export const LocalRepositoryLive = Layer.effect(
+export const layer = Layer.effect(
   LocalRepository,
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -87,9 +87,7 @@ export const LocalRepositoryLive = Layer.effect(
     const cacheRoot = paths.resolve(configuredCacheRoot);
     const finders = new Map<string, FileFinder>();
 
-    const scope = yield* Effect.scope;
-    yield* Scope.addFinalizer(
-      scope,
+    yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
         for (const finder of finders.values()) finder.destroy();
         finders.clear();

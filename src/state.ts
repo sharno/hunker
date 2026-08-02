@@ -1,4 +1,4 @@
-import { Effect, Match as M, Option, Schema as S } from "effect";
+import { Clock, Effect, Match as M, Option, Schema as S } from "effect";
 import {
   HttpClient,
   HttpClientError,
@@ -166,7 +166,7 @@ const FetchReview = Command.define("FetchReview", {
   execute: ({ url }) =>
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient;
-      const cacheBust = yield* Effect.sync(() => Date.now().toString());
+      const cacheBust = String(yield* Clock.currentTimeMillis);
       const request = HttpClientRequest.get(
         `/api/diff?url=${encodeURIComponent(url)}&refresh=${cacheBust}`,
       );

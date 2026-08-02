@@ -1,8 +1,6 @@
 import { Data, Effect, Layer, Schema as S } from "effect";
 import {
-  HttpMiddleware,
   HttpRouter,
-  HttpServer,
   HttpServerRequest,
   HttpServerResponse,
 } from "effect/unstable/http";
@@ -19,7 +17,7 @@ import { isGeneratedDiffPath, parseGitDiff } from "../src/diff";
 import {
   CharacterDiffEngine,
   CharacterDiffFailed,
-  NativeGitCharacterLive,
+  layer as characterDiffLayer,
 } from "./character-diff-engine";
 import {
   GitHubFetchFailed,
@@ -31,11 +29,11 @@ import {
   parseGitHubUrl,
 } from "./github";
 import type { FileStatus } from "./github";
-import { GitHubAuthLive } from "./github-auth";
+import { layer as githubAuthLayer } from "./github-auth";
 import {
   LocalRepository,
   LocalRepositoryFailed,
-  LocalRepositoryLive,
+  layer as localRepositoryLayer,
 } from "./local-repository";
 import {
   loadReviewComments,
@@ -43,9 +41,9 @@ import {
   submitPullRequestReview,
 } from "./github-reviews";
 import {
-  AstGrepSemanticLive,
   SemanticDiffEngine,
   SemanticEngineFailed,
+  layer as semanticDiffLayer,
 } from "./semantic-engine";
 
 class InvalidFileRequest extends Data.TaggedError("InvalidFileRequest")<{
@@ -472,7 +470,21 @@ const handleMoves = (request: HttpServerRequest.HttpServerRequest) =>
     }),
   );
 
-const Routes = Layer.mergeAll(
+const platformLayer = Layer.mergeAll(
+  NodeServices.layer,
+  NodeHttpClient.layerUndici,
+);
+
+const applicationLayer = Layer.mergeAll(
+  localRepositoryLayer,
+  characterDiffLayer,
+  githubAuthLayer,
+  semanticDiffLayer,
+).pipe(Layer.provide(platformLayer));
+
+const runtimeLayer = Layer.mergeAll(platformLayer, applicationLayer);
+
+const routesLayer = Layer.mergeAll(
   HttpRouter.add("GET", "/api/diff", handleDiff),
   HttpRouter.add("GET", "/api/commits", handleCommits),
   HttpRouter.add("GET", "/api/repository/files", handleRepositoryFiles),
@@ -486,30 +498,15 @@ const Routes = Layer.mergeAll(
   HttpRouter.add("GET", "/api/reviews", handleReviews),
   HttpRouter.add("POST", "/api/reviews/reply", handleReviewReply),
   HttpRouter.add("POST", "/api/reviews/submit", handleSubmitReview),
-).pipe(
-  Layer.provide(LocalRepositoryLive),
-  Layer.provide(NativeGitCharacterLive),
-  Layer.provide(NodeHttpClient.layerUndici),
-  Layer.provide(GitHubAuthLive),
-  Layer.provide(AstGrepSemanticLive),
-  Layer.provide(NodeServices.layer),
+).pipe(HttpRouter.provideRequest(runtimeLayer));
+
+const httpAppLayer = Layer.merge(
+  routesLayer,
+  HttpRouter.cors({ allowedOrigins: ["http://localhost:5173"] }),
 );
 
-const HttpAppLive = Layer.unwrap(
-  HttpRouter.toHttpEffect(Routes).pipe(
-    Effect.map(HttpServer.serve(HttpMiddleware.cors({ allowedOrigins: ["http://localhost:5173"] }))),
-  ),
-);
-
-const Main = HttpAppLive.pipe(
-  HttpServer.withLogAddress,
+const mainLayer = HttpRouter.serve(httpAppLayer).pipe(
   Layer.provide(NodeHttpServer.layer(createServer, { port: 8787 })),
-  Layer.provide(LocalRepositoryLive),
-  Layer.provide(NodeHttpClient.layerUndici),
-  Layer.provide(GitHubAuthLive),
-  Layer.provide(AstGrepSemanticLive),
-  Layer.provide(NativeGitCharacterLive),
-  Layer.provide(NodeServices.layer),
 );
 
-NodeRuntime.runMain(Layer.launch(Main));
+NodeRuntime.runMain(Layer.launch(mainLayer));

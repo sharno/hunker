@@ -1,11 +1,11 @@
 import { expect, test } from "@playwright/test";
 import { NodeServices } from "@effect/platform-node";
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 
 import {
   CharacterDiffEngine,
   type CharacterDiffInput,
-  NativeGitCharacterLive,
+  layer as characterDiffLayer,
 } from "../backend/character-diff-engine";
 
 const runCharacterDiff = (input: CharacterDiffInput) =>
@@ -14,8 +14,9 @@ const runCharacterDiff = (input: CharacterDiffInput) =>
       const engine = yield* CharacterDiffEngine;
       return yield* engine.analyzeFile(input);
     }).pipe(
-      Effect.provide(NativeGitCharacterLive),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        characterDiffLayer.pipe(Layer.provide(NodeServices.layer)),
+      ),
     ),
   );
 

@@ -20,11 +20,7 @@ export type CharacterDiffInput = Readonly<{
 type CharacterDiffEngineShape = Readonly<{
   analyzeFile: (
     input: CharacterDiffInput,
-  ) => Effect.Effect<
-    CharacterDiffResult,
-    CharacterDiffFailed,
-    FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
-  >;
+  ) => Effect.Effect<CharacterDiffResult, CharacterDiffFailed>;
 }>;
 
 export class CharacterDiffFailed extends Data.TaggedError("CharacterDiffFailed")<{
@@ -145,95 +141,98 @@ const contentHash = (value: string) =>
 const cacheKey = (input: CharacterDiffInput) =>
   `${input.path}\u0000${input.mode}\u0000${input.ignoreWhitespace ? "ignore" : "show"}\u0000${contentHash(input.oldText)}\u0000${contentHash(input.newText)}`;
 
-const cache = new Map<string, CharacterDiffResult>();
+export const layer = Layer.effect(
+  CharacterDiffEngine,
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const paths = yield* Path.Path;
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const cache = new Map<string, CharacterDiffResult>();
 
-const execute = (input: CharacterDiffInput) =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const paths = yield* Path.Path;
-      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const directory = yield* fs.makeTempDirectoryScoped({
-        prefix: "hunker-git-diff-",
-      });
-      const extension = paths.extname(input.path);
-      const oldPath = paths.join(directory, `old${extension}`);
-      const newPath = paths.join(directory, `new${extension}`);
-      yield* Effect.all([
-        fs.writeFileString(oldPath, input.oldText),
-        fs.writeFileString(newPath, input.newText),
-      ]);
-      const arguments_ = [
-        "diff",
-        "--no-index",
-        "--no-color",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--text",
-        "--unified=0",
-        "--diff-algorithm=histogram",
-        "--word-diff=porcelain",
-        input.mode === "character"
-          ? "--word-diff-regex=."
-          : "--word-diff-regex=[[:alnum:]_]+|[^[:space:]]",
-        ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
-        "--",
-        oldPath,
-        newPath,
-      ];
-      const handle = yield* spawner.spawn(ChildProcess.make("git", arguments_));
-      const [stdout, stderr, exitCode] = yield* Effect.all(
-        [
-          handle.stdout.pipe(Stream.decodeText(), Stream.mkString),
-          handle.stderr.pipe(Stream.decodeText(), Stream.mkString),
-          handle.exitCode,
-        ],
-        { concurrency: "unbounded" },
-      );
-      const status = Number(exitCode);
-      if (status !== 0 && status !== 1) {
-        return yield* new CharacterDiffFailed({
-          message: stderr.trim() || `Native Git diff exited with status ${status}.`,
-          status: 502,
-        });
-      }
-      return parseGitCharacterDiff(
-        stdout,
-        input.path,
-        input.ignoreWhitespace,
-        input.mode,
-      );
-    }),
-  ).pipe(
-    Effect.timeoutOrElse({
-      duration: "3 seconds",
-      orElse: () =>
-        Effect.fail(
-          new CharacterDiffFailed({
-            message: "Native Git character analysis exceeded three seconds.",
-            status: 503,
-          }),
+    const execute = (input: CharacterDiffInput) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const directory = yield* fs.makeTempDirectoryScoped({
+            prefix: "hunker-git-diff-",
+          });
+          const extension = paths.extname(input.path);
+          const oldPath = paths.join(directory, `old${extension}`);
+          const newPath = paths.join(directory, `new${extension}`);
+          yield* Effect.all([
+            fs.writeFileString(oldPath, input.oldText),
+            fs.writeFileString(newPath, input.newText),
+          ]);
+          const arguments_ = [
+            "diff",
+            "--no-index",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--text",
+            "--unified=0",
+            "--diff-algorithm=histogram",
+            "--word-diff=porcelain",
+            input.mode === "character"
+              ? "--word-diff-regex=."
+              : "--word-diff-regex=[[:alnum:]_]+|[^[:space:]]",
+            ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
+            "--",
+            oldPath,
+            newPath,
+          ];
+          const handle = yield* spawner.spawn(ChildProcess.make("git", arguments_));
+          const [stdout, stderr, exitCode] = yield* Effect.all(
+            [
+              handle.stdout.pipe(Stream.decodeText(), Stream.mkString),
+              handle.stderr.pipe(Stream.decodeText(), Stream.mkString),
+              handle.exitCode,
+            ],
+            { concurrency: "unbounded" },
+          );
+          const status = Number(exitCode);
+          if (status !== 0 && status !== 1) {
+            return yield* new CharacterDiffFailed({
+              message: stderr.trim() || `Native Git diff exited with status ${status}.`,
+              status: 502,
+            });
+          }
+          return parseGitCharacterDiff(
+            stdout,
+            input.path,
+            input.ignoreWhitespace,
+            input.mode,
+          );
+        }),
+      ).pipe(
+        Effect.timeoutOrElse({
+          duration: "3 seconds",
+          orElse: () =>
+            Effect.fail(
+              new CharacterDiffFailed({
+                message: "Native Git character analysis exceeded three seconds.",
+                status: 503,
+              }),
+            ),
+        }),
+        Effect.mapError(error =>
+          error instanceof CharacterDiffFailed
+            ? error
+            : new CharacterDiffFailed({
+                message: "Native Git could not calculate this file's character diff.",
+                status: 502,
+              }),
         ),
-    }),
-    Effect.mapError(error =>
-      error instanceof CharacterDiffFailed
-        ? error
-        : new CharacterDiffFailed({
-            message: "Native Git could not calculate this file's character diff.",
-            status: 502,
-          }),
-    ),
-  );
+      );
 
-const engine = CharacterDiffEngine.of({
-  analyzeFile: input => {
-    const key = cacheKey(input);
-    const cached = cache.get(key);
-    if (cached !== undefined) return Effect.succeed(cached);
-    return execute(input).pipe(
-      Effect.tap(result => Effect.sync(() => cache.set(key, result))),
-    );
-  },
-});
-
-export const NativeGitCharacterLive = Layer.succeed(CharacterDiffEngine, engine);
+    return CharacterDiffEngine.of({
+      analyzeFile: input => {
+        const key = cacheKey(input);
+        const cached = cache.get(key);
+        if (cached !== undefined) return Effect.succeed(cached);
+        return execute(input).pipe(
+          Effect.tap(result => Effect.sync(() => cache.set(key, result))),
+        );
+      },
+    });
+  }),
+);

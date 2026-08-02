@@ -2,9 +2,9 @@ import { expect, test } from "@playwright/test";
 import { Effect } from "effect";
 
 import {
-  AstGrepSemanticLive,
   SemanticDiffEngine,
   type FilePair,
+  layer as semanticDiffLayer,
 } from "../backend/semantic-engine";
 
 const runFile = (file: FilePair) =>
@@ -12,7 +12,7 @@ const runFile = (file: FilePair) =>
     Effect.gen(function* () {
       const engine = yield* SemanticDiffEngine;
       return yield* engine.analyzeFile(file);
-    }).pipe(Effect.provide(AstGrepSemanticLive)),
+    }).pipe(Effect.provide(semanticDiffLayer)),
   );
 
 const runReview = (files: ReadonlyArray<FilePair>) =>
@@ -20,7 +20,7 @@ const runReview = (files: ReadonlyArray<FilePair>) =>
     Effect.gen(function* () {
       const engine = yield* SemanticDiffEngine;
       return yield* engine.analyzeReview(files);
-    }).pipe(Effect.provide(AstGrepSemanticLive)),
+    }).pipe(Effect.provide(semanticDiffLayer)),
   );
 
 test("classifies a changed TypeScript declaration", async () => {

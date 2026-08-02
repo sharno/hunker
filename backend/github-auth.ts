@@ -1,7 +1,5 @@
-import { Config, Context, Effect, Layer, Option } from "effect";
+import { Config, Context, Effect, Layer, Option, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-
-import { NodeServices } from "@effect/platform-node";
 
 type GitHubAuthSource = "environment" | "gh" | "anonymous";
 
@@ -16,11 +14,18 @@ export class GitHubAuth extends Context.Service<GitHubAuth, GitHubAuthShape>()(
 
 const readGhToken = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const output = yield* spawner.string(ChildProcess.make("gh", ["auth", "token"]));
+  const handle = yield* spawner.spawn(ChildProcess.make("gh", ["auth", "token"]));
+  const [output, exitCode] = yield* Effect.all(
+    [Stream.mkString(Stream.decodeText(handle.stdout)), handle.exitCode],
+    { concurrency: "unbounded" },
+  );
+  if (exitCode !== ChildProcessSpawner.ExitCode(0)) {
+    return yield* Effect.fail(new Error(`gh exited with status ${Number(exitCode)}`));
+  }
   const token = output.trim();
   if (token === "") return yield* Effect.fail(new Error("gh returned an empty token"));
   return token;
-}).pipe(Effect.option);
+}).pipe(Effect.scoped, Effect.option);
 
 const resolveGitHubAuth = Effect.gen(function* () {
   const githubToken = yield* Config.string("GITHUB_TOKEN").pipe(Config.option);
@@ -38,6 +43,4 @@ const resolveGitHubAuth = Effect.gen(function* () {
   return auth;
 });
 
-export const GitHubAuthLive = Layer.effect(GitHubAuth, resolveGitHubAuth).pipe(
-  Layer.provide(NodeServices.layer),
-);
+export const layer = Layer.effect(GitHubAuth, resolveGitHubAuth);

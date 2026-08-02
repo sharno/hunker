@@ -295,4 +295,4 @@ const engine = SemanticDiffEngine.of({
     }),
 });
 
-export const AstGrepSemanticLive = Layer.succeed(SemanticDiffEngine, engine);
+export const layer = Layer.succeed(SemanticDiffEngine, engine);
