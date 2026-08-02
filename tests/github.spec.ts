@@ -24,7 +24,10 @@ test("decodes the commit metadata used by the commits view", () => {
       {
         sha: "abcdef1234567890",
         html_url: "https://github.com/example/hunker/commit/abcdef1",
-        author: { login: "octocat", avatar_url: "https://example.com/avatar.png" },
+        author: {
+          login: "octocat",
+          avatar_url: "https://example.com/avatar.png",
+        },
         commit: {
           message: "Add commit view\n\nKeep commit navigation local.",
           author: { name: "Octo Cat", date: "2026-08-01T12:00:00Z" },

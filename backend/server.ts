@@ -28,11 +28,7 @@ import {
 } from "./github";
 import type { FileStatus } from "./github";
 import { layer as githubAuthLayer } from "./github-auth";
-import {
-  LocalGit,
-  LocalGitFailed,
-  layer as localGitLayer,
-} from "./local-git";
+import { LocalGit, LocalGitFailed, layer as localGitLayer } from "./local-git";
 import {
   LocalRepository,
   LocalRepositoryFailed,
@@ -80,7 +76,9 @@ const isFileStatus = (value: string): value is FileStatus =>
 const fileRequest = (request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
     const requestUrl = new URL(request.url, "http://localhost:8787");
-    const target = yield* parseGitHubUrl(requestUrl.searchParams.get("url") ?? "");
+    const target = yield* parseGitHubUrl(
+      requestUrl.searchParams.get("url") ?? "",
+    );
     const path = requestUrl.searchParams.get("path") ?? "";
     const previousPath = requestUrl.searchParams.get("previousPath") ?? "";
     const status = requestUrl.searchParams.get("status") ?? "";
@@ -97,7 +95,8 @@ const pullTarget = (url: string) =>
     const target = yield* parseGitHubUrl(url);
     if (target._tag !== "PullTarget") {
       return yield* new InvalidReviewRequest({
-        message: "GitHub reviews are available for pull requests, not compare URLs.",
+        message:
+          "GitHub reviews are available for pull requests, not compare URLs.",
       });
     }
     return target;
@@ -146,26 +145,37 @@ const decodeBody = <A, I>(
 ) =>
   request.json.pipe(
     Effect.flatMap(S.decodeUnknownEffect(schema)),
-    Effect.mapError(() =>
-      new InvalidReviewRequest({ message: "The review request body is invalid." }),
+    Effect.mapError(
+      () =>
+        new InvalidReviewRequest({
+          message: "The review request body is invalid.",
+        }),
     ),
   );
 
 const handleDiff = (request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
     const requestUrl = new URL(request.url, "http://localhost:8787");
-    const target = yield* parseGitHubUrl(requestUrl.searchParams.get("url") ?? "");
+    const target = yield* parseGitHubUrl(
+      requestUrl.searchParams.get("url") ?? "",
+    );
     const review = yield* loadReviewData(target);
     return HttpServerResponse.jsonUnsafe(review);
   }).pipe(
     Effect.catchTags({
-      InvalidGitHubUrl: error =>
+      InvalidGitHubUrl: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
         ),
-      GitHubFetchFailed: error =>
+      GitHubFetchFailed: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: error.status },
+          ),
         ),
     }),
   );
@@ -178,7 +188,10 @@ const handleCommits = (request: HttpServerRequest.HttpServerRequest) =>
     const refs = Option.isSome(requestedRefs)
       ? requestedRefs.value
       : yield* loadReviewMetadata(target).pipe(
-          Effect.map(metadata => ({ base: metadata.baseOid, head: metadata.headOid })),
+          Effect.map((metadata) => ({
+            base: metadata.baseOid,
+            head: metadata.headOid,
+          })),
         );
     const localGit = yield* LocalGit;
     const local = yield* localFallback(
@@ -189,28 +202,42 @@ const handleCommits = (request: HttpServerRequest.HttpServerRequest) =>
         pullNumber: target.number,
       }),
     );
-    const commits = Option.isSome(local) ? local.value : yield* loadPullCommits(target);
+    const commits = Option.isSome(local)
+      ? local.value
+      : yield* loadPullCommits(target);
     return HttpServerResponse.jsonUnsafe({ commits });
   }).pipe(
     Effect.catchTags({
-      InvalidGitHubUrl: error =>
+      InvalidGitHubUrl: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
         ),
-      InvalidReviewRequest: error =>
+      InvalidReviewRequest: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
         ),
-      GitHubFetchFailed: error =>
+      GitHubFetchFailed: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: error.status },
+          ),
         ),
     }),
   );
 
 const localRepositoryError = (error: LocalRepositoryFailed) =>
   Effect.succeed(
-    HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
+    HttpServerResponse.jsonUnsafe(
+      { error: error.message },
+      { status: error.status },
+    ),
   );
 
 const handleRepositoryFiles = (request: HttpServerRequest.HttpServerRequest) =>
@@ -221,9 +248,12 @@ const handleRepositoryFiles = (request: HttpServerRequest.HttpServerRequest) =>
     return HttpServerResponse.jsonUnsafe({ files });
   }).pipe(
     Effect.catchTags({
-      InvalidReviewRequest: error =>
+      InvalidReviewRequest: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
         ),
       LocalRepositoryFailed: localRepositoryError,
     }),
@@ -234,16 +264,21 @@ const handleRepositorySearch = (request: HttpServerRequest.HttpServerRequest) =>
     const { requestUrl, repository } = yield* localRepositoryRequest(request);
     const query = requestUrl.searchParams.get("query")?.trim() ?? "";
     if (query === "") {
-      return yield* new InvalidReviewRequest({ message: "Enter a search query." });
+      return yield* new InvalidReviewRequest({
+        message: "Enter a search query.",
+      });
     }
     const local = yield* LocalRepository;
     const results = yield* local.search(repository, query);
     return HttpServerResponse.jsonUnsafe(results);
   }).pipe(
     Effect.catchTags({
-      InvalidReviewRequest: error =>
+      InvalidReviewRequest: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
         ),
       LocalRepositoryFailed: localRepositoryError,
     }),
@@ -260,9 +295,12 @@ const handleRepositoryFile = (request: HttpServerRequest.HttpServerRequest) =>
     return HttpServerResponse.jsonUnsafe(file);
   }).pipe(
     Effect.catchTags({
-      InvalidReviewRequest: error =>
+      InvalidReviewRequest: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
         ),
       LocalRepositoryFailed: localRepositoryError,
     }),
@@ -288,9 +326,12 @@ const handleCloneRepository = (request: HttpServerRequest.HttpServerRequest) =>
     return HttpServerResponse.jsonUnsafe(cloned);
   }).pipe(
     Effect.catchTags({
-      InvalidReviewRequest: error =>
+      InvalidReviewRequest: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
         ),
       LocalRepositoryFailed: localRepositoryError,
     }),
@@ -298,7 +339,8 @@ const handleCloneRepository = (request: HttpServerRequest.HttpServerRequest) =>
 
 const handleSemantic = (request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
-    const { target, path, previousPath, status, refs } = yield* fileRequest(request);
+    const { target, path, previousPath, status, refs } =
+      yield* fileRequest(request);
     const pair = yield* loadPinnedFilePair(
       target,
       refs,
@@ -316,24 +358,34 @@ const handleSemantic = (request: HttpServerRequest.HttpServerRequest) =>
     return HttpServerResponse.jsonUnsafe(result);
   }).pipe(
     Effect.catchTags({
-      InvalidGitHubUrl: error =>
+      InvalidGitHubUrl: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
         ),
-      InvalidFileRequest: error =>
+      InvalidFileRequest: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
         ),
-      GitHubFetchFailed: error =>
+      GitHubFetchFailed: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: error.status },
+          ),
         ),
     }),
   );
 
 const handleFile = (request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
-    const { target, path, previousPath, status, refs } = yield* fileRequest(request);
+    const { target, path, previousPath, status, refs } =
+      yield* fileRequest(request);
     const pair = yield* loadPinnedFilePair(
       target,
       refs,
@@ -344,17 +396,26 @@ const handleFile = (request: HttpServerRequest.HttpServerRequest) =>
     return HttpServerResponse.jsonUnsafe(pair);
   }).pipe(
     Effect.catchTags({
-      InvalidGitHubUrl: error =>
+      InvalidGitHubUrl: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
         ),
-      InvalidFileRequest: error =>
+      InvalidFileRequest: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
         ),
-      GitHubFetchFailed: error =>
+      GitHubFetchFailed: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: error.status },
+          ),
         ),
     }),
   );
@@ -362,7 +423,8 @@ const handleFile = (request: HttpServerRequest.HttpServerRequest) =>
 const handleCharacters = (request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
     const requestUrl = new URL(request.url, "http://localhost:8787");
-    const { target, path, previousPath, status, refs } = yield* fileRequest(request);
+    const { target, path, previousPath, status, refs } =
+      yield* fileRequest(request);
     const pair = yield* loadPinnedFilePair(
       target,
       refs,
@@ -381,21 +443,33 @@ const handleCharacters = (request: HttpServerRequest.HttpServerRequest) =>
     return HttpServerResponse.jsonUnsafe(result);
   }).pipe(
     Effect.catchTags({
-      InvalidGitHubUrl: error =>
+      InvalidGitHubUrl: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
         ),
-      InvalidFileRequest: error =>
+      InvalidFileRequest: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
         ),
-      GitHubFetchFailed: error =>
+      GitHubFetchFailed: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: error.status },
+          ),
         ),
       CharacterDiffFailed: (error: CharacterDiffFailed) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: error.status },
+          ),
         ),
     }),
   );
@@ -408,17 +482,26 @@ const handleReviews = (request: HttpServerRequest.HttpServerRequest) =>
     return HttpServerResponse.jsonUnsafe({ comments });
   }).pipe(
     Effect.catchTags({
-      InvalidGitHubUrl: error =>
+      InvalidGitHubUrl: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
         ),
-      InvalidReviewRequest: error =>
+      InvalidReviewRequest: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
         ),
-      GitHubFetchFailed: error =>
+      GitHubFetchFailed: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: error.status },
+          ),
         ),
     }),
   );
@@ -427,7 +510,9 @@ const handleReviewReply = (request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
     const input = yield* decodeBody(request, ReplyBody);
     if (input.body.trim() === "") {
-      return yield* new InvalidReviewRequest({ message: "Write a reply before posting." });
+      return yield* new InvalidReviewRequest({
+        message: "Write a reply before posting.",
+      });
     }
     const target = yield* pullTarget(input.url);
     const comment = yield* replyToReviewComment(
@@ -443,17 +528,26 @@ const handleReviewReply = (request: HttpServerRequest.HttpServerRequest) =>
     return HttpServerResponse.jsonUnsafe({ comment });
   }).pipe(
     Effect.catchTags({
-      InvalidGitHubUrl: error =>
+      InvalidGitHubUrl: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
         ),
-      InvalidReviewRequest: error =>
+      InvalidReviewRequest: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
         ),
-      GitHubFetchFailed: error =>
+      GitHubFetchFailed: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: error.status },
+          ),
         ),
     }),
   );
@@ -471,17 +565,26 @@ const handleSubmitReview = (request: HttpServerRequest.HttpServerRequest) =>
     return HttpServerResponse.jsonUnsafe({ event: input.event });
   }).pipe(
     Effect.catchTags({
-      InvalidGitHubUrl: error =>
+      InvalidGitHubUrl: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
         ),
-      InvalidReviewRequest: error =>
+      InvalidReviewRequest: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
         ),
-      GitHubFetchFailed: error =>
+      GitHubFetchFailed: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: error.status },
+          ),
         ),
     }),
   );
@@ -489,11 +592,13 @@ const handleSubmitReview = (request: HttpServerRequest.HttpServerRequest) =>
 const handleMoves = (request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
     const requestUrl = new URL(request.url, "http://localhost:8787");
-    const target = yield* parseGitHubUrl(requestUrl.searchParams.get("url") ?? "");
+    const target = yield* parseGitHubUrl(
+      requestUrl.searchParams.get("url") ?? "",
+    );
     const refs = pinnedRefs(requestUrl);
     const diff = yield* loadPinnedDiff(target, refs);
     const files = parseGitDiff(diff).filter(
-      file => file.patch.includes("@@") && !isGeneratedDiffPath(file.path),
+      (file) => file.patch.includes("@@") && !isGeneratedDiffPath(file.path),
     );
     const pairs = yield* loadPinnedFilePairs(target, refs, files);
     const semantic = yield* SemanticDiffEngine;
@@ -501,17 +606,26 @@ const handleMoves = (request: HttpServerRequest.HttpServerRequest) =>
     return HttpServerResponse.jsonUnsafe({ moves });
   }).pipe(
     Effect.catchTags({
-      InvalidGitHubUrl: error =>
+      InvalidGitHubUrl: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
         ),
-      GitHubFetchFailed: error =>
+      GitHubFetchFailed: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: error.status },
+          ),
         ),
       SemanticEngineFailed: (error: SemanticEngineFailed) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: error.status },
+          ),
         ),
     }),
   );
@@ -535,7 +649,7 @@ const handleRevision = (request: HttpServerRequest.HttpServerRequest) =>
     return HttpServerResponse.jsonUnsafe(
       Option.match(status, {
         onNone: () => ({ source: "github" as const }),
-        onSome: revision => ({
+        onSome: (revision) => ({
           source: "local" as const,
           path: revision.repository.path,
           pinnedHeadOid: revision.pinnedHeadOid,
@@ -547,17 +661,26 @@ const handleRevision = (request: HttpServerRequest.HttpServerRequest) =>
     );
   }).pipe(
     Effect.catchTags({
-      InvalidGitHubUrl: error =>
+      InvalidGitHubUrl: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
         ),
-      InvalidReviewRequest: error =>
+      InvalidReviewRequest: (error) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
         ),
       LocalGitFailed: (error: LocalGitFailed) =>
         Effect.succeed(
-          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: error.status },
+          ),
         ),
     }),
   );

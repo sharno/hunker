@@ -1,5 +1,6 @@
 import type { Element, RootContent } from "hast";
 import type { LanguageFn } from "highlight.js";
+import { Array as EffectArray } from "effect";
 import bash from "highlight.js/lib/languages/bash";
 import c from "highlight.js/lib/languages/c";
 import cpp from "highlight.js/lib/languages/cpp";
@@ -25,7 +26,7 @@ type SyntaxToken = Readonly<{
   classes: ReadonlyArray<string>;
 }>;
 
-const hcl: LanguageFn = hljs => ({
+const hcl: LanguageFn = (hljs) => ({
   name: "OpenTofu/HCL",
   aliases: ["hcl", "terraform", "tf"],
   keywords: {
@@ -40,7 +41,8 @@ const hcl: LanguageFn = hljs => ({
     hljs.NUMBER_MODE,
     {
       className: "type",
-      begin: /\b(?:resource|data|module|variable|output|locals|terraform|provider|moved|import|check)\b/,
+      begin:
+        /\b(?:resource|data|module|variable|output|locals|terraform|provider|moved|import|check)\b/,
     },
     {
       className: "subst",
@@ -128,7 +130,7 @@ const flattenNode = (
   if (node.type === "text") return [{ text: node.value, classes: inherited }];
   if (node.type !== "element") return [];
   const classes = [...inherited, ...classNames(node)];
-  return node.children.flatMap(child => flattenNode(child, classes));
+  return node.children.flatMap((child) => flattenNode(child, classes));
 };
 
 const tokenCache = new Map<string, ReadonlyArray<SyntaxToken>>();
@@ -139,7 +141,7 @@ const highlightedTokens = (language: string, source: string) => {
   const cached = tokenCache.get(key);
   if (cached !== undefined) return cached;
   const tree = lowlight.highlight(language, source);
-  const tokens = tree.children.flatMap(node => flattenNode(node, []));
+  const tokens = tree.children.flatMap((node) => flattenNode(node, []));
   if (tokenCache.size >= maximumCachedLines) tokenCache.clear();
   tokenCache.set(key, tokens);
   return tokens;
@@ -162,31 +164,37 @@ const renderToken = (
   h: HtmlBuilder<Message>,
 ): ReadonlyArray<string | Html> => {
   const tokenEnd = offset + token.text.length;
-  const boundaries = changed.flatMap(range => {
+  const boundaries = changed.flatMap((range) => {
     const overlapStart = Math.max(offset, range.start);
     const overlapEnd = Math.min(tokenEnd, range.end);
     return overlapStart < overlapEnd
       ? [overlapStart - offset, overlapEnd - offset]
       : [];
   });
-  if (boundaries.length === 0) {
-    return [tokenPiece(token.text, token.classes, false, h)];
-  }
-  const points = [...new Set([0, ...boundaries, token.text.length])].sort(
-    (left, right) => left - right,
-  );
-  return points.slice(0, -1).flatMap((start, index) => {
-    const end = points[index + 1];
-    if (end === undefined || start === end) return [];
-    const absoluteStart = offset + start;
-    const absoluteEnd = offset + end;
-    const isChanged = changed.some(
-      range => absoluteStart < range.end && absoluteEnd > range.start,
-    );
-    return [tokenPiece(token.text.slice(start, end), token.classes, isChanged, h)];
+  return EffectArray.match(boundaries, {
+    onEmpty: () => [tokenPiece(token.text, token.classes, false, h)],
+    onNonEmpty: () => {
+      const points = [...new Set([0, ...boundaries, token.text.length])].sort(
+        (left, right) => left - right,
+      );
+      return points.slice(0, -1).flatMap((start, index) => {
+        const end = points[index + 1];
+        if (end === undefined || start === end) return [];
+        const absoluteStart = offset + start;
+        const absoluteEnd = offset + end;
+        const isChanged = changed.some(
+          (range) => absoluteStart < range.end && absoluteEnd > range.start,
+        );
+        return [
+          tokenPiece(token.text.slice(start, end), token.classes, isChanged, h),
+        ];
+      });
+    },
   });
 };
 
+// NOTE: Offset is a function-local cursor across immutable tokens; it avoids
+// repeatedly summing prefixes while preserving a pure render result.
 export const syntaxHighlightedContent = (
   path: string,
   source: string,
@@ -201,7 +209,7 @@ export const syntaxHighlightedContent = (
       ? [{ text: visibleSource, classes: [] }]
       : highlightedTokens(language, visibleSource);
   let offset = 0;
-  return tokens.flatMap(token => {
+  return tokens.flatMap((token) => {
     const rendered = renderToken(token, offset, changed, h);
     offset += token.text.length;
     return rendered;

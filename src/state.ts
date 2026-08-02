@@ -1,92 +1,54 @@
-import { Clock, Effect, Match as M, Option, Schema as S } from "effect";
-import {
-  HttpClient,
-  HttpClientError,
-  HttpClientRequest,
-} from "effect/unstable/http";
-import { Command, Http, Navigation, Runtime, Url } from "foldkit";
+import { Array, Match as M, Option } from "effect";
+import { AsyncData, Command, Runtime, Update, Url } from "foldkit";
 import { evo } from "foldkit/struct";
+import { Popover } from "@foldkit/ui";
 
+import { reviewRouteToGitHubUrl, urlToAppRoute } from "./app-route";
 import {
-  ChangedFilter,
-  ChangedBrowserUrl,
-  ChangedToolbarCompact,
-  ChangedPrUrl,
-  ChangedReplyDraft,
-  ChangedRepositoryQuery,
-  ChangedReviewBody,
-  CheckedReviewRevision,
-  ClonedRepository,
-  ClosedRepositoryFile,
-  ClosedToolbarMenus,
-  CharacterDiffResult,
-  CompletedNavigation,
-  FailedCommitDiff,
-  FailedCommits,
-  FailedCharacterDiff,
-  FailedFullFile,
-  FailedGitHubReviews,
-  FailedMoves,
-  FailedReply,
-  FailedReview,
-  FailedRevisionCheck,
-  FailedReviewSubmission,
-  FailedRepositoryFile,
-  FailedRepositoryClone,
-  FailedRepositoryFiles,
-  FailedRepositorySearch,
-  FailedSemantic,
-  GitHubReviewComment,
-  LoadedCharacterDiff,
-  LoadedCommitDiff,
-  LoadedCommits,
-  LoadedFullFile,
-  LoadedGitHubReviews,
-  LoadedMoves,
-  LoadedReview,
-  LoadedRepositoryFile,
-  LoadedRepositoryFiles,
-  LoadedRepositorySearch,
-  LoadedSemantic,
+  FetchCharacterDiff,
+  FetchFullFile,
+  FetchGitHubReviews,
+  FetchMoves,
+  FetchReview,
+  FetchSemantic,
+  Navigate,
+  PostPullRequestReview,
+  PostReviewReply,
+} from "./command";
+import {
+  ChangedUrl,
+  CharacterDiffState,
+  CommitDiff,
+  FullFileState,
+  GitHubReviews,
+  GotDiffOptionsPopoverMessage,
+  GotGitHubLocationMessage,
+  GotOpenReviewPopoverMessage,
   Model,
-  MovedBlock,
-  PostedReply,
-  PostedReview,
-  RefreshedReview,
-  RequestedRevisionCheck,
-  RequestedRepositoryClone,
-  RequestedNavigation,
-  SelectedFile,
-  SelectedCommit,
-  SelectedReviewTab,
-  SelectedRepositoryFile,
-  SelectedReviewScope,
-  SelectedViewMode,
-  SemanticResult,
-  SubmittedReply,
-  SubmittedReview,
-  SubmittedRepositorySearch,
-  ReturnedToCommitList,
-  SelectedInlineDiffMode,
-  ToggledFileCollapse,
-  ToggledFullFile,
-  ToggledGitHubReviews,
-  ToggledReviewThreadCollapse,
-  ToggledHunkCollapse,
-  ToggledReviewed,
-  ToggledSemantic,
-  ToggledSidebar,
-  ToggledSyntaxHighlighting,
-  ToggledToolbarMenu,
-  ToggledWhitespace,
+  PullCommits,
+  ClickedLink,
+  RepositoryClone,
+  RepositoryFileContent,
+  RepositoryFiles,
+  RepositorySearch,
+  ReplyFailed,
+  ReplyLoading,
+  ReviewFailed,
+  ReviewLoading,
+  ReviewMoves,
+  ReviewReady,
+  ReviewRevisionAvailable,
+  ReviewRevisionChecking,
+  ReviewRevisionCurrent,
+  ReviewRevisionFailed,
+  ReviewRevisionIdle,
+  ReviewSubmission,
+  SemanticRequestFailed,
+  SemanticRequestIdle,
+  SemanticRequestLoading,
 } from "./domain";
-import type {
-  FileChange,
-  Message,
-  Model as ModelType,
-  ReviewMeta,
-} from "./domain";
-import { hunkKey, parseGitDiff } from "./diff";
+import type { FileChange, Message, Model as ModelType } from "./domain";
+import { hunkKey } from "./diff";
 import {
   commitGitHubUrl,
   FetchCommitDiff,
@@ -104,7 +66,6 @@ import {
   repositoryFilesFailed,
   repositoryFilesLoaded,
   repositoryOptionsFromSearch,
-  repositoryRouteFromPathname,
   repositorySearchFailed,
   repositorySearchLoaded,
   requestRepositoryClone,
@@ -113,7 +74,6 @@ import {
 } from "./features/repository";
 import {
   defaultReviewOptions,
-  githubUrlFromPathname,
   isPullRequestUrl,
   localLocationFromGitHubUrl,
   localReviewUrl,
@@ -121,12 +81,19 @@ import {
   type ReviewOptions,
 } from "./review-route";
 import { sampleFiles, sampleMeta } from "./sample";
+import * as GitHubLocation from "./features/github-location";
 
-type UpdateReturn = readonly [ModelType, ReadonlyArray<Command.Command<Message>>];
-type ApiReview = Readonly<ReviewMeta & { diff: string }>;
+type UpdateReturn = Update.Return<ModelType, Message>;
+
+const initialDiffOptionsPopover = () =>
+  Popover.init({ id: "diff-options-popover" });
+const initialOpenReviewPopover = () =>
+  Popover.init({ id: "open-review-popover" });
 
 const toggleMembership = <A>(values: ReadonlyArray<A>, value: A) =>
-  values.includes(value) ? values.filter(item => item !== value) : [...values, value];
+  values.includes(value)
+    ? values.filter((item) => item !== value)
+    : [...values, value];
 
 const setMembership = <A>(
   values: ReadonlyArray<A>,
@@ -137,351 +104,7 @@ const setMembership = <A>(
     ? values.includes(value)
       ? values
       : [...values, value]
-    : values.filter(item => item !== value);
-
-const isApiReview = (value: unknown): value is ApiReview => {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as Record<string, unknown>;
-  const backing = record.backing;
-  return (
-    ["title", "repository", "number", "author", "base", "head", "url", "diff"].every(
-      key => typeof record[key] === "string",
-    ) &&
-    typeof backing === "object" &&
-    backing !== null &&
-    ((backing as Record<string, unknown>).source === "github" ||
-      (backing as Record<string, unknown>).source === "local") &&
-    ["baseOid", "headOid", "headRef", "path"].every(
-      key => typeof (backing as Record<string, unknown>)[key] === "string",
-    )
-  );
-};
-
-const fetchErrorMessage = (error: unknown): string => {
-  if (
-    HttpClientError.isHttpClientError(error) &&
-    error.reason._tag === "TransportError"
-  ) {
-    return "Hunker’s local backend is offline. Start it with `bun run dev`, then retry.";
-  }
-  return error instanceof Error ? error.message : "Could not load that change.";
-};
-
-const responseError = (value: unknown, fallback: string) =>
-  typeof value === "object" &&
-  value !== null &&
-  typeof (value as Record<string, unknown>).error === "string"
-    ? String((value as Record<string, unknown>).error)
-    : fallback;
-
-const FetchReview = Command.define("FetchReview", {
-  args: { url: S.String },
-  messages: [LoadedReview, FailedReview],
-  execute: ({ url }) =>
-    Effect.gen(function* () {
-      const client = yield* HttpClient.HttpClient;
-      const cacheBust = String(yield* Clock.currentTimeMillis);
-      const request = HttpClientRequest.get(
-        `/api/diff?url=${encodeURIComponent(url)}&refresh=${cacheBust}`,
-      );
-      const response = yield* client.execute(request);
-      const data: unknown = yield* response.json;
-
-      if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(responseError(data, "Could not load that change.")),
-        );
-      }
-      if (!isApiReview(data)) {
-        return yield* Effect.fail(new Error("GitHub returned an unexpected response."));
-      }
-
-      const { diff, ...meta } = data;
-      const files = parseGitDiff(diff);
-      if (files.length === 0) {
-        return yield* Effect.fail(new Error("This change has no reviewable text diff."));
-      }
-      return LoadedReview({ requestedUrl: url, meta, files });
-    }).pipe(
-      Effect.catch(error =>
-        Effect.succeed(FailedReview({ requestedUrl: url, error: fetchErrorMessage(error) })),
-      ),
-      Effect.provide(Http.layer),
-    ),
-});
-
-const Navigate = Command.define("Navigate", {
-  args: {
-    href: S.String,
-    method: S.Literals(["push", "replace", "load"]),
-  },
-  messages: [CompletedNavigation],
-  execute: ({ href, method }) =>
-    (method === "load"
-      ? Navigation.load(href)
-      : method === "replace"
-        ? Navigation.replaceUrl(href)
-        : Navigation.pushUrl(href)
-    ).pipe(
-      Effect.as(CompletedNavigation()),
-    ),
-});
-
-const FetchSemantic = Command.define("FetchSemantic", {
-  args: {
-    url: S.String,
-    baseOid: S.String,
-    headOid: S.String,
-    path: S.String,
-    previousPath: S.String,
-    status: S.Literals(["modified", "added", "deleted", "renamed"]),
-  },
-  messages: [LoadedSemantic, FailedSemantic],
-  execute: ({ url, baseOid, headOid, path, previousPath, status }) =>
-    Effect.gen(function* () {
-      const client = yield* HttpClient.HttpClient;
-      const query = new URLSearchParams({
-        url,
-        baseOid,
-        headOid,
-        path,
-        previousPath,
-        status,
-      });
-      const response = yield* client.execute(
-        HttpClientRequest.get(`/api/semantic?${query.toString()}`),
-      );
-      const data: unknown = yield* response.json;
-      if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(responseError(data, "Could not run semantic analysis.")),
-        );
-      }
-      const result = yield* S.decodeUnknownEffect(SemanticResult)(data);
-      return LoadedSemantic({ requestedUrl: url, path, result });
-    }).pipe(
-      Effect.catch(error =>
-        Effect.succeed(
-          FailedSemantic({ requestedUrl: url, path, error: fetchErrorMessage(error) }),
-        ),
-      ),
-      Effect.provide(Http.layer),
-    ),
-});
-
-const MoveResponse = S.Struct({ moves: S.Array(MovedBlock) });
-const FullFileResponse = S.Struct({ oldText: S.String, newText: S.String });
-const GitHubReviewsResponse = S.Struct({ comments: S.Array(GitHubReviewComment) });
-const GitHubReplyResponse = S.Struct({ comment: GitHubReviewComment });
-
-const FetchCharacterDiff = Command.define("FetchCharacterDiff", {
-  args: {
-    url: S.String,
-    baseOid: S.String,
-    headOid: S.String,
-    path: S.String,
-    previousPath: S.String,
-    status: S.Literals(["modified", "added", "deleted", "renamed"]),
-    ignoreWhitespace: S.Boolean,
-    mode: S.Literals(["token", "character"]),
-  },
-  messages: [LoadedCharacterDiff, FailedCharacterDiff],
-  execute: ({
-    url,
-    baseOid,
-    headOid,
-    path,
-    previousPath,
-    status,
-    ignoreWhitespace,
-    mode,
-  }) =>
-    Effect.gen(function* () {
-      const client = yield* HttpClient.HttpClient;
-      const query = new URLSearchParams({
-        url,
-        baseOid,
-        headOid,
-        path,
-        previousPath,
-        status,
-        whitespace: ignoreWhitespace ? "ignore" : "show",
-        mode,
-      });
-      const response = yield* client.execute(
-        HttpClientRequest.get(`/api/characters?${query.toString()}`),
-      );
-      const data: unknown = yield* response.json;
-      if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(responseError(data, "Could not calculate character changes.")),
-        );
-      }
-      const result = yield* S.decodeUnknownEffect(CharacterDiffResult)(data);
-      return LoadedCharacterDiff({ requestedUrl: url, result });
-    }).pipe(
-      Effect.catch(error =>
-        Effect.succeed(
-          FailedCharacterDiff({
-            requestedUrl: url,
-            path,
-            ignoreWhitespace,
-            mode,
-            error: fetchErrorMessage(error),
-          }),
-        ),
-      ),
-      Effect.provide(Http.layer),
-    ),
-});
-
-const FetchFullFile = Command.define("FetchFullFile", {
-  args: {
-    url: S.String,
-    baseOid: S.String,
-    headOid: S.String,
-    path: S.String,
-    previousPath: S.String,
-    status: S.Literals(["modified", "added", "deleted", "renamed"]),
-  },
-  messages: [LoadedFullFile, FailedFullFile],
-  execute: ({ url, baseOid, headOid, path, previousPath, status }) =>
-    Effect.gen(function* () {
-      const client = yield* HttpClient.HttpClient;
-      const query = new URLSearchParams({
-        url,
-        baseOid,
-        headOid,
-        path,
-        previousPath,
-        status,
-      });
-      const response = yield* client.execute(
-        HttpClientRequest.get(`/api/file?${query.toString()}`),
-      );
-      const data: unknown = yield* response.json;
-      if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(responseError(data, "Could not load the complete file.")),
-        );
-      }
-      const pair = yield* S.decodeUnknownEffect(FullFileResponse)(data);
-      return LoadedFullFile({ requestedUrl: url, path, ...pair });
-    }).pipe(
-      Effect.catch(error =>
-        Effect.succeed(
-          FailedFullFile({ requestedUrl: url, path, error: fetchErrorMessage(error) }),
-        ),
-      ),
-      Effect.provide(Http.layer),
-    ),
-});
-
-const FetchGitHubReviews = Command.define("FetchGitHubReviews", {
-  args: { url: S.String },
-  messages: [LoadedGitHubReviews, FailedGitHubReviews],
-  execute: ({ url }) =>
-    Effect.gen(function* () {
-      const client = yield* HttpClient.HttpClient;
-      const response = yield* client.execute(
-        HttpClientRequest.get(`/api/reviews?url=${encodeURIComponent(url)}`),
-      );
-      const data: unknown = yield* response.json;
-      if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(responseError(data, "Could not load GitHub reviews.")),
-        );
-      }
-      const decoded = yield* S.decodeUnknownEffect(GitHubReviewsResponse)(data);
-      return LoadedGitHubReviews({ requestedUrl: url, comments: decoded.comments });
-    }).pipe(
-      Effect.catch(error =>
-        Effect.succeed(
-          FailedGitHubReviews({ requestedUrl: url, error: fetchErrorMessage(error) }),
-        ),
-      ),
-      Effect.provide(Http.layer),
-    ),
-});
-
-const PostReviewReply = Command.define("PostReviewReply", {
-  args: { url: S.String, commentId: S.Number, body: S.String },
-  messages: [PostedReply, FailedReply],
-  execute: ({ url, commentId, body }) =>
-    Effect.gen(function* () {
-      const client = yield* HttpClient.HttpClient;
-      const request = HttpClientRequest.post("/api/reviews/reply").pipe(
-        HttpClientRequest.bodyJsonUnsafe({ url, commentId, body }),
-      );
-      const response = yield* client.execute(request);
-      const data: unknown = yield* response.json;
-      if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(new Error(responseError(data, "Could not post reply.")));
-      }
-      const decoded = yield* S.decodeUnknownEffect(GitHubReplyResponse)(data);
-      return PostedReply({ comment: decoded.comment });
-    }).pipe(
-      Effect.catch(error =>
-        Effect.succeed(FailedReply({ commentId, error: fetchErrorMessage(error) })),
-      ),
-      Effect.provide(Http.layer),
-    ),
-});
-
-const PostPullRequestReview = Command.define("PostPullRequestReview", {
-  args: {
-    url: S.String,
-    body: S.String,
-    event: S.Literals(["COMMENT", "APPROVE", "REQUEST_CHANGES"]),
-  },
-  messages: [PostedReview, FailedReviewSubmission],
-  execute: ({ url, body, event }) =>
-    Effect.gen(function* () {
-      const client = yield* HttpClient.HttpClient;
-      const request = HttpClientRequest.post("/api/reviews/submit").pipe(
-        HttpClientRequest.bodyJsonUnsafe({ url, body, event }),
-      );
-      const response = yield* client.execute(request);
-      const data: unknown = yield* response.json;
-      if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(responseError(data, "Could not submit the GitHub review.")),
-        );
-      }
-      return PostedReview({ event });
-    }).pipe(
-      Effect.catch(error =>
-        Effect.succeed(FailedReviewSubmission({ error: fetchErrorMessage(error) })),
-      ),
-      Effect.provide(Http.layer),
-    ),
-});
-
-const FetchMoves = Command.define("FetchMoves", {
-  args: { url: S.String, baseOid: S.String, headOid: S.String },
-  messages: [LoadedMoves, FailedMoves],
-  execute: ({ url, baseOid, headOid }) =>
-    Effect.gen(function* () {
-      const client = yield* HttpClient.HttpClient;
-      const query = new URLSearchParams({ url, baseOid, headOid });
-      const response = yield* client.execute(
-        HttpClientRequest.get(`/api/moves?${query.toString()}`),
-      );
-      const data: unknown = yield* response.json;
-      if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(responseError(data, "Could not scan this review for moved code.")),
-        );
-      }
-      const decoded = yield* S.decodeUnknownEffect(MoveResponse)(data);
-      return LoadedMoves({ requestedUrl: url, moves: decoded.moves });
-    }).pipe(
-      Effect.catch(error =>
-        Effect.succeed(FailedMoves({ requestedUrl: url, error: fetchErrorMessage(error) })),
-      ),
-      Effect.provide(Http.layer),
-    ),
-});
+    : values.filter((item) => item !== value);
 
 const activeDiffUrl = (model: ModelType) =>
   model.reviewTab === "commits" && model.selectedCommit !== ""
@@ -497,22 +120,25 @@ const activeRevision = (model: ModelType) =>
       };
 
 const isCurrentReviewRequest = (model: ModelType, requestedUrl: string) =>
-  model.phase === "loading" && model.prUrl === requestedUrl;
+  model.phase._tag === "Loading" && model.prUrl === requestedUrl;
 
 const isCurrentPullRequest = (model: ModelType, requestedUrl: string) =>
-  model.phase === "ready" &&
+  model.phase._tag === "Ready" &&
   model.prUrl === requestedUrl &&
   model.meta.url === requestedUrl;
 
 const isCurrentDiffRequest = (model: ModelType, requestedUrl: string) =>
-  model.phase === "ready" && activeDiffUrl(model) === requestedUrl;
+  model.phase._tag === "Ready" && activeDiffUrl(model) === requestedUrl;
 
 const requestSemantic = (model: ModelType, file: FileChange): UpdateReturn => {
-  const alreadyLoaded = model.semanticResults.some(result => result.path === file.path);
+  const alreadyLoaded = model.semanticResults.some(
+    (result) => result.path === file.path,
+  );
   const alreadyLoading =
-    model.semanticRequest._tag === "Loading" && model.semanticRequest.path === file.path;
+    model.semanticRequest._tag === "Loading" &&
+    model.semanticRequest.path === file.path;
   if (
-    model.phase !== "ready" ||
+    model.phase._tag !== "Ready" ||
     !model.semantic ||
     model.prUrl.trim() === "" ||
     alreadyLoaded ||
@@ -522,7 +148,7 @@ const requestSemantic = (model: ModelType, file: FileChange): UpdateReturn => {
   }
   return [
     evo(model, {
-      semanticRequest: () => ({ _tag: "Loading" as const, path: file.path }),
+      semanticRequest: () => SemanticRequestLoading({ path: file.path }),
     }),
     [
       FetchSemantic({
@@ -538,35 +164,35 @@ const requestSemantic = (model: ModelType, file: FileChange): UpdateReturn => {
 
 const requestMoves = (model: ModelType): UpdateReturn => {
   if (
-    model.phase !== "ready" ||
+    model.phase._tag !== "Ready" ||
     !model.semantic ||
     model.reviewScope !== "full" ||
     model.prUrl.trim() === "" ||
-    model.reviewMoves._tag === "Loading" ||
-    model.reviewMoves._tag === "Ready"
+    AsyncData.isPending(model.reviewMoves) ||
+    AsyncData.hasData(model.reviewMoves)
   ) {
     return [model, []];
   }
   return [
-    evo(model, { reviewMoves: () => ({ _tag: "Loading" as const }) }),
+    evo(model, { reviewMoves: () => ReviewMoves.Loading() }),
     [FetchMoves({ url: activeDiffUrl(model), ...activeRevision(model) })],
   ];
 };
 
 const requestGitHubReviews = (model: ModelType): UpdateReturn => {
   if (
-    model.phase !== "ready" ||
+    model.phase._tag !== "Ready" ||
     !model.showGitHubReviews ||
     model.reviewTab !== "files" ||
     !isPullRequestUrl(model.meta.url) ||
     model.prUrl.trim() === "" ||
-    model.githubReviews._tag === "Loading" ||
-    model.githubReviews._tag === "Ready"
+    AsyncData.isPending(model.githubReviews) ||
+    AsyncData.hasData(model.githubReviews)
   ) {
     return [model, []];
   }
   return [
-    evo(model, { githubReviews: () => ({ _tag: "Loading" as const }) }),
+    evo(model, { githubReviews: () => GitHubReviews.Loading() }),
     [FetchGitHubReviews({ url: model.meta.url })],
   ];
 };
@@ -576,35 +202,32 @@ const requestCharacterDiff = (
   file: FileChange,
 ): UpdateReturn => {
   if (
-    model.phase !== "ready" ||
+    model.phase._tag !== "Ready" ||
     model.inlineDiffMode === "off" ||
     model.prUrl.trim() === ""
   ) {
     return [model, []];
   }
   const mode = model.inlineDiffMode;
-  const requested = model.characterDiffStates.some(state => {
-    if (state._tag === "Failed") return false;
-    return state._tag === "Ready"
-      ? state.result.path === file.path &&
-          state.result.ignoreWhitespace === model.ignoreWhitespace &&
-          state.result.mode === mode
-      : state.path === file.path &&
-          state.ignoreWhitespace === model.ignoreWhitespace &&
-          state.mode === mode;
-  });
+  const requested = model.characterDiffStates.some(
+    (entry) =>
+      entry.path === file.path &&
+      entry.ignoreWhitespace === model.ignoreWhitespace &&
+      entry.mode === mode &&
+      !AsyncData.isFailure(entry.state),
+  );
   if (requested) {
     return [model, []];
   }
   return [
     evo(model, {
-      characterDiffStates: states => [
+      characterDiffStates: (states) => [
         ...states,
         {
-          _tag: "Loading" as const,
           path: file.path,
           ignoreWhitespace: model.ignoreWhitespace,
           mode,
+          state: CharacterDiffState.Loading(),
         },
       ],
     }),
@@ -623,35 +246,45 @@ const requestCharacterDiff = (
 };
 
 const requestCharacterDiffs = (model: ModelType): UpdateReturn => {
-  const selected = model.files.find(file => file.path === model.selectedPath);
-  const files = model.reviewScope === "full" ? model.files : selected === undefined ? [] : [selected];
-  return files.reduce<UpdateReturn>(
-    ([current, commands], file) => {
-      const [next, requested] = requestCharacterDiff(current, file);
-      return [next, [...commands, ...requested]];
-    },
-    [model, []],
+  const maybeSelected = Array.findFirst(
+    model.files,
+    (file) => file.path === model.selectedPath,
+  );
+  const files =
+    model.reviewScope === "full"
+      ? model.files
+      : Array.fromOption(maybeSelected);
+  return Update.combine(
+    model,
+    Array.map(
+      files,
+      (file) => (current: ModelType) => requestCharacterDiff(current, file),
+    ),
   );
 };
 
-const requestSelectedIntelligence = (model: ModelType): UpdateReturn => {
-  const selected = model.files.find(file => file.path === model.selectedPath);
-  const [withSemantic, semanticCommands] =
-    selected === undefined ? [model, []] : requestSemantic(model, selected);
-  const [withMoves, moveCommands] = requestMoves(withSemantic);
-  const [withReviews, reviewCommands] = requestGitHubReviews(withMoves);
-  const [withCharacters, characterCommands] = requestCharacterDiffs(withReviews);
-  return [
-    withCharacters,
-    [...semanticCommands, ...moveCommands, ...reviewCommands, ...characterCommands],
-  ];
-};
+const requestSelectedSemantic = (model: ModelType): UpdateReturn =>
+  Option.match(
+    Array.findFirst(model.files, (file) => file.path === model.selectedPath),
+    {
+      onNone: () => [model, []],
+      onSome: (file) => requestSemantic(model, file),
+    },
+  );
+
+const requestSelectedIntelligence = (model: ModelType): UpdateReturn =>
+  Update.combine(model, [
+    requestSelectedSemantic,
+    requestMoves,
+    requestGitHubReviews,
+    requestCharacterDiffs,
+  ]);
 
 const resetDiffAnalysis = (model: ModelType): ModelType =>
   evo(model, {
     semanticResults: () => [],
-    semanticRequest: () => ({ _tag: "Idle" as const }),
-    reviewMoves: () => ({ _tag: "Idle" as const }),
+    semanticRequest: () => SemanticRequestIdle(),
+    reviewMoves: () => ReviewMoves.Idle(),
     characterDiffStates: () => [],
     collapsedPaths: () => [],
     collapsedHunks: () => [],
@@ -660,15 +293,15 @@ const resetDiffAnalysis = (model: ModelType): ModelType =>
 
 const requestCommits = (model: ModelType): UpdateReturn => {
   if (
-    model.phase !== "ready" ||
+    model.phase._tag !== "Ready" ||
     !isPullRequestUrl(model.meta.url) ||
-    model.commits._tag === "Loading" ||
-    model.commits._tag === "Ready"
+    AsyncData.isPending(model.commits) ||
+    AsyncData.hasData(model.commits)
   ) {
     return [model, []];
   }
   return [
-    evo(model, { commits: () => ({ _tag: "Loading" as const }) }),
+    evo(model, { commits: () => PullCommits.Loading() }),
     [
       FetchCommits({
         url: model.meta.url,
@@ -681,11 +314,12 @@ const requestCommits = (model: ModelType): UpdateReturn => {
 
 const requestCommitDiff = (model: ModelType, sha: string): UpdateReturn => {
   if (sha === "" || !isPullRequestUrl(model.meta.url)) return [model, []];
-  if (model.commitDiff._tag === "Loading" && model.commitDiff.sha === sha) {
+  if (AsyncData.isPending(model.commitDiff)) {
     return [model, []];
   }
-  if (model.commitDiff._tag === "Ready" && model.commitDiff.sha === sha) {
-    const files = model.commitDiff.files;
+  const cached = Option.getOrUndefined(AsyncData.getData(model.commitDiff));
+  if (cached?.sha === sha) {
+    const files = cached.files;
     const ready = resetDiffAnalysis(
       evo(model, {
         selectedCommit: () => sha,
@@ -698,7 +332,7 @@ const requestCommitDiff = (model: ModelType, sha: string): UpdateReturn => {
     resetDiffAnalysis(
       evo(model, {
         selectedCommit: () => sha,
-        commitDiff: () => ({ _tag: "Loading" as const, sha }),
+        commitDiff: () => CommitDiff.Loading(),
       }),
     ),
     [FetchCommitDiff({ repository: model.meta.repository, sha })],
@@ -708,14 +342,15 @@ const requestCommitDiff = (model: ModelType, sha: string): UpdateReturn => {
 const requestReviewLocation = (model: ModelType): UpdateReturn => {
   if (model.reviewTab === "files") return requestSelectedIntelligence(model);
   const [withCommits, commitCommands] = requestCommits(model);
-  if (model.selectedCommit === "" || withCommits.commits._tag !== "Ready") {
+  if (model.selectedCommit === "" || !AsyncData.hasData(withCommits.commits)) {
     return [withCommits, commitCommands];
   }
-  if (!withCommits.commits.commits.some(commit => commit.sha === model.selectedCommit)) {
+  const commits = AsyncData.getOrElse(withCommits.commits, () => []);
+  if (!commits.some((commit) => commit.sha === model.selectedCommit)) {
     return synchronizeReviewUrl(
       evo(withCommits, {
         selectedCommit: () => "",
-        commitDiff: () => ({ _tag: "Idle" as const }),
+        commitDiff: () => CommitDiff.Idle(),
       }),
       commitCommands,
     );
@@ -729,66 +364,64 @@ const requestReviewLocation = (model: ModelType): UpdateReturn => {
 
 const beginReviewLoad = (model: ModelType, url: string): ModelType =>
   evo(model, {
-    phase: () => "loading" as const,
-    error: () => "",
-    githubInput: () => url,
-    githubInputError: () => "",
+    phase: () => ReviewLoading(),
+    githubLocation: () => GitHubLocation.replaceValue(url, true),
     prUrl: () => url,
-    reviewRevision: () => ({ _tag: "Idle" as const }),
+    reviewRevision: () => ReviewRevisionIdle(),
     filter: () => "",
     files: () => [],
     pullRequestFiles: () => [],
     semanticResults: () => [],
-    semanticRequest: () => ({ _tag: "Idle" as const }),
-    reviewMoves: () => ({ _tag: "Idle" as const }),
+    semanticRequest: () => SemanticRequestIdle(),
+    reviewMoves: () => ReviewMoves.Idle(),
     characterDiffStates: () => [],
     reviewedPaths: () => [],
     collapsedPaths: () => [],
     collapsedHunks: () => [],
     fullFileStates: () => [],
-    githubReviews: () => ({ _tag: "Idle" as const }),
+    githubReviews: () => GitHubReviews.Idle(),
     collapsedReviewThreads: () => [],
     replyDrafts: () => [],
     replyStates: () => [],
     reviewBody: () => "",
-    reviewSubmission: () => ({ _tag: "Idle" as const }),
-    commits: () => ({ _tag: "Idle" as const }),
-    commitDiff: () => ({ _tag: "Idle" as const }),
-    toolbarMenu: () => "none" as const,
+    reviewSubmission: () => ReviewSubmission.Idle(),
+    commits: () => PullCommits.Idle(),
+    commitDiff: () => CommitDiff.Idle(),
+    diffOptionsPopover: initialDiffOptionsPopover,
+    openReviewPopover: initialOpenReviewPopover,
   });
 
 const sampleModel = (model: ModelType): ModelType =>
   evo(model, {
     page: () => "review" as const,
-    phase: () => "ready" as const,
-    error: () => "",
-    githubInput: () => "",
-    githubInputError: () => "",
+    phase: () => ReviewReady(),
+    githubLocation: () => GitHubLocation.replaceValue("", false),
     prUrl: () => "",
     meta: () => sampleMeta,
-    reviewRevision: () => ({ _tag: "Idle" as const }),
+    reviewRevision: () => ReviewRevisionIdle(),
     files: () => sampleFiles,
     pullRequestFiles: () => sampleFiles,
     reviewTab: () => "files" as const,
-    commits: () => ({ _tag: "Idle" as const }),
+    commits: () => PullCommits.Idle(),
     selectedCommit: () => "",
-    commitDiff: () => ({ _tag: "Idle" as const }),
-    toolbarMenu: () => "none" as const,
+    commitDiff: () => CommitDiff.Idle(),
+    diffOptionsPopover: initialDiffOptionsPopover,
+    openReviewPopover: initialOpenReviewPopover,
     selectedPath: () => sampleFiles[0]?.path ?? "",
     reviewedPaths: () => [],
     semanticResults: () => [],
-    semanticRequest: () => ({ _tag: "Idle" as const }),
-    reviewMoves: () => ({ _tag: "Idle" as const }),
+    semanticRequest: () => SemanticRequestIdle(),
+    reviewMoves: () => ReviewMoves.Idle(),
     characterDiffStates: () => [],
     collapsedPaths: () => [],
     collapsedHunks: () => [],
     fullFileStates: () => [],
-    githubReviews: () => ({ _tag: "Idle" as const }),
+    githubReviews: () => GitHubReviews.Idle(),
     collapsedReviewThreads: () => [],
     replyDrafts: () => [],
     replyStates: () => [],
     reviewBody: () => "",
-    reviewSubmission: () => ({ _tag: "Idle" as const }),
+    reviewSubmission: () => ReviewSubmission.Idle(),
     showGitHubReviews: () => true,
     syntaxHighlighting: () => true,
   });
@@ -829,7 +462,7 @@ const synchronizeReviewUrl = (
   model: ModelType,
   commands: ReadonlyArray<Command.Command<Message>>,
 ): UpdateReturn => {
-  if (model.phase !== "ready" || model.prUrl !== model.meta.url) {
+  if (model.phase._tag !== "Ready" || model.prUrl !== model.meta.url) {
     return [model, commands];
   }
   const href = localReviewUrl(model.meta.url, reviewOptions(model));
@@ -838,178 +471,254 @@ const synchronizeReviewUrl = (
     : [model, [...commands, Navigate({ href, method: "replace" })]];
 };
 
+const changeReviewLocation = (
+  model: ModelType,
+  reviewUrl: string,
+  search: string,
+): UpdateReturn => {
+  const options = reviewOptionsFromSearch(search);
+  const tabChanged = options.reviewTab !== model.reviewTab;
+  const withOptions = applyReviewOptions(model, options);
+  if (reviewUrl === model.prUrl && model.phase._tag === "Loading") {
+    return [withOptions, []];
+  }
+  if (
+    reviewUrl === model.prUrl ||
+    (model.prUrl !== "" && reviewUrl === model.meta.url)
+  ) {
+    const located =
+      tabChanged && options.reviewTab === "files"
+        ? resetDiffAnalysis(
+            evo(withOptions, {
+              files: () => model.pullRequestFiles,
+              commitDiff: () => CommitDiff.Idle(),
+            }),
+          )
+        : withOptions;
+    return requestReviewLocation(located);
+  }
+  return [
+    beginReviewLoad(withOptions, reviewUrl),
+    [FetchReview({ url: reviewUrl })],
+  ];
+};
+
+const showNotFound = (model: ModelType): UpdateReturn => [
+  evo(model, {
+    phase: () =>
+      ReviewFailed({ error: "That Hunker review URL is not recognized." }),
+  }),
+  [],
+];
+
+const requestRevisionCheck = (model: ModelType): UpdateReturn => {
+  if (
+    model.page !== "review" ||
+    model.phase._tag !== "Ready" ||
+    model.meta.backing.source !== "local" ||
+    !isPullRequestUrl(model.meta.url) ||
+    model.reviewRevision._tag === "Checking"
+  ) {
+    return [model, []];
+  }
+  return [
+    evo(model, {
+      reviewRevision: () => ReviewRevisionChecking(),
+    }),
+    [
+      CheckReviewRevision({
+        url: model.meta.url,
+        headOid: model.meta.backing.headOid,
+      }),
+    ],
+  ];
+};
+
 export const update = (model: ModelType, message: Message): UpdateReturn =>
   M.value(message).pipe(
     M.withReturnType<UpdateReturn>(),
     M.tagsExhaustive({
-      ChangedPrUrl: ({ value }) => [
-        evo(model, {
-          githubInput: () => value,
-          githubInputError: () => "",
-        }),
-        [],
-      ],
-      SubmittedPrUrl: () => {
-        if (model.phase === "loading" || model.githubInput.trim() === "") {
-          return [model, []];
-        }
-        const href = localLocationFromGitHubUrl(model.githubInput, {
-          ...reviewOptions(model),
-          selectedPath: "",
-          reviewTab: "files",
-          selectedCommit: "",
+      GotGitHubLocationMessage: ({ message }) => {
+        const [githubLocation, commands, maybeOutMessage] =
+          GitHubLocation.update(model.githubLocation, message);
+        const next = evo(model, {
+          githubLocation: () => githubLocation,
         });
-        return href === undefined
-          ? [
-              evo(model, {
-                githubInputError: () =>
-                  "Paste a github.com repository, pull request, compare, commit, or file URL.",
+        const mappedCommands = Command.mapMessages(commands, (message) =>
+          GotGitHubLocationMessage({ message }),
+        );
+        return Option.match(maybeOutMessage, {
+          onNone: () => [next, mappedCommands],
+          onSome: ({ value }) => {
+            const href = localLocationFromGitHubUrl(value, {
+              ...reviewOptions(model),
+              selectedPath: "",
+              reviewTab: "files",
+              selectedCommit: "",
+            });
+            if (href === undefined) {
+              return [
+                evo(next, {
+                  githubLocation: GitHubLocation.showInvalidLocation,
+                }),
+                mappedCommands,
+              ];
+            }
+            const [openReviewPopover, closeCommands] = Popover.close(
+              next.openReviewPopover,
+            );
+            return [
+              evo(next, {
+                openReviewPopover: () => openReviewPopover,
               }),
-              [],
-            ]
-          : [
-              evo(model, {
-                githubInputError: () => "",
-                toolbarMenu: () => "none" as const,
-              }),
-              [Navigate({ href, method: "push" })],
+              [
+                ...mappedCommands,
+                ...Command.mapMessages(closeCommands, (message) =>
+                  GotOpenReviewPopoverMessage({ message }),
+                ),
+                Navigate({ href, method: "push" }),
+              ],
             ];
+          },
+        });
       },
-      RefreshedReview: () => {
-        if (model.phase === "loading" || model.prUrl.trim() === "") return [model, []];
+      ClickedRefreshReview: () => {
+        if (model.phase._tag === "Loading" || model.prUrl.trim() === "")
+          return [model, []];
         const url = model.meta.url || model.prUrl.trim();
         return [beginReviewLoad(model, url), [FetchReview({ url })]];
       },
-      RequestedRevisionCheck: () => {
-        if (
-          model.page !== "review" ||
-          model.phase !== "ready" ||
-          model.meta.backing.source !== "local" ||
-          !isPullRequestUrl(model.meta.url) ||
-          model.reviewRevision._tag === "Checking"
-        ) {
-          return [model, []];
-        }
+      TickedRevisionPoll: () => requestRevisionCheck(model),
+      ClickedCheckReviewRevision: () => requestRevisionCheck(model),
+      GotDiffOptionsPopoverMessage: ({ message }) => {
+        const [diffOptionsPopover, commands] = Popover.update(
+          model.diffOptionsPopover,
+          message,
+        );
         return [
-          evo(model, {
-            reviewRevision: () => ({ _tag: "Checking" as const }),
-          }),
-          [
-            CheckReviewRevision({
-              url: model.meta.url,
-              headOid: model.meta.backing.headOid,
-            }),
-          ],
+          evo(model, { diffOptionsPopover: () => diffOptionsPopover }),
+          Command.mapMessages(commands, (message) =>
+            GotDiffOptionsPopoverMessage({ message }),
+          ),
         ];
       },
-      ToggledToolbarMenu: ({ value }) => [
-        evo(model, {
-          toolbarMenu: current => current === value ? "none" : value,
-        }),
-        [],
-      ],
-      ClosedToolbarMenus: () => [
-        evo(model, { toolbarMenu: () => "none" as const }),
-        [],
-      ],
-      ChangedToolbarCompact: ({ value }) =>
+      GotOpenReviewPopoverMessage: ({ message }) => {
+        const [openReviewPopover, commands] = Popover.update(
+          model.openReviewPopover,
+          message,
+        );
+        return [
+          evo(model, { openReviewPopover: () => openReviewPopover }),
+          Command.mapMessages(commands, (message) =>
+            GotOpenReviewPopoverMessage({ message }),
+          ),
+        ];
+      },
+      UpdatedToolbarCompact: ({ value }) =>
         value === model.toolbarCompact
           ? [model, []]
           : [evo(model, { toolbarCompact: () => value }), []],
-      ChangedBrowserUrl: ({ pathname, search }) => {
-        if (pathname === "/") return [sampleModel(model), []];
-        const repositoryRoute = repositoryRouteFromPathname(pathname);
-        if (repositoryRoute !== undefined) {
-          return loadRepositoryLocation(
-            model,
-            repositoryRoute,
-            repositoryOptionsFromSearch(search),
-          );
-        }
-        const url = githubUrlFromPathname(pathname);
-        if (url === undefined) {
-          return [
-            evo(model, {
-              phase: () => "error" as const,
-              error: () => "That Hunker review URL is not recognized.",
-            }),
-            [],
-          ];
-        }
-        const options = reviewOptionsFromSearch(search);
-        const tabChanged = options.reviewTab !== model.reviewTab;
-        const withOptions = applyReviewOptions(model, options);
-        if (url === model.prUrl && model.phase === "loading") {
-          return [withOptions, []];
-        }
-        if (url === model.prUrl || url === model.meta.url) {
-          const located =
-            tabChanged && options.reviewTab === "files"
-              ? resetDiffAnalysis(
-                  evo(withOptions, {
-                    files: () => model.pullRequestFiles,
-                    commitDiff: () => ({ _tag: "Idle" as const }),
-                  }),
-                )
-              : withOptions;
-          return requestReviewLocation(located);
-        }
-        return [beginReviewLoad(withOptions, url), [FetchReview({ url })]];
+      ChangedUrl: ({ url }) => {
+        const search = Option.getOrElse(url.search, () => "");
+        return M.value(urlToAppRoute(url)).pipe(
+          M.withReturnType<UpdateReturn>(),
+          M.tagsExhaustive({
+            Home: () => [sampleModel(model), []],
+            Repository: ({ owner, repository }) =>
+              loadRepositoryLocation(
+                model,
+                { owner, name: repository },
+                repositoryOptionsFromSearch(search),
+              ),
+            Pull: (route) =>
+              changeReviewLocation(
+                model,
+                reviewRouteToGitHubUrl(route),
+                search,
+              ),
+            Compare: (route) =>
+              changeReviewLocation(
+                model,
+                reviewRouteToGitHubUrl(route),
+                search,
+              ),
+            Commit: (route) =>
+              changeReviewLocation(
+                model,
+                reviewRouteToGitHubUrl(route),
+                search,
+              ),
+            NotFound: () => showNotFound(model),
+          }),
+        );
       },
-      RequestedNavigation: ({ href, external }) => [
-        model,
-        [Navigate({ href, method: external ? "load" : "push" })],
-      ],
-      CompletedNavigation: () => [model, []],
-      LoadedReview: ({ requestedUrl, meta, files }) => {
+      ClickedLink: ({ request }) =>
+        M.value(request).pipe(
+          M.withReturnType<UpdateReturn>(),
+          M.tagsExhaustive({
+            Internal: ({ url }) => [
+              model,
+              [Navigate({ href: Url.toString(url), method: "push" })],
+            ],
+            External: ({ href }) => [
+              model,
+              [Navigate({ href, method: "load" })],
+            ],
+          }),
+        ),
+      CompletedNavigate: () => [model, []],
+      SucceededFetchReview: ({ requestedUrl, meta, files }) => {
         if (!isCurrentReviewRequest(model, requestedUrl)) return [model, []];
         const next = evo(model, {
           page: () => "review" as const,
-          phase: () => "ready" as const,
-          githubInput: () => meta.url,
-          githubInputError: () => "",
+          phase: () => ReviewReady(),
+          githubLocation: () => GitHubLocation.replaceValue(meta.url, false),
           prUrl: () => meta.url,
           meta: () => meta,
-          reviewRevision: () => ({ _tag: "Idle" as const }),
+          reviewRevision: () => ReviewRevisionIdle(),
           files: () => files,
           pullRequestFiles: () => files,
-          selectedPath: selectedPath =>
-            files.some(file => file.path === selectedPath)
+          selectedPath: (selectedPath) =>
+            files.some((file) => file.path === selectedPath)
               ? selectedPath
               : (files[0]?.path ?? ""),
           reviewedPaths: () => [],
           semanticResults: () => [],
-          semanticRequest: () => ({ _tag: "Idle" as const }),
-          reviewMoves: () => ({ _tag: "Idle" as const }),
+          semanticRequest: () => SemanticRequestIdle(),
+          reviewMoves: () => ReviewMoves.Idle(),
           characterDiffStates: () => [],
           collapsedPaths: () => [],
           collapsedHunks: () => [],
           fullFileStates: () => [],
-          githubReviews: () => ({ _tag: "Idle" as const }),
+          githubReviews: () => GitHubReviews.Idle(),
           collapsedReviewThreads: () => [],
           replyDrafts: () => [],
           replyStates: () => [],
           reviewBody: () => "",
-          reviewSubmission: () => ({ _tag: "Idle" as const }),
+          reviewSubmission: () => ReviewSubmission.Idle(),
         });
         const [loaded, commands] = requestReviewLocation(next);
         return synchronizeReviewUrl(loaded, commands);
       },
-      FailedReview: ({ requestedUrl, error }) =>
+      FailedFetchReview: ({ requestedUrl, error }) =>
         isCurrentReviewRequest(model, requestedUrl)
           ? [
-              evo(model, { phase: () => "error" as const, error: () => error }),
+              evo(model, {
+                phase: () => ReviewFailed({ error }),
+                githubLocation: (location) =>
+                  GitHubLocation.setLoading(location, false),
+              }),
               [],
             ]
           : [model, []],
-      CheckedReviewRevision: ({
+      SucceededCheckReviewRevision: ({
         requestedUrl,
         pinnedHeadOid,
         latestHeadOid,
         checkedAt,
         current,
       }) =>
-        model.phase === "ready" &&
+        model.phase._tag === "Ready" &&
         model.meta.url === requestedUrl &&
         model.meta.backing.source === "local" &&
         model.meta.backing.headOid === pinnedHeadOid
@@ -1017,40 +726,36 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
               evo(model, {
                 reviewRevision: () =>
                   current
-                    ? ({ _tag: "Current" as const, checkedAt })
-                    : ({
-                        _tag: "Available" as const,
-                        latestHeadOid,
-                        checkedAt,
-                      }),
+                    ? ReviewRevisionCurrent({ checkedAt })
+                    : ReviewRevisionAvailable({ latestHeadOid, checkedAt }),
               }),
               [],
             ]
           : [model, []],
-      FailedRevisionCheck: ({ requestedUrl, error }) =>
-        model.phase === "ready" &&
+      FailedCheckReviewRevision: ({ requestedUrl, error }) =>
+        model.phase._tag === "Ready" &&
         model.meta.url === requestedUrl &&
         model.meta.backing.source === "local"
           ? [
               evo(model, {
-                reviewRevision: () => ({ _tag: "Failed" as const, error }),
+                reviewRevision: () => ReviewRevisionFailed({ error }),
               }),
               [],
             ]
           : [model, []],
-      LoadedCommits: ({ requestedUrl, commits }) => {
+      SucceededFetchCommits: ({ requestedUrl, commits }) => {
         if (!isCurrentPullRequest(model, requestedUrl)) return [model, []];
         const loaded = evo(model, {
-          commits: () => ({ _tag: "Ready" as const, commits }),
+          commits: () => PullCommits.Success({ data: commits }),
         });
         if (loaded.reviewTab !== "commits" || loaded.selectedCommit === "") {
           return [loaded, []];
         }
-        if (!commits.some(commit => commit.sha === loaded.selectedCommit)) {
+        if (!commits.some((commit) => commit.sha === loaded.selectedCommit)) {
           return synchronizeReviewUrl(
             evo(loaded, {
               selectedCommit: () => "",
-              commitDiff: () => ({ _tag: "Idle" as const }),
+              commitDiff: () => CommitDiff.Idle(),
             }),
             [],
           );
@@ -1061,276 +766,288 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         );
         return synchronizeReviewUrl(withDiff, commands);
       },
-      FailedCommits: ({ requestedUrl, error }) =>
+      FailedFetchCommits: ({ requestedUrl, error }) =>
         isCurrentPullRequest(model, requestedUrl)
           ? [
               evo(model, {
-                commits: () => ({ _tag: "Failed" as const, error }),
+                commits: () => PullCommits.Failure({ error }),
               }),
               [],
             ]
           : [model, []],
-      LoadedCommitDiff: ({ sha, files }) => {
+      SucceededFetchCommitDiff: ({ sha, files }) => {
         if (
           model.reviewTab !== "commits" ||
           model.selectedCommit !== sha ||
-          model.commitDiff._tag !== "Loading" ||
-          model.commitDiff.sha !== sha
+          !AsyncData.isPending(model.commitDiff)
         ) {
           return [model, []];
         }
         const next = evo(model, {
           files: () => files,
-          commitDiff: () => ({ _tag: "Ready" as const, sha, files }),
-          selectedPath: selectedPath =>
-            files.some(file => file.path === selectedPath)
+          commitDiff: () => CommitDiff.Success({ data: { sha, files } }),
+          selectedPath: (selectedPath) =>
+            files.some((file) => file.path === selectedPath)
               ? selectedPath
               : (files[0]?.path ?? ""),
         });
         const [loaded, commands] = requestSelectedIntelligence(next);
         return synchronizeReviewUrl(loaded, commands);
       },
-      FailedCommitDiff: ({ sha, error }) =>
+      FailedFetchCommitDiff: ({ sha, error }) =>
         model.reviewTab === "commits" && model.selectedCommit === sha
           ? [
               evo(model, {
-                commitDiff: () => ({ _tag: "Failed" as const, sha, error }),
+                commitDiff: () => CommitDiff.Failure({ error }),
               }),
               [],
             ]
           : [model, []],
-      LoadedRepositoryFiles: ({ repository, files }) =>
+      SucceededFetchRepositoryFiles: ({ repository, files }) =>
         repositoryFilesLoaded(model, repository, files),
-      FailedRepositoryFiles: ({ repository, error, missing }) =>
+      FailedFetchRepositoryFiles: ({ repository, error, missing }) =>
         repositoryFilesFailed(model, repository, error, missing),
-      RequestedRepositoryClone: ({ destination }) =>
+      ClickedCloneRepository: ({ destination }) =>
         requestRepositoryClone(model, destination),
-      ClonedRepository: ({ repository, path }) =>
+      SucceededCloneRepository: ({ repository, path }) =>
         repositoryCloned(model, repository, path),
-      FailedRepositoryClone: ({ repository, error }) =>
+      FailedCloneRepository: ({ repository, error }) =>
         repositoryCloneFailed(model, repository, error),
-      ChangedRepositoryQuery: ({ value }) => changeRepositoryQuery(model, value),
+      UpdatedRepositoryQuery: ({ value }) =>
+        changeRepositoryQuery(model, value),
       SubmittedRepositorySearch: () => submitRepositorySearch(model),
-      LoadedRepositorySearch: input => repositorySearchLoaded(model, input),
-      FailedRepositorySearch: ({ repository, query, error }) =>
+      SucceededSearchRepository: (input) =>
+        repositorySearchLoaded(model, input),
+      FailedSearchRepository: ({ repository, query, error }) =>
         repositorySearchFailed(model, repository, query, error),
       SelectedRepositoryFile: ({ path }) => selectRepositoryFile(model, path),
-      ClosedRepositoryFile: () => closeRepositoryFile(model),
-      LoadedRepositoryFile: input => repositoryFileLoaded(model, input),
-      FailedRepositoryFile: ({ repository, path, error }) =>
+      ClickedCloseRepositoryFile: () => closeRepositoryFile(model),
+      SucceededFetchRepositoryFile: (input) =>
+        repositoryFileLoaded(model, input),
+      FailedFetchRepositoryFile: ({ repository, path, error }) =>
         repositoryFileFailed(model, repository, path, error),
-      LoadedSemantic: ({ requestedUrl, path, result }) =>
+      SucceededFetchSemantic: ({ requestedUrl, path, result }) =>
         isCurrentDiffRequest(model, requestedUrl)
           ? [
               evo(model, {
-                semanticResults: results => [
-                  ...results.filter(item => item.path !== path),
+                semanticResults: (results) => [
+                  ...results.filter((item) => item.path !== path),
                   result,
                 ],
-                semanticRequest: request =>
+                semanticRequest: (request) =>
                   request._tag === "Loading" && request.path === path
-                    ? ({ _tag: "Idle" as const })
+                    ? SemanticRequestIdle()
                     : request,
               }),
               [],
             ]
           : [model, []],
-      FailedSemantic: ({ requestedUrl, path, error }) =>
+      FailedFetchSemantic: ({ requestedUrl, path, error }) =>
         isCurrentDiffRequest(model, requestedUrl)
           ? [
               evo(model, {
-                semanticRequest: request =>
+                semanticRequest: (request) =>
                   request._tag === "Loading" && request.path === path
-                    ? ({ _tag: "Failed" as const, path, error })
+                    ? SemanticRequestFailed({ path, error })
                     : request,
               }),
               [],
             ]
           : [model, []],
-      LoadedMoves: ({ requestedUrl, moves }) =>
+      SucceededFetchMoves: ({ requestedUrl, moves }) =>
         isCurrentDiffRequest(model, requestedUrl)
           ? [
               evo(model, {
-                reviewMoves: () => ({ _tag: "Ready" as const, moves }),
+                reviewMoves: () => ReviewMoves.Success({ data: moves }),
               }),
               [],
             ]
           : [model, []],
-      FailedMoves: ({ requestedUrl, error }) =>
+      FailedFetchMoves: ({ requestedUrl, error }) =>
         isCurrentDiffRequest(model, requestedUrl)
           ? [
               evo(model, {
-                reviewMoves: () => ({ _tag: "Failed" as const, error }),
+                reviewMoves: () => ReviewMoves.Failure({ error }),
               }),
               [],
             ]
           : [model, []],
-      LoadedCharacterDiff: ({ requestedUrl, result }) =>
+      SucceededFetchCharacterDiff: ({ requestedUrl, result }) =>
         isCurrentDiffRequest(model, requestedUrl)
           ? [
               evo(model, {
-                characterDiffStates: states => [
-                  ...states.filter(state =>
-                    state._tag === "Ready"
-                      ? state.result.path !== result.path ||
-                        state.result.ignoreWhitespace !== result.ignoreWhitespace ||
-                        state.result.mode !== result.mode
-                      : state.path !== result.path ||
-                        state.ignoreWhitespace !== result.ignoreWhitespace ||
-                        state.mode !== result.mode,
-                  ),
-                  { _tag: "Ready" as const, result },
-                ],
-              }),
-              [],
-            ]
-          : [model, []],
-      FailedCharacterDiff: ({ requestedUrl, path, ignoreWhitespace, mode, error }) =>
-        isCurrentDiffRequest(model, requestedUrl)
-          ? [
-              evo(model, {
-                characterDiffStates: states => [
-                  ...states.filter(state =>
-                    state._tag === "Ready"
-                      ? state.result.path !== path ||
-                        state.result.ignoreWhitespace !== ignoreWhitespace ||
-                        state.result.mode !== mode
-                      : state.path !== path ||
-                        state.ignoreWhitespace !== ignoreWhitespace ||
-                        state.mode !== mode,
+                characterDiffStates: (states) => [
+                  ...states.filter(
+                    (entry) =>
+                      entry.path !== result.path ||
+                      entry.ignoreWhitespace !== result.ignoreWhitespace ||
+                      entry.mode !== result.mode,
                   ),
                   {
-                    _tag: "Failed" as const,
-                    path,
-                    ignoreWhitespace,
-                    mode,
-                    error,
+                    path: result.path,
+                    ignoreWhitespace: result.ignoreWhitespace,
+                    mode: result.mode,
+                    state: CharacterDiffState.Success({ data: result }),
                   },
                 ],
               }),
               [],
             ]
           : [model, []],
-      LoadedFullFile: ({ requestedUrl, path, oldText, newText }) => {
+      FailedFetchCharacterDiff: ({
+        requestedUrl,
+        path,
+        ignoreWhitespace,
+        mode,
+        error,
+      }) =>
+        isCurrentDiffRequest(model, requestedUrl)
+          ? [
+              evo(model, {
+                characterDiffStates: (states) => [
+                  ...states.filter(
+                    (entry) =>
+                      entry.path !== path ||
+                      entry.ignoreWhitespace !== ignoreWhitespace ||
+                      entry.mode !== mode,
+                  ),
+                  {
+                    path,
+                    ignoreWhitespace,
+                    mode,
+                    state: CharacterDiffState.Failure({ error }),
+                  },
+                ],
+              }),
+              [],
+            ]
+          : [model, []],
+      SucceededFetchFullFile: ({ requestedUrl, path, oldText, newText }) => {
         if (!isCurrentDiffRequest(model, requestedUrl)) return [model, []];
         const requested = model.fullFileStates.some(
-          state => state.path === path && state._tag === "Loading",
+          (entry) => entry.path === path && AsyncData.isPending(entry.state),
         );
         return requested
           ? [
               evo(model, {
-                fullFileStates: states => [
-                  ...states.filter(state => state.path !== path),
-                  { _tag: "Ready" as const, path, oldText, newText },
+                fullFileStates: (states) => [
+                  ...states.filter((entry) => entry.path !== path),
+                  {
+                    path,
+                    state: FullFileState.Success({
+                      data: { oldText, newText },
+                    }),
+                  },
                 ],
               }),
               [],
             ]
           : [model, []];
       },
-      FailedFullFile: ({ requestedUrl, path, error }) => {
+      FailedFetchFullFile: ({ requestedUrl, path, error }) => {
         if (!isCurrentDiffRequest(model, requestedUrl)) return [model, []];
         const requested = model.fullFileStates.some(
-          state => state.path === path && state._tag === "Loading",
+          (entry) => entry.path === path && AsyncData.isPending(entry.state),
         );
         return requested
           ? [
               evo(model, {
-                fullFileStates: states => [
-                  ...states.filter(state => state.path !== path),
-                  { _tag: "Failed" as const, path, error },
+                fullFileStates: (states) => [
+                  ...states.filter((entry) => entry.path !== path),
+                  {
+                    path,
+                    state: FullFileState.Failure({ error }),
+                  },
                 ],
               }),
               [],
             ]
           : [model, []];
       },
-      LoadedGitHubReviews: ({ requestedUrl, comments }) =>
+      SucceededFetchGitHubReviews: ({ requestedUrl, comments }) =>
         isCurrentPullRequest(model, requestedUrl)
           ? [
               evo(model, {
-                githubReviews: () => ({ _tag: "Ready" as const, comments }),
+                githubReviews: () => GitHubReviews.Success({ data: comments }),
                 collapsedReviewThreads: () =>
                   comments
-                    .filter(comment => comment.id === comment.rootId && comment.resolved)
-                    .map(comment => comment.id),
+                    .filter(
+                      (comment) =>
+                        comment.id === comment.rootId && comment.resolved,
+                    )
+                    .map((comment) => comment.id),
               }),
               [],
             ]
           : [model, []],
-      FailedGitHubReviews: ({ requestedUrl, error }) =>
+      FailedFetchGitHubReviews: ({ requestedUrl, error }) =>
         isCurrentPullRequest(model, requestedUrl)
           ? [
               evo(model, {
-                githubReviews: () => ({ _tag: "Failed" as const, error }),
+                githubReviews: () => GitHubReviews.Failure({ error }),
               }),
               [],
             ]
           : [model, []],
-      ChangedReplyDraft: ({ commentId, body }) => [
+      UpdatedReplyDraft: ({ commentId, body }) => [
         evo(model, {
-          replyDrafts: drafts => [
-            ...drafts.filter(draft => draft.commentId !== commentId),
+          replyDrafts: (drafts) => [
+            ...drafts.filter((draft) => draft.commentId !== commentId),
             { commentId, body },
           ],
-          replyStates: states => states.filter(state => state.commentId !== commentId),
+          replyStates: (states) =>
+            states.filter((state) => state.commentId !== commentId),
         }),
         [],
       ],
       SubmittedReply: ({ commentId }) => {
-        const body = model.replyDrafts.find(
-          draft => draft.commentId === commentId,
-        )?.body.trim();
+        const body = model.replyDrafts
+          .find((draft) => draft.commentId === commentId)
+          ?.body.trim();
         const loading = model.replyStates.some(
-          state => state.commentId === commentId && state._tag === "Loading",
+          (state) => state.commentId === commentId && state._tag === "Loading",
         );
         if (body === undefined || body === "" || loading) return [model, []];
         return [
           evo(model, {
-            replyStates: states => [
-              ...states.filter(state => state.commentId !== commentId),
-              { _tag: "Loading" as const, commentId },
+            replyStates: (states) => [
+              ...states.filter((state) => state.commentId !== commentId),
+              ReplyLoading({ commentId }),
             ],
           }),
           [PostReviewReply({ url: model.meta.url, commentId, body })],
         ];
       },
-      PostedReply: ({ comment }) => [
+      SucceededPostReviewReply: ({ comment }) => [
         evo(model, {
-          githubReviews: reviews =>
-            reviews._tag === "Ready"
-              ? {
-                  _tag: "Ready" as const,
-                  comments: [...reviews.comments, comment],
-                }
-              : reviews,
-          replyDrafts: drafts =>
-            drafts.filter(draft => draft.commentId !== comment.rootId),
-          replyStates: states =>
-            states.filter(state => state.commentId !== comment.rootId),
+          githubReviews: AsyncData.map((comments) => [...comments, comment]),
+          replyDrafts: (drafts) =>
+            drafts.filter((draft) => draft.commentId !== comment.rootId),
+          replyStates: (states) =>
+            states.filter((state) => state.commentId !== comment.rootId),
         }),
         [],
       ],
-      FailedReply: ({ commentId, error }) => [
+      FailedPostReviewReply: ({ commentId, error }) => [
         evo(model, {
-          replyStates: states => [
-            ...states.filter(state => state.commentId !== commentId),
-            { _tag: "Failed" as const, commentId, error },
+          replyStates: (states) => [
+            ...states.filter((state) => state.commentId !== commentId),
+            ReplyFailed({ commentId, error }),
           ],
         }),
         [],
       ],
-      ChangedReviewBody: ({ body }) => [
+      UpdatedReviewBody: ({ body }) => [
         evo(model, {
           reviewBody: () => body,
-          reviewSubmission: () => ({ _tag: "Idle" as const }),
+          reviewSubmission: () => ReviewSubmission.Idle(),
         }),
         [],
       ],
       SubmittedReview: ({ event }) => {
         const body = model.reviewBody.trim();
         if (
-          model.reviewSubmission._tag === "Loading" ||
+          AsyncData.isPending(model.reviewSubmission) ||
           !isPullRequestUrl(model.meta.url) ||
           (event !== "APPROVE" && body === "")
         ) {
@@ -1338,25 +1055,25 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         }
         return [
           evo(model, {
-            reviewSubmission: () => ({ _tag: "Loading" as const, event }),
+            reviewSubmission: () => ReviewSubmission.Loading(),
           }),
           [PostPullRequestReview({ url: model.meta.url, body, event })],
         ];
       },
-      PostedReview: ({ event }) => [
+      SucceededPostPullRequestReview: ({ event }) => [
         evo(model, {
           reviewBody: () => "",
-          reviewSubmission: () => ({ _tag: "Succeeded" as const, event }),
+          reviewSubmission: () => ReviewSubmission.Success({ data: event }),
         }),
         [],
       ],
-      FailedReviewSubmission: ({ error }) => [
+      FailedPostPullRequestReview: ({ error }) => [
         evo(model, {
-          reviewSubmission: () => ({ _tag: "Failed" as const, error }),
+          reviewSubmission: () => ReviewSubmission.Failure({ error }),
         }),
         [],
       ],
-      ChangedFilter: ({ value }) => [evo(model, { filter: () => value }), []],
+      UpdatedFilter: ({ value }) => [evo(model, { filter: () => value }), []],
       SelectedFile: ({ path }) => {
         const next = evo(model, {
           selectedPath: () => path,
@@ -1372,10 +1089,10 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
             evo(model, {
               reviewTab: () => "files" as const,
               selectedCommit: () => "",
-              commitDiff: () => ({ _tag: "Idle" as const }),
+              commitDiff: () => CommitDiff.Idle(),
               files: () => files,
-              selectedPath: selectedPath =>
-                files.some(file => file.path === selectedPath)
+              selectedPath: (selectedPath) =>
+                files.some((file) => file.path === selectedPath)
                   ? selectedPath
                   : (files[0]?.path ?? ""),
             }),
@@ -1387,7 +1104,7 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
           evo(model, {
             reviewTab: () => "commits" as const,
             selectedCommit: () => "",
-            commitDiff: () => ({ _tag: "Idle" as const }),
+            commitDiff: () => CommitDiff.Idle(),
           }),
         );
         const [loaded, commands] = requestCommits(next);
@@ -1402,7 +1119,7 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
           resetDiffAnalysis(
             evo(model, {
               selectedCommit: () => "",
-              commitDiff: () => ({ _tag: "Idle" as const }),
+              commitDiff: () => CommitDiff.Idle(),
             }),
           ),
           [],
@@ -1415,12 +1132,12 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
       SelectedViewMode: ({ value }) =>
         synchronizeReviewUrl(evo(model, { viewMode: () => value }), []),
       ToggledWhitespace: () => {
-        const next = evo(model, { ignoreWhitespace: value => !value });
+        const next = evo(model, { ignoreWhitespace: (value) => !value });
         const [updated, commands] = requestSelectedIntelligence(next);
         return synchronizeReviewUrl(updated, commands);
       },
       ToggledSemantic: () => {
-        const next = evo(model, { semantic: value => !value });
+        const next = evo(model, { semantic: (value) => !value });
         const [updated, commands] = requestSelectedIntelligence(next);
         return synchronizeReviewUrl(updated, commands);
       },
@@ -1431,22 +1148,23 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
       },
       ToggledSyntaxHighlighting: () =>
         synchronizeReviewUrl(
-          evo(model, { syntaxHighlighting: value => !value }),
+          evo(model, { syntaxHighlighting: (value) => !value }),
           [],
         ),
       ToggledSidebar: () =>
         synchronizeReviewUrl(
-          evo(model, { sidebarCollapsed: value => !value }),
+          evo(model, { sidebarCollapsed: (value) => !value }),
           [],
         ),
       ToggledGitHubReviews: () => {
-        const next = evo(model, { showGitHubReviews: value => !value });
+        const next = evo(model, { showGitHubReviews: (value) => !value });
         const [updated, commands] = requestGitHubReviews(next);
         return synchronizeReviewUrl(updated, commands);
       },
       ToggledReviewThreadCollapse: ({ threadId }) => [
         evo(model, {
-          collapsedReviewThreads: threads => toggleMembership(threads, threadId),
+          collapsedReviewThreads: (threads) =>
+            toggleMembership(threads, threadId),
         }),
         [],
       ],
@@ -1454,38 +1172,45 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         const reviewed = model.reviewedPaths.includes(path);
         return [
           evo(model, {
-            reviewedPaths: paths => setMembership(paths, path, !reviewed),
-            collapsedPaths: paths => setMembership(paths, path, !reviewed),
+            reviewedPaths: (paths) => setMembership(paths, path, !reviewed),
+            collapsedPaths: (paths) => setMembership(paths, path, !reviewed),
           }),
           [],
         ];
       },
       ToggledFileCollapse: ({ path }) => [
-        evo(model, { collapsedPaths: paths => toggleMembership(paths, path) }),
+        evo(model, {
+          collapsedPaths: (paths) => toggleMembership(paths, path),
+        }),
         [],
       ],
       ToggledHunkCollapse: ({ path, hunkId }) => [
         evo(model, {
-          collapsedHunks: hunks => toggleMembership(hunks, hunkKey(path, hunkId)),
+          collapsedHunks: (hunks) =>
+            toggleMembership(hunks, hunkKey(path, hunkId)),
         }),
         [],
       ],
       ToggledFullFile: ({ path }) => {
-        const state = model.fullFileStates.find(item => item.path === path);
-        if (state?._tag === "Ready" || state?._tag === "Loading") {
+        const entry = model.fullFileStates.find((item) => item.path === path);
+        if (
+          entry !== undefined &&
+          (AsyncData.hasData(entry.state) || AsyncData.isPending(entry.state))
+        ) {
           return [
             evo(model, {
-              fullFileStates: states => states.filter(item => item.path !== path),
+              fullFileStates: (states) =>
+                states.filter((item) => item.path !== path),
             }),
             [],
           ];
         }
-        const file = model.files.find(item => item.path === path);
+        const file = model.files.find((item) => item.path === path);
         if (file === undefined || model.meta.url === "") return [model, []];
         const next = evo(model, {
-          fullFileStates: states => [
-            ...states.filter(item => item.path !== path),
-            { _tag: "Loading" as const, path },
+          fullFileStates: (states) => [
+            ...states.filter((item) => item.path !== path),
+            { path, state: FullFileState.Loading() },
           ],
         });
         return [
@@ -1507,31 +1232,30 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
 const initialModel = (prUrl: string, options: ReviewOptions) =>
   Model.make({
     page: "review",
-    phase: prUrl === "" ? "ready" : "loading",
-    error: "",
-    githubInput: prUrl,
-    githubInputError: "",
+    phase: prUrl === "" ? ReviewReady() : ReviewLoading(),
+    githubLocation: GitHubLocation.init(prUrl, prUrl !== ""),
     prUrl,
     filter: "",
     meta: sampleMeta,
-    reviewRevision: { _tag: "Idle" },
+    reviewRevision: ReviewRevisionIdle(),
     files: sampleFiles,
     pullRequestFiles: sampleFiles,
     reviewTab: options.reviewTab,
-    commits: { _tag: "Idle" },
+    commits: PullCommits.Idle(),
     selectedCommit: options.selectedCommit,
-    commitDiff: { _tag: "Idle" },
+    commitDiff: CommitDiff.Idle(),
     repositoryBrowser: {
       owner: "",
       name: "",
       query: "",
       selectedPath: "",
-      files: { _tag: "Idle" },
-      search: { _tag: "Idle" },
-      file: { _tag: "Idle" },
-      clone: { _tag: "Idle" },
+      files: RepositoryFiles.Idle(),
+      search: RepositorySearch.Idle(),
+      file: RepositoryFileContent.Idle(),
+      clone: RepositoryClone.Idle(),
     },
-    toolbarMenu: "none",
+    diffOptionsPopover: initialDiffOptionsPopover(),
+    openReviewPopover: initialOpenReviewPopover(),
     toolbarCompact: false,
     selectedPath: options.selectedPath || sampleFiles[0]?.path || "",
     sidebarCollapsed: options.sidebarCollapsed,
@@ -1543,48 +1267,61 @@ const initialModel = (prUrl: string, options: ReviewOptions) =>
     syntaxHighlighting: options.syntaxHighlighting,
     reviewedPaths: [],
     semanticResults: [],
-    semanticRequest: { _tag: "Idle" },
-    reviewMoves: { _tag: "Idle" },
+    semanticRequest: SemanticRequestIdle(),
+    reviewMoves: ReviewMoves.Idle(),
     characterDiffStates: [],
     collapsedPaths: [],
     collapsedHunks: [],
     fullFileStates: [],
     showGitHubReviews: options.showGitHubReviews,
-    githubReviews: { _tag: "Idle" },
+    githubReviews: GitHubReviews.Idle(),
     collapsedReviewThreads: [],
     replyDrafts: [],
     replyStates: [],
     reviewBody: "",
-    reviewSubmission: { _tag: "Idle" },
+    reviewSubmission: ReviewSubmission.Idle(),
   });
 
-export const init: Runtime.RoutingApplicationInit<ModelType, Message> = url => {
-  const repositoryRoute = repositoryRouteFromPathname(url.pathname);
-  if (repositoryRoute !== undefined) {
-    const model = initialModel("", defaultReviewOptions);
-    return loadRepositoryLocation(
-      model,
-      repositoryRoute,
-      repositoryOptionsFromSearch(Option.getOrElse(url.search, () => "")),
-    );
-  }
-  const prUrl = githubUrlFromPathname(url.pathname) ?? "";
-  const options =
-    prUrl === ""
-      ? defaultReviewOptions
-      : reviewOptionsFromSearch(Option.getOrElse(url.search, () => ""));
-  const model = initialModel(prUrl, options);
-  return [model, prUrl === "" ? [] : [FetchReview({ url: prUrl })]];
-};
+export const init: Runtime.RoutingApplicationInit<ModelType, Message> = (url) =>
+  M.value(urlToAppRoute(url)).pipe(
+    M.withReturnType<UpdateReturn>(),
+    M.tagsExhaustive({
+      Home: () => [initialModel("", defaultReviewOptions), []],
+      Repository: ({ owner, repository }) =>
+        loadRepositoryLocation(
+          initialModel("", defaultReviewOptions),
+          { owner, name: repository },
+          repositoryOptionsFromSearch(Option.getOrElse(url.search, () => "")),
+        ),
+      Pull: (route) => {
+        const reviewUrl = reviewRouteToGitHubUrl(route);
+        const model = initialModel(
+          reviewUrl,
+          reviewOptionsFromSearch(Option.getOrElse(url.search, () => "")),
+        );
+        return [model, [FetchReview({ url: reviewUrl })]];
+      },
+      Compare: (route) => {
+        const reviewUrl = reviewRouteToGitHubUrl(route);
+        const model = initialModel(
+          reviewUrl,
+          reviewOptionsFromSearch(Option.getOrElse(url.search, () => "")),
+        );
+        return [model, [FetchReview({ url: reviewUrl })]];
+      },
+      Commit: (route) => {
+        const reviewUrl = reviewRouteToGitHubUrl(route);
+        const model = initialModel(
+          reviewUrl,
+          reviewOptionsFromSearch(Option.getOrElse(url.search, () => "")),
+        );
+        return [model, [FetchReview({ url: reviewUrl })]];
+      },
+      NotFound: () => showNotFound(initialModel("", defaultReviewOptions)),
+    }),
+  );
 
 export const routing: Runtime.RoutingConfig<Message> = {
-  onUrlChange: url =>
-    ChangedBrowserUrl({
-      pathname: url.pathname,
-      search: Option.getOrElse(url.search, () => ""),
-    }),
-  onUrlRequest: request =>
-    request._tag === "External"
-      ? RequestedNavigation({ href: request.href, external: true })
-      : RequestedNavigation({ href: Url.toString(request.url), external: false }),
+  onUrlChange: (url) => ChangedUrl({ url }),
+  onUrlRequest: (request) => ClickedLink({ request }),
 };

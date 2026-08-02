@@ -10,11 +10,7 @@ import {
   loadReviewDiff,
   loadReviewMetadata,
 } from "./github";
-import type {
-  FileDescriptor,
-  FileStatus,
-  GitHubTarget,
-} from "./github";
+import type { FileDescriptor, FileStatus, GitHubTarget } from "./github";
 import { LocalGit, LocalGitFailed } from "./local-git";
 
 const gitOid = /^[0-9a-f]{40,64}$/i;
@@ -40,17 +36,14 @@ export const localFallback = <A>(
   effect: Effect.Effect<Option.Option<A>, LocalGitFailed>,
 ) =>
   effect.pipe(
-    Effect.catch(error =>
+    Effect.catch((error) =>
       Effect.logWarning(`Local Git fallback: ${error.message}`).pipe(
         Effect.as(Option.none<A>()),
       ),
     ),
   );
 
-const localInput = (
-  target: GitHubTarget,
-  refs: PinnedRefs,
-) => ({
+const localInput = (target: GitHubTarget, refs: PinnedRefs) => ({
   repository: repositoryId(target),
   baseOid: refs.base,
   headOid: refs.head,
@@ -102,7 +95,7 @@ export const loadPinnedFilePair = (
 ) =>
   Option.match(refs, {
     onNone: () => loadFilePair(target, path, previousPath, status),
-    onSome: revision =>
+    onSome: (revision) =>
       Effect.gen(function* () {
         const localGit = yield* LocalGit;
         const local = yield* localFallback(
@@ -132,24 +125,25 @@ export const loadPinnedFilePairs = (
 ) =>
   Option.match(refs, {
     onNone: () => loadFilePairs(target, files),
-    onSome: revision =>
+    onSome: (revision) =>
       Effect.gen(function* () {
         const localGit = yield* LocalGit;
         return yield* Effect.forEach(
           files,
-          file =>
+          (file) =>
             localFallback(
               localGit.loadFilePair({
                 ...localInput(target, revision),
                 ...file,
               }),
             ).pipe(
-              Effect.flatMap(local =>
+              Effect.flatMap((local) =>
                 Option.isSome(local)
                   ? Effect.succeed({ ...file, ...local.value })
                   : loadFilePairsAtRevision(target, revision, [file]).pipe(
-                      Effect.map(pairs =>
-                        pairs[0] ?? { ...file, oldText: "", newText: "" },
+                      Effect.map(
+                        (pairs) =>
+                          pairs[0] ?? { ...file, oldText: "", newText: "" },
                       ),
                     ),
               ),
@@ -164,8 +158,8 @@ export const loadPinnedDiff = (
   refs: Option.Option<PinnedRefs>,
 ) =>
   Option.match(refs, {
-    onNone: () => loadReview(target).pipe(Effect.map(review => review.diff)),
-    onSome: revision =>
+    onNone: () => loadReview(target).pipe(Effect.map((review) => review.diff)),
+    onSome: (revision) =>
       Effect.gen(function* () {
         const localGit = yield* LocalGit;
         const local = yield* localFallback(

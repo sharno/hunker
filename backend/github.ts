@@ -1,8 +1,5 @@
 import { Data, Effect, Match as M, Option } from "effect";
-import {
-  HttpClient,
-  HttpClientRequest,
-} from "effect/unstable/http";
+import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 
 import { GitHubAuth } from "./github-auth";
 
@@ -54,24 +51,43 @@ export const parseGitHubUrl = (
 
   if (url.hostname !== "github.com") {
     return Effect.fail(
-      new InvalidGitHubUrl({ message: "Hunker currently accepts github.com URLs." }),
+      new InvalidGitHubUrl({
+        message: "Hunker currently accepts github.com URLs.",
+      }),
     );
   }
 
   const [owner, repo, resource, id] = url.pathname.split("/").filter(Boolean);
   if (owner === undefined || repo === undefined || id === undefined) {
     return Effect.fail(
-      new InvalidGitHubUrl({ message: "Paste a complete GitHub pull request or compare URL." }),
+      new InvalidGitHubUrl({
+        message: "Paste a complete GitHub pull request or compare URL.",
+      }),
     );
   }
   if (resource === "pull" && /^\d+$/.test(id)) {
-    return Effect.succeed<GitHubTarget>({ _tag: "PullTarget", owner, repo, number: id });
+    return Effect.succeed<GitHubTarget>({
+      _tag: "PullTarget",
+      owner,
+      repo,
+      number: id,
+    });
   }
   if (resource === "compare" && id.length > 2) {
-    return Effect.succeed<GitHubTarget>({ _tag: "CompareTarget", owner, repo, range: id });
+    return Effect.succeed<GitHubTarget>({
+      _tag: "CompareTarget",
+      owner,
+      repo,
+      range: id,
+    });
   }
   if (resource === "commit" && /^[0-9a-f]{7,64}$/i.test(id)) {
-    return Effect.succeed<GitHubTarget>({ _tag: "CommitTarget", owner, repo, sha: id });
+    return Effect.succeed<GitHubTarget>({
+      _tag: "CommitTarget",
+      owner,
+      repo,
+      sha: id,
+    });
   }
   return Effect.fail(
     new InvalidGitHubUrl({
@@ -113,16 +129,23 @@ export const executeGitHubRequest = (
     const auth = yield* GitHubAuth;
     const authorization = Option.match(auth.token, {
       onNone: () => ({}),
-      onSome: value => ({ authorization: `Bearer ${value}` }),
+      onSome: (value) => ({ authorization: `Bearer ${value}` }),
     });
     const authenticatedRequest = request.pipe(
-      HttpClientRequest.setHeaders({ ...githubHeaders, ...authorization, accept }),
+      HttpClientRequest.setHeaders({
+        ...githubHeaders,
+        ...authorization,
+        accept,
+      }),
     );
     const response = yield* client.execute(authenticatedRequest);
     if (response.status < 200 || response.status >= 300) {
       return yield* new GitHubFetchFailed({
         status: response.status,
-        message: githubErrorMessage(response.status, auth.source === "anonymous"),
+        message: githubErrorMessage(
+          response.status,
+          auth.source === "anonymous",
+        ),
       });
     }
     return response;
@@ -132,7 +155,9 @@ export const executeGitHub = (url: string, accept: string) =>
   executeGitHubRequest(HttpClientRequest.get(url), accept);
 
 const asRecord = (value: unknown): Readonly<Record<string, unknown>> =>
-  typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+  typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : {};
 
 const stringField = (
   record: Readonly<Record<string, unknown>>,
@@ -209,7 +234,11 @@ export const loadReviewMetadata = (target: GitHubTarget) =>
       const user = asRecord(metadata.author);
       const parents = Array.isArray(metadata.parents) ? metadata.parents : [];
       const parent = asRecord(parents[0]);
-      const message = stringField(commit, "message", `Commit ${target.sha.slice(0, 7)}`);
+      const message = stringField(
+        commit,
+        "message",
+        `Commit ${target.sha.slice(0, 7)}`,
+      );
       return {
         title: message.split("\n")[0] ?? message,
         repository: `${target.owner}/${target.repo}`,
@@ -245,7 +274,7 @@ export const loadReviewMetadata = (target: GitHubTarget) =>
 
 export const loadReviewDiff = (target: GitHubTarget) =>
   executeGitHub(apiUrl(target), "application/vnd.github.diff").pipe(
-    Effect.flatMap(response => response.text),
+    Effect.flatMap((response) => response.text),
   );
 
 export const loadDiffAtRevision = (
@@ -255,7 +284,7 @@ export const loadDiffAtRevision = (
   executeGitHub(
     `https://api.github.com/repos/${target.owner}/${target.repo}/compare/${encodeURIComponent(refs.base)}...${encodeURIComponent(refs.head)}`,
     "application/vnd.github.diff",
-  ).pipe(Effect.flatMap(response => response.text));
+  ).pipe(Effect.flatMap((response) => response.text));
 
 export const loadReview = (target: GitHubTarget) =>
   Effect.gen(function* () {
@@ -286,7 +315,8 @@ const decodePullCommit = (value: unknown): PullCommit | undefined => {
     sha,
     message: stringField(commit, "message", `Commit ${sha.slice(0, 7)}`),
     author:
-      stringField(user, "login", "") || stringField(authored, "name", "GitHub user"),
+      stringField(user, "login", "") ||
+      stringField(authored, "name", "GitHub user"),
     avatarUrl: stringField(user, "avatar_url", ""),
     authoredAt: stringField(authored, "date", ""),
     htmlUrl: stringField(item, "html_url", ""),
@@ -295,7 +325,7 @@ const decodePullCommit = (value: unknown): PullCommit | undefined => {
 
 export const decodePullCommits = (value: unknown): ReadonlyArray<PullCommit> =>
   Array.isArray(value)
-    ? value.flatMap(item => {
+    ? value.flatMap((item) => {
         const commit = decodePullCommit(item);
         return commit === undefined ? [] : [commit];
       })
@@ -322,16 +352,20 @@ export const loadPullCommits = (target: PullTarget) =>
 
 const loadTargetRefs = (target: GitHubTarget) =>
   loadReviewMetadata(target).pipe(
-    Effect.map(metadata => ({ base: metadata.baseOid, head: metadata.headOid })),
+    Effect.map((metadata) => ({
+      base: metadata.baseOid,
+      head: metadata.headOid,
+    })),
   );
 
-const encodePath = (path: string) => path.split("/").map(encodeURIComponent).join("/");
+const encodePath = (path: string) =>
+  path.split("/").map(encodeURIComponent).join("/");
 
 const loadFileContent = (target: GitHubTarget, path: string, ref: string) =>
   executeGitHub(
     `https://api.github.com/repos/${target.owner}/${target.repo}/contents/${encodePath(path)}?ref=${encodeURIComponent(ref)}`,
     "application/vnd.github.raw+json",
-  ).pipe(Effect.flatMap(response => response.text));
+  ).pipe(Effect.flatMap((response) => response.text));
 
 export type FileStatus = "modified" | "added" | "deleted" | "renamed";
 
@@ -399,7 +433,7 @@ export const loadFilePairs = (
     const refs = yield* loadTargetRefs(target);
     return yield* Effect.forEach(
       files,
-      file => loadFilePairWithRefs(target, refs, file),
+      (file) => loadFilePairWithRefs(target, refs, file),
       { concurrency: 6 },
     );
   });
@@ -409,8 +443,6 @@ export const loadFilePairsAtRevision = (
   refs: Readonly<{ base: string; head: string }>,
   files: ReadonlyArray<FileDescriptor>,
 ) =>
-  Effect.forEach(
-    files,
-    file => loadFilePairWithRefs(target, refs, file),
-    { concurrency: 6 },
-  );
+  Effect.forEach(files, (file) => loadFilePairWithRefs(target, refs, file), {
+    concurrency: 6,
+  });

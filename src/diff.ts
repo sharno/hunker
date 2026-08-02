@@ -26,12 +26,11 @@ type HunkRange = Readonly<{
   newCount: number;
 }>;
 
-export const hunkKey = (path: string, hunkId: string) => `${path}\u0000${hunkId}`;
+export const hunkKey = (path: string, hunkId: string) =>
+  `${path}\u0000${hunkId}`;
 
 const hunkRange = (header: string): HunkRange | undefined => {
-  const match = header.match(
-    /@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/,
-  );
+  const match = header.match(/@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
   if (match === null) return undefined;
   return {
     oldStart: Number(match[1]),
@@ -42,7 +41,10 @@ const hunkRange = (header: string): HunkRange | undefined => {
 };
 
 export const normalizeLine = (line: string) =>
-  line.replace(/^[-+ ]/, "").replace(/\s+/g, "").trim();
+  line
+    .replace(/^[-+ ]/, "")
+    .replace(/\s+/g, "")
+    .trim();
 
 const GENERATED_DIFF_FILES = new Set([
   "bun.lock",
@@ -59,7 +61,7 @@ export const isGeneratedDiffPath = (path: string) =>
 
 export const parseGitDiff = (diff: string): ReadonlyArray<FileChangeType> => {
   const chunks = diff.split(/^diff --git /m).filter(Boolean);
-  return chunks.map(chunk => {
+  return chunks.map((chunk) => {
     const header = chunk.match(/^a\/(.+?) b\/(.+)$/m);
     const fallbackPath = header?.[2] ?? "unknown";
     const renameFrom = chunk.match(/^rename from (.+)$/m)?.[1] ?? "";
@@ -76,10 +78,10 @@ export const parseGitDiff = (diff: string): ReadonlyArray<FileChangeType> => {
     const patch = patchStart >= 0 ? chunk.slice(patchStart) : chunk;
     const lines = patch.split("\n");
     const additions = lines.filter(
-      line => line.startsWith("+") && !line.startsWith("+++"),
+      (line) => line.startsWith("+") && !line.startsWith("+++"),
     ).length;
     const deletions = lines.filter(
-      line => line.startsWith("-") && !line.startsWith("---"),
+      (line) => line.startsWith("-") && !line.startsWith("---"),
     ).length;
     return FileChange.make({
       path,
@@ -92,6 +94,8 @@ export const parseGitDiff = (diff: string): ReadonlyArray<FileChangeType> => {
   });
 };
 
+// NOTE: This linear parser mutates only function-local cursors and its private
+// result buffer; no mutation or identity escapes into the Foldkit Model.
 export const toDiffLines = (
   patch: string,
   ignoreWhitespace: boolean,
@@ -185,13 +189,16 @@ const unchangedContext = (
   const count = Math.min(oldEnd - oldStart, newEnd - newStart);
   return Array.from({ length: Math.max(0, count) }, (_, index) => ({
     kind: "context" as const,
-    content: newLines[newStart + index - 1] ?? oldLines[oldStart + index - 1] ?? "",
+    content:
+      newLines[newStart + index - 1] ?? oldLines[oldStart + index - 1] ?? "",
     oldNumber: oldStart + index,
     newNumber: newStart + index,
     hunkId: null,
   }));
 };
 
+// NOTE: This merge is a performance-sensitive linear pass over large files;
+// all cursor and buffer mutation is confined to this pure helper.
 export const toFullDiffLines = (
   patch: string,
   oldText: string,
@@ -205,7 +212,7 @@ export const toFullDiffLines = (
   let oldCursor = oldLines.length === 0 ? 0 : 1;
   let newCursor = newLines.length === 0 ? 0 : 1;
 
-  for (let index = 0; index < patchLines.length;) {
+  for (let index = 0; index < patchLines.length; ) {
     const header = patchLines[index];
     if (header?.kind !== "hunk") {
       index += 1;

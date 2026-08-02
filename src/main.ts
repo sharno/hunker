@@ -8,6 +8,20 @@ import { init, routing, update } from "./state";
 import { view } from "./view/review-view";
 import { withTailwind } from "./view/tailwind";
 
+const documentTitle = (model: typeof Model.Type): string => {
+  if (model.phase._tag === "Loading" && model.prUrl !== "") {
+    return "Loading review · Hunker";
+  }
+  if (
+    model.phase._tag === "Ready" &&
+    model.prUrl !== "" &&
+    model.meta.url === model.prUrl
+  ) {
+    return `${model.meta.repository} #${model.meta.number} · Hunker`;
+  }
+  return "Hunker";
+};
+
 export const makeReviewApplication = (container: HTMLElement) =>
   Runtime.makeApplication({
     Model,
@@ -23,14 +37,7 @@ export const makeReviewApplication = (container: HTMLElement) =>
     view: (model, h) => {
       const styled = withTailwind(h);
       return {
-        title:
-          model.phase === "loading" && model.prUrl !== ""
-            ? "Loading review · Hunker"
-            : model.phase === "ready" &&
-                model.prUrl !== "" &&
-                model.meta.url === model.prUrl
-              ? `${model.meta.repository} #${model.meta.number} · Hunker`
-              : "Hunker",
+        title: documentTitle(model),
         body: view(model, styled),
       };
     },

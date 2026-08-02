@@ -23,7 +23,9 @@ type CharacterDiffEngineShape = Readonly<{
   ) => Effect.Effect<CharacterDiffResult, CharacterDiffFailed>;
 }>;
 
-export class CharacterDiffFailed extends Data.TaggedError("CharacterDiffFailed")<{
+export class CharacterDiffFailed extends Data.TaggedError(
+  "CharacterDiffFailed",
+)<{
   readonly message: string;
   readonly status: number;
 }> {}
@@ -69,8 +71,10 @@ export const parseGitCharacterDiff = (
 
   const flush = () => {
     if (!inHunk) return;
-    const oldPresent = builder.oldPresent || (!builder.newPresent && oldRemaining > 0);
-    const newPresent = builder.newPresent || (!builder.oldPresent && newRemaining > 0);
+    const oldPresent =
+      builder.oldPresent || (!builder.newPresent && oldRemaining > 0);
+    const newPresent =
+      builder.newPresent || (!builder.oldPresent && newRemaining > 0);
     if (!oldPresent && !newPresent) return;
     rows.push({
       oldLine: oldPresent ? oldLine : null,
@@ -180,7 +184,9 @@ export const layer = Layer.effect(
             oldPath,
             newPath,
           ];
-          const handle = yield* spawner.spawn(ChildProcess.make("git", arguments_));
+          const handle = yield* spawner.spawn(
+            ChildProcess.make("git", arguments_),
+          );
           const [stdout, stderr, exitCode] = yield* Effect.all(
             [
               handle.stdout.pipe(Stream.decodeText(), Stream.mkString),
@@ -192,7 +198,9 @@ export const layer = Layer.effect(
           const status = Number(exitCode);
           if (status !== 0 && status !== 1) {
             return yield* new CharacterDiffFailed({
-              message: stderr.trim() || `Native Git diff exited with status ${status}.`,
+              message:
+                stderr.trim() ||
+                `Native Git diff exited with status ${status}.`,
               status: 502,
             });
           }
@@ -209,28 +217,30 @@ export const layer = Layer.effect(
           orElse: () =>
             Effect.fail(
               new CharacterDiffFailed({
-                message: "Native Git character analysis exceeded three seconds.",
+                message:
+                  "Native Git character analysis exceeded three seconds.",
                 status: 503,
               }),
             ),
         }),
-        Effect.mapError(error =>
+        Effect.mapError((error) =>
           error instanceof CharacterDiffFailed
             ? error
             : new CharacterDiffFailed({
-                message: "Native Git could not calculate this file's character diff.",
+                message:
+                  "Native Git could not calculate this file's character diff.",
                 status: 502,
               }),
         ),
       );
 
     return CharacterDiffEngine.of({
-      analyzeFile: input => {
+      analyzeFile: (input) => {
         const key = cacheKey(input);
         const cached = cache.get(key);
         if (cached !== undefined) return Effect.succeed(cached);
         return execute(input).pipe(
-          Effect.tap(result => Effect.sync(() => cache.set(key, result))),
+          Effect.tap((result) => Effect.sync(() => cache.set(key, result))),
         );
       },
     });

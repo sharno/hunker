@@ -14,16 +14,21 @@ export class GitHubAuth extends Context.Service<GitHubAuth, GitHubAuthShape>()(
 
 const readGhToken = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const handle = yield* spawner.spawn(ChildProcess.make("gh", ["auth", "token"]));
+  const handle = yield* spawner.spawn(
+    ChildProcess.make("gh", ["auth", "token"]),
+  );
   const [output, exitCode] = yield* Effect.all(
     [Stream.mkString(Stream.decodeText(handle.stdout)), handle.exitCode],
     { concurrency: "unbounded" },
   );
   if (exitCode !== ChildProcessSpawner.ExitCode(0)) {
-    return yield* Effect.fail(new Error(`gh exited with status ${Number(exitCode)}`));
+    return yield* Effect.fail(
+      new Error(`gh exited with status ${Number(exitCode)}`),
+    );
   }
   const token = output.trim();
-  if (token === "") return yield* Effect.fail(new Error("gh returned an empty token"));
+  if (token === "")
+    return yield* Effect.fail(new Error("gh returned an empty token"));
   return token;
 }).pipe(Effect.scoped, Effect.option);
 
@@ -35,8 +40,10 @@ const resolveGitHubAuth = Effect.gen(function* () {
   const auth = Option.isSome(environmentToken)
     ? GitHubAuth.of({ token: environmentToken, source: "environment" })
     : Option.match(yield* readGhToken, {
-        onNone: () => GitHubAuth.of({ token: Option.none(), source: "anonymous" }),
-        onSome: token => GitHubAuth.of({ token: Option.some(token), source: "gh" }),
+        onNone: () =>
+          GitHubAuth.of({ token: Option.none(), source: "anonymous" }),
+        onSome: (token) =>
+          GitHubAuth.of({ token: Option.some(token), source: "gh" }),
       });
 
   yield* Effect.logInfo(`GitHub authentication: ${auth.source}`);

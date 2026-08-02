@@ -1,59 +1,47 @@
-import { Effect, Schema as S } from "effect";
-import { HttpClient, HttpClientRequest } from "effect/unstable/http";
-import { Command, Http, Navigation } from "foldkit";
+import { Array, Effect, Match as M, Option, Schema as S } from "effect";
+import { AsyncData, Command, Navigation, Update } from "foldkit";
 import { evo } from "foldkit/struct";
 
+import { locationToAppRoute, repositoryRouter } from "../app-route";
+import * as GitHubLocation from "./github-location";
 import {
-  ClonedRepository,
-  FailedRepositoryClone,
-  FailedRepositoryFile,
-  FailedRepositoryFiles,
-  FailedRepositorySearch,
-  CompletedNavigation,
-  LoadedRepositoryFile,
-  LoadedRepositoryFiles,
-  LoadedRepositorySearch,
-  RepositoryFile,
-  RepositorySearchMatch,
+  CompletedNavigate,
+  RepositoryClone,
+  RepositoryFileContent,
+  RepositoryFiles,
+  RepositorySearch,
 } from "../domain";
 import type { Message, Model } from "../domain";
 import type {
   RepositoryFile as RepositoryFileType,
   RepositorySearchMatch as RepositorySearchMatchType,
 } from "../domain";
-
-const responseError = (value: unknown, fallback: string) =>
-  typeof value === "object" &&
-  value !== null &&
-  typeof (value as Record<string, unknown>).error === "string"
-    ? String((value as Record<string, unknown>).error)
-    : fallback;
+import {
+  CloneRepository,
+  FetchRepositoryFile,
+  FetchRepositoryFiles,
+  SearchRepository,
+} from "./repository-command";
 
 export type RepositoryRoute = Readonly<{ owner: string; name: string }>;
 export type RepositoryOptions = Readonly<{ query: string; file: string }>;
 
 export const repositoryRouteFromPathname = (
   pathname: string,
-): RepositoryRoute | undefined => {
-  let segments: ReadonlyArray<string>;
-  try {
-    segments = pathname
-      .split("/")
-      .filter(Boolean)
-      .map(segment => decodeURIComponent(segment));
-  } catch {
-    return undefined;
-  }
-  const [prefix, owner, name, ...remaining] = segments;
-  return prefix === "repo" &&
-    owner !== undefined &&
-    name !== undefined &&
-    remaining.length === 0
-    ? { owner, name }
-    : undefined;
-};
+): RepositoryRoute | undefined =>
+  M.value(locationToAppRoute(pathname)).pipe(
+    M.tag("Repository", ({ owner, repository }) =>
+      Option.all({
+        owner: Option.liftThrowable(decodeURIComponent)(owner),
+        name: Option.liftThrowable(decodeURIComponent)(repository),
+      }).pipe(Option.getOrUndefined),
+    ),
+    M.orElse(() => undefined),
+  );
 
-export const repositoryOptionsFromSearch = (search: string): RepositoryOptions => {
+export const repositoryOptionsFromSearch = (
+  search: string,
+): RepositoryOptions => {
   const params = new URLSearchParams(search);
   return { query: params.get("q") ?? "", file: params.get("file") ?? "" };
 };
@@ -66,174 +54,19 @@ export const localRepositoryUrl = (
   if (options.query !== "") params.set("q", options.query);
   if (options.file !== "") params.set("file", options.file);
   const search = params.size === 0 ? "" : `?${params.toString()}`;
-  return `/repo/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.name)}${search}`;
+  return `${repositoryRouter({
+    owner: repository.owner,
+    repository: repository.name,
+  })}${search}`;
 };
 
-const filesResponse = S.Struct({ files: S.Array(RepositoryFile) });
-const searchResponse = S.Struct({
-  files: S.Array(RepositoryFile),
-  matches: S.Array(RepositorySearchMatch),
-});
-const fileResponse = S.Struct({
-  path: S.String,
-  content: S.String,
-  truncated: S.Boolean,
-});
-const cloneResponse = S.Struct({ path: S.String });
-
-export const FetchRepositoryFiles = Command.define("FetchRepositoryFiles", {
-  args: { repository: S.String },
-  messages: [LoadedRepositoryFiles, FailedRepositoryFiles],
-  execute: ({ repository }) =>
-    Effect.gen(function* () {
-      const client = yield* HttpClient.HttpClient;
-      const response = yield* client.execute(
-        HttpClientRequest.get(
-          `/api/repository/files?repository=${encodeURIComponent(repository)}`,
-        ),
-      );
-      const data: unknown = yield* response.json;
-      if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          {
-            _tag: "RepositoryFilesRequestFailed" as const,
-            message: responseError(data, "Could not list local repository files."),
-            missing: response.status === 404,
-          },
-        );
-      }
-      const decoded = yield* S.decodeUnknownEffect(filesResponse)(data);
-      return LoadedRepositoryFiles({ repository, files: decoded.files });
-    }).pipe(
-      Effect.catch(error =>
-        Effect.succeed(
-          FailedRepositoryFiles({
-            repository,
-            error:
-              typeof error === "object" &&
-              error !== null &&
-              "message" in error &&
-              typeof error.message === "string"
-                ? error.message
-                : "Could not list files.",
-            missing:
-              typeof error === "object" &&
-              error !== null &&
-              "missing" in error &&
-              error.missing === true,
-          }),
-        ),
-      ),
-      Effect.provide(Http.layer),
-    ),
-});
-
-export const CloneRepository = Command.define("CloneRepository", {
-  args: {
-    repository: S.String,
-    destination: S.Literals(["temporary", "configured"]),
-  },
-  messages: [ClonedRepository, FailedRepositoryClone],
-  execute: ({ repository, destination }) =>
-    Effect.gen(function* () {
-      const client = yield* HttpClient.HttpClient;
-      const response = yield* client.execute(
-        HttpClientRequest.post("/api/repository/clone").pipe(
-          HttpClientRequest.bodyJsonUnsafe({ repository, destination }),
-        ),
-      );
-      const data: unknown = yield* response.json;
-      if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(responseError(data, "Could not clone this repository.")),
-        );
-      }
-      const decoded = yield* S.decodeUnknownEffect(cloneResponse)(data);
-      return ClonedRepository({ repository, ...decoded });
-    }).pipe(
-      Effect.catch(error =>
-        Effect.succeed(
-          FailedRepositoryClone({
-            repository,
-            error: error instanceof Error ? error.message : "Could not clone repository.",
-          }),
-        ),
-      ),
-      Effect.provide(Http.layer),
-    ),
-});
-
-export const SearchRepository = Command.define("SearchRepository", {
-  args: { repository: S.String, query: S.String },
-  messages: [LoadedRepositorySearch, FailedRepositorySearch],
-  execute: ({ repository, query }) =>
-    Effect.gen(function* () {
-      const client = yield* HttpClient.HttpClient;
-      const params = new URLSearchParams({ repository, query });
-      const response = yield* client.execute(
-        HttpClientRequest.get(`/api/repository/search?${params.toString()}`),
-      );
-      const data: unknown = yield* response.json;
-      if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(responseError(data, "Could not search the local repository.")),
-        );
-      }
-      const decoded = yield* S.decodeUnknownEffect(searchResponse)(data);
-      return LoadedRepositorySearch({ repository, query, ...decoded });
-    }).pipe(
-      Effect.catch(error =>
-        Effect.succeed(
-          FailedRepositorySearch({
-            repository,
-            query,
-            error: error instanceof Error ? error.message : "Could not search files.",
-          }),
-        ),
-      ),
-      Effect.provide(Http.layer),
-    ),
-});
-
-export const FetchRepositoryFile = Command.define("FetchRepositoryFile", {
-  args: { repository: S.String, path: S.String },
-  messages: [LoadedRepositoryFile, FailedRepositoryFile],
-  execute: ({ repository, path }) =>
-    Effect.gen(function* () {
-      const client = yield* HttpClient.HttpClient;
-      const params = new URLSearchParams({ repository, path });
-      const response = yield* client.execute(
-        HttpClientRequest.get(`/api/repository/file?${params.toString()}`),
-      );
-      const data: unknown = yield* response.json;
-      if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(responseError(data, `Could not read ${path}.`)),
-        );
-      }
-      const decoded = yield* S.decodeUnknownEffect(fileResponse)(data);
-      return LoadedRepositoryFile({ repository, ...decoded });
-    }).pipe(
-      Effect.catch(error =>
-        Effect.succeed(
-          FailedRepositoryFile({
-            repository,
-            path,
-            error: error instanceof Error ? error.message : `Could not read ${path}.`,
-          }),
-        ),
-      ),
-      Effect.provide(Http.layer),
-    ),
-});
-
-type RepositoryUpdate = readonly [Model, ReadonlyArray<Command.Command<Message>>];
+type RepositoryUpdate = Update.Return<Model, Message>;
 
 const NavigateRepository = Command.define("NavigateRepository", {
   args: { href: S.String },
-  messages: [CompletedNavigation],
+  messages: [CompletedNavigate],
   execute: ({ href }) =>
-    Navigation.replaceUrl(href).pipe(Effect.as(CompletedNavigation())),
+    Navigation.replaceUrl(href).pipe(Effect.as(CompletedNavigate())),
 });
 
 const repositoryName = (model: Model) =>
@@ -262,74 +95,95 @@ export const loadRepositoryLocation = (
     model.repositoryBrowser.name === route.name;
   const current = sameRepository
     ? evo(model, {
-        repositoryBrowser: browser => ({
-          ...browser,
-          query: options.query,
-          selectedPath: options.file,
-        }),
+        repositoryBrowser: (browser) =>
+          evo(browser, {
+            query: () => options.query,
+            selectedPath: () => options.file,
+          }),
       })
     : evo(model, {
         page: () => "repository" as const,
-        githubInput: () => `https://github.com/${route.owner}/${route.name}`,
-        githubInputError: () => "",
+        githubLocation: () =>
+          GitHubLocation.replaceValue(
+            `https://github.com/${route.owner}/${route.name}`,
+            false,
+          ),
         repositoryBrowser: () => ({
           owner: route.owner,
           name: route.name,
           query: options.query,
           selectedPath: options.file,
-          files: { _tag: "Loading" as const },
-          search: options.query === ""
-            ? { _tag: "Idle" as const }
-            : { _tag: "Loading" as const, query: options.query },
-          file: options.file === ""
-            ? { _tag: "Idle" as const }
-            : { _tag: "Loading" as const, path: options.file },
-          clone: { _tag: "Idle" as const },
+          files: RepositoryFiles.Loading(),
+          search:
+            options.query === ""
+              ? RepositorySearch.Idle()
+              : RepositorySearch.Loading(),
+          file:
+            options.file === ""
+              ? RepositoryFileContent.Idle()
+              : RepositoryFileContent.Loading(),
+          clone: RepositoryClone.Idle(),
         }),
       });
   const browser = current.repositoryBrowser;
-  const filesCommand =
+  const maybeFilesCommand: Option.Option<Command.Command<Message>> =
     sameRepository &&
-    (browser.files._tag === "Ready" || browser.files._tag === "Loading")
-      ? []
-      : [FetchRepositoryFiles({ repository: `${route.owner}/${route.name}` })];
-  const searchCommand =
+    (AsyncData.hasData(browser.files) || AsyncData.isPending(browser.files))
+      ? Option.none()
+      : Option.some(
+          FetchRepositoryFiles({
+            repository: `${route.owner}/${route.name}`,
+          }),
+        );
+  const maybeSearchCommand: Option.Option<Command.Command<Message>> =
     options.query === "" ||
     (sameRepository &&
-      browser.search._tag !== "Idle" &&
-      browser.search.query === options.query)
-      ? []
-      : [
+      (AsyncData.isPending(browser.search) ||
+        Option.exists(
+          AsyncData.getData(browser.search),
+          (data) => data.query === options.query,
+        )))
+      ? Option.none()
+      : Option.some(
           SearchRepository({
             repository: `${route.owner}/${route.name}`,
             query: options.query,
           }),
-        ];
-  const fileCommand =
+        );
+  const maybeFileCommand: Option.Option<Command.Command<Message>> =
     options.file === "" ||
-    (sameRepository && browser.file._tag !== "Idle" && browser.file.path === options.file)
-      ? []
-      : [
+    (sameRepository &&
+      (AsyncData.isPending(browser.file) ||
+        Option.exists(
+          AsyncData.getData(browser.file),
+          (data) => data.path === options.file,
+        )))
+      ? Option.none()
+      : Option.some(
           FetchRepositoryFile({
             repository: `${route.owner}/${route.name}`,
             path: options.file,
           }),
-        ];
+        );
   return [
     evo(current, {
-      repositoryBrowser: value => ({
-        ...value,
-        search:
-          options.query !== "" && searchCommand.length > 0
-            ? { _tag: "Loading" as const, query: options.query }
-            : value.search,
-        file:
-          options.file !== "" && fileCommand.length > 0
-            ? { _tag: "Loading" as const, path: options.file }
-            : value.file,
-      }),
+      repositoryBrowser: (value) =>
+        evo(value, {
+          search: () =>
+            Option.isSome(maybeSearchCommand)
+              ? RepositorySearch.Loading()
+              : value.search,
+          file: () =>
+            Option.isSome(maybeFileCommand)
+              ? RepositoryFileContent.Loading()
+              : value.file,
+        }),
     }),
-    [...filesCommand, ...searchCommand, ...fileCommand],
+    [
+      ...Array.fromOption(maybeFilesCommand),
+      ...Array.fromOption(maybeSearchCommand),
+      ...Array.fromOption(maybeFileCommand),
+    ],
   ];
 };
 
@@ -342,10 +196,10 @@ export const repositoryFilesLoaded = (
     ? [model, []]
     : [
         evo(model, {
-          repositoryBrowser: browser => ({
-            ...browser,
-            files: { _tag: "Ready" as const, files },
-          }),
+          repositoryBrowser: (browser) =>
+            evo(browser, {
+              files: () => RepositoryFiles.Success({ data: files }),
+            }),
         }),
         [],
       ];
@@ -360,10 +214,13 @@ export const repositoryFilesFailed = (
     ? [model, []]
     : [
         evo(model, {
-          repositoryBrowser: browser => ({
-            ...browser,
-            files: { _tag: "Failed" as const, error, missing },
-          }),
+          repositoryBrowser: (browser) =>
+            evo(browser, {
+              files: () =>
+                RepositoryFiles.Failure({
+                  error: { message: error, missing },
+                }),
+            }),
         }),
         [],
       ];
@@ -372,14 +229,17 @@ export const requestRepositoryClone = (
   model: Model,
   destination: "temporary" | "configured",
 ): RepositoryUpdate => {
-  if (model.page !== "repository" || model.repositoryBrowser.clone._tag === "Loading") {
+  if (
+    model.page !== "repository" ||
+    AsyncData.isPending(model.repositoryBrowser.clone)
+  ) {
     return [model, []];
   }
   const next = evo(model, {
-    repositoryBrowser: browser => ({
-      ...browser,
-      clone: { _tag: "Loading" as const, destination },
-    }),
+    repositoryBrowser: (browser) =>
+      evo(browser, {
+        clone: () => RepositoryClone.Loading(),
+      }),
   });
   return [
     next,
@@ -395,16 +255,16 @@ export const repositoryCloned = (
   if (
     model.page !== "repository" ||
     repositoryName(model) !== repository ||
-    model.repositoryBrowser.clone._tag !== "Loading"
+    !AsyncData.isPending(model.repositoryBrowser.clone)
   ) {
     return [model, []];
   }
   const next = evo(model, {
-    repositoryBrowser: browser => ({
-      ...browser,
-      files: { _tag: "Loading" as const },
-      clone: { _tag: "Ready" as const, path },
-    }),
+    repositoryBrowser: (browser) =>
+      evo(browser, {
+        files: () => RepositoryFiles.Loading(),
+        clone: () => RepositoryClone.Success({ data: { path } }),
+      }),
   });
   return [next, [FetchRepositoryFiles({ repository: repositoryName(next) })]];
 };
@@ -418,17 +278,20 @@ export const repositoryCloneFailed = (
     ? [model, []]
     : [
         evo(model, {
-          repositoryBrowser: browser => ({
-            ...browser,
-            clone: { _tag: "Failed" as const, error },
-          }),
+          repositoryBrowser: (browser) =>
+            evo(browser, {
+              clone: () => RepositoryClone.Failure({ error }),
+            }),
         }),
         [],
       ];
 
-export const changeRepositoryQuery = (model: Model, value: string): RepositoryUpdate => [
+export const changeRepositoryQuery = (
+  model: Model,
+  value: string,
+): RepositoryUpdate => [
   evo(model, {
-    repositoryBrowser: browser => ({ ...browser, query: value }),
+    repositoryBrowser: (browser) => evo(browser, { query: () => value }),
   }),
   [],
 ];
@@ -438,21 +301,21 @@ export const submitRepositorySearch = (model: Model): RepositoryUpdate => {
   if (query === "") {
     return synchronizeRepositoryUrl(
       evo(model, {
-        repositoryBrowser: browser => ({
-          ...browser,
-          query: "",
-          search: { _tag: "Idle" as const },
-        }),
+        repositoryBrowser: (browser) =>
+          evo(browser, {
+            query: () => "",
+            search: () => RepositorySearch.Idle(),
+          }),
       }),
       [],
     );
   }
   const next = evo(model, {
-    repositoryBrowser: browser => ({
-      ...browser,
-      query,
-      search: { _tag: "Loading" as const, query },
-    }),
+    repositoryBrowser: (browser) =>
+      evo(browser, {
+        query: () => query,
+        search: () => RepositorySearch.Loading(),
+      }),
   });
   return synchronizeRepositoryUrl(next, [
     SearchRepository({ repository: repositoryName(next), query }),
@@ -473,15 +336,17 @@ export const repositorySearchLoaded = (
   model.repositoryBrowser.query === input.query
     ? [
         evo(model, {
-          repositoryBrowser: browser => ({
-            ...browser,
-            search: {
-              _tag: "Ready" as const,
-              query: input.query,
-              files: input.files,
-              matches: input.matches,
-            },
-          }),
+          repositoryBrowser: (browser) =>
+            evo(browser, {
+              search: () =>
+                RepositorySearch.Success({
+                  data: {
+                    query: input.query,
+                    files: input.files,
+                    matches: input.matches,
+                  },
+                }),
+            }),
         }),
         [],
       ]
@@ -498,22 +363,25 @@ export const repositorySearchFailed = (
   model.repositoryBrowser.query === query
     ? [
         evo(model, {
-          repositoryBrowser: browser => ({
-            ...browser,
-            search: { _tag: "Failed" as const, query, error },
-          }),
+          repositoryBrowser: (browser) =>
+            evo(browser, {
+              search: () => RepositorySearch.Failure({ error }),
+            }),
         }),
         [],
       ]
     : [model, []];
 
-export const selectRepositoryFile = (model: Model, path: string): RepositoryUpdate => {
+export const selectRepositoryFile = (
+  model: Model,
+  path: string,
+): RepositoryUpdate => {
   const next = evo(model, {
-    repositoryBrowser: browser => ({
-      ...browser,
-      selectedPath: path,
-      file: { _tag: "Loading" as const, path },
-    }),
+    repositoryBrowser: (browser) =>
+      evo(browser, {
+        selectedPath: () => path,
+        file: () => RepositoryFileContent.Loading(),
+      }),
   });
   return synchronizeRepositoryUrl(next, [
     FetchRepositoryFile({ repository: repositoryName(next), path }),
@@ -523,11 +391,11 @@ export const selectRepositoryFile = (model: Model, path: string): RepositoryUpda
 export const closeRepositoryFile = (model: Model): RepositoryUpdate =>
   synchronizeRepositoryUrl(
     evo(model, {
-      repositoryBrowser: browser => ({
-        ...browser,
-        selectedPath: "",
-        file: { _tag: "Idle" as const },
-      }),
+      repositoryBrowser: (browser) =>
+        evo(browser, {
+          selectedPath: () => "",
+          file: () => RepositoryFileContent.Idle(),
+        }),
     }),
     [],
   );
@@ -546,15 +414,17 @@ export const repositoryFileLoaded = (
   model.repositoryBrowser.selectedPath === input.path
     ? [
         evo(model, {
-          repositoryBrowser: browser => ({
-            ...browser,
-            file: {
-              _tag: "Ready" as const,
-              path: input.path,
-              content: input.content,
-              truncated: input.truncated,
-            },
-          }),
+          repositoryBrowser: (browser) =>
+            evo(browser, {
+              file: () =>
+                RepositoryFileContent.Success({
+                  data: {
+                    path: input.path,
+                    content: input.content,
+                    truncated: input.truncated,
+                  },
+                }),
+            }),
         }),
         [],
       ]
@@ -571,10 +441,10 @@ export const repositoryFileFailed = (
   model.repositoryBrowser.selectedPath === path
     ? [
         evo(model, {
-          repositoryBrowser: browser => ({
-            ...browser,
-            file: { _tag: "Failed" as const, path, error },
-          }),
+          repositoryBrowser: (browser) =>
+            evo(browser, {
+              file: () => RepositoryFileContent.Failure({ error }),
+            }),
         }),
         [],
       ]

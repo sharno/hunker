@@ -14,12 +14,13 @@ import {
 const classToken = (token: string) => new RegExp(`(?:^|\\s)${token}(?:\\s|$)`);
 
 test.beforeEach(async ({ page }) => {
-  await page.route("**/api/characters?**", route => {
+  await page.route("**/api/characters?**", (route) => {
     const requestUrl = new URL(route.request().url());
     const path = requestUrl.searchParams.get("path") ?? "";
-    const mode = requestUrl.searchParams.get("mode") === "character"
-      ? "character"
-      : "token";
+    const mode =
+      requestUrl.searchParams.get("mode") === "character"
+        ? "character"
+        : "token";
     return route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -32,14 +33,16 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test("shows an empty loading state for initial loads and refreshes", async ({ page }) => {
+test("shows an empty loading state for initial loads and refreshes", async ({
+  page,
+}) => {
   let reviewRequests = 0;
   let releaseReview: () => void = () => undefined;
-  let reviewGate = new Promise<void>(resolve => {
+  let reviewGate = new Promise<void>((resolve) => {
     releaseReview = resolve;
   });
 
-  await page.route("**/api/diff?**", async route => {
+  await page.route("**/api/diff?**", async (route) => {
     const revision = ++reviewRequests;
     await reviewGate;
     await route.fulfill({
@@ -48,11 +51,19 @@ test("shows an empty loading state for initial loads and refreshes", async ({ pa
       json: { ...reviewResponse, title: `Loading test revision ${revision}` },
     });
   });
-  await page.route("**/api/semantic?**", route =>
-    route.fulfill({ status: 200, contentType: "application/json", json: semanticResponse }),
+  await page.route("**/api/semantic?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: semanticResponse,
+    }),
   );
-  await page.route("**/api/reviews?**", route =>
-    route.fulfill({ status: 200, contentType: "application/json", json: { comments: [] } }),
+  await page.route("**/api/reviews?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: { comments: [] },
+    }),
   );
 
   await page.goto("/");
@@ -72,7 +83,7 @@ test("shows an empty loading state for initial loads and refreshes", async ({ pa
     page.getByRole("heading", { name: "Loading test revision 1" }),
   ).toBeVisible();
 
-  reviewGate = new Promise<void>(resolve => {
+  reviewGate = new Promise<void>((resolve) => {
     releaseReview = resolve;
   });
   await page.getByRole("button", { name: "Refresh diff from GitHub" }).click();
@@ -90,10 +101,12 @@ test("shows an empty loading state for initial loads and refreshes", async ({ pa
   await expect(page.locator(".review-loading")).toHaveCount(0);
 });
 
-test("shows local Git backing and offers a fetched PR revision without replacing the diff", async ({ page }) => {
+test("shows local Git backing and offers a fetched PR revision without replacing the diff", async ({
+  page,
+}) => {
   const pinnedHeadOid = "2222222222222222222222222222222222222222";
   const latestHeadOid = "3333333333333333333333333333333333333333";
-  await page.route("**/api/diff?**", route =>
+  await page.route("**/api/diff?**", (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -107,13 +120,21 @@ test("shows local Git backing and offers a fetched PR revision without replacing
       },
     }),
   );
-  await page.route("**/api/semantic?**", route =>
-    route.fulfill({ status: 200, contentType: "application/json", json: semanticResponse }),
+  await page.route("**/api/semantic?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: semanticResponse,
+    }),
   );
-  await page.route("**/api/reviews?**", route =>
-    route.fulfill({ status: 200, contentType: "application/json", json: { comments: [] } }),
+  await page.route("**/api/reviews?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: { comments: [] },
+    }),
   );
-  await page.route("**/api/revision?**", route =>
+  await page.route("**/api/revision?**", (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -137,45 +158,70 @@ test("shows local Git backing and offers a fetched PR revision without replacing
     name: "New revision available · refresh",
   });
   await expect(available).toBeVisible();
-  await expect(page.getByRole("heading", { name: reviewResponse.title })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: reviewResponse.title }),
+  ).toBeVisible();
   await expect(page.locator(".diff-panel")).toBeVisible();
 });
 
-test("loads a PR and renders ast-grep intelligence in both review layouts", async ({ page }) => {
-  await page.route("**/api/diff?**", route =>
-    route.fulfill({ status: 200, contentType: "application/json", json: reviewResponse }),
+test("loads a PR and renders ast-grep intelligence in both review layouts", async ({
+  page,
+}) => {
+  await page.route("**/api/diff?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: reviewResponse,
+    }),
   );
-  await page.route("**/api/semantic?**", async route => {
-    await new Promise(resolve => setTimeout(resolve, 100));
+  await page.route("**/api/semantic?**", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 100));
     await route.fulfill({
       status: 200,
       contentType: "application/json",
       json: semanticResponse,
     });
   });
-  await page.route("**/api/moves?**", route =>
-    route.fulfill({ status: 200, contentType: "application/json", json: movesResponse }),
+  await page.route("**/api/moves?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: movesResponse,
+    }),
   );
-  await page.route("**/api/reviews?**", route =>
-    route.fulfill({ status: 200, contentType: "application/json", json: { comments: [] } }),
+  await page.route("**/api/reviews?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: { comments: [] },
+    }),
   );
 
   await page.goto("/");
   await page.getByRole("button", { name: "Collapse file sidebar" }).click();
-  await expect(page.locator(".workspace")).toHaveClass(classToken("sidebar-collapsed"));
-  await expect(page.getByRole("navigation", { name: "Changed files" })).toBeHidden();
+  await expect(page.locator(".workspace")).toHaveClass(
+    classToken("sidebar-collapsed"),
+  );
+  await expect(
+    page.getByRole("navigation", { name: "Changed files" }),
+  ).toBeHidden();
   await page.getByRole("button", { name: "Expand file sidebar" }).click();
-  await expect(page.locator(".workspace")).not.toHaveClass(classToken("sidebar-collapsed"));
+  await expect(page.locator(".workspace")).not.toHaveClass(
+    classToken("sidebar-collapsed"),
+  );
   await page.getByPlaceholder("Paste any GitHub URL").fill(reviewUrl);
   await page.getByRole("button", { name: "Open", exact: true }).click();
 
-  await expect(page).toHaveURL(url =>
-    url.pathname === "/example/hunker-demo/pull/42" &&
-    url.searchParams.get("scope") === "file" &&
-    url.searchParams.get("view") === "split" &&
-    url.searchParams.get("file") === "src/greet.ts",
+  await expect(page).toHaveURL(
+    (url) =>
+      url.pathname === "/example/hunker-demo/pull/42" &&
+      url.searchParams.get("scope") === "file" &&
+      url.searchParams.get("view") === "split" &&
+      url.searchParams.get("file") === "src/greet.ts",
   );
-  await expect(page.getByRole("heading", { name: reviewResponse.title })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: reviewResponse.title }),
+  ).toBeVisible();
   await expect(page.locator(".compact-review-toolbar")).toHaveClass(
     classToken("is-expanded"),
   );
@@ -196,58 +242,83 @@ test("loads a PR and renders ast-grep intelligence in both review layouts", asyn
 
   await page.locator(".toolbar-options > .toolbar-menu-button").click();
   const tokenMode = page.getByRole("button", { name: "Token", exact: true });
-  const characterMode = page.getByRole("button", { name: "Character", exact: true });
+  const characterMode = page.getByRole("button", {
+    name: "Character",
+    exact: true,
+  });
   await expect(tokenMode).toHaveClass(classToken("is-active"));
   await characterMode.click();
   await expect(characterMode).toHaveClass(classToken("is-active"));
-  await expect(page).toHaveURL(url => url.searchParams.get("inline") === "character");
+  await expect(page).toHaveURL(
+    (url) => url.searchParams.get("inline") === "character",
+  );
   await tokenMode.click();
-  await expect(page).toHaveURL(url => url.searchParams.get("inline") === "token");
-  const syntaxToggle = page.getByRole("button", { name: "Syntax", exact: true });
+  await expect(page).toHaveURL(
+    (url) => url.searchParams.get("inline") === "token",
+  );
+  const syntaxToggle = page.getByRole("button", {
+    name: "Syntax",
+    exact: true,
+  });
   await syntaxToggle.click();
   await expect(page.locator('.diff-lines [class*="hljs-"]')).toHaveCount(0);
-  await expect(page).toHaveURL(url => url.searchParams.get("syntax") === "off");
+  await expect(page).toHaveURL(
+    (url) => url.searchParams.get("syntax") === "off",
+  );
   await syntaxToggle.click();
   await expect(page.locator(".split-lines .hljs-keyword")).not.toHaveCount(0);
-  await expect(page).toHaveURL(url => url.searchParams.get("syntax") === "on");
-  await page.getByRole("button", { name: "Close toolbar menu" }).click();
+  await expect(page).toHaveURL(
+    (url) => url.searchParams.get("syntax") === "on",
+  );
+  await page.locator(".toolbar-backdrop").click({ position: { x: 1, y: 1 } });
   await expect(page.locator(".toolbar-options-panel")).toHaveCount(0);
 
   await page.getByRole("button", { name: "Full diff", exact: true }).click();
   await expect(page.locator(".full-diff .diff-panel")).toHaveCount(2);
-  await expect(page.locator(".movement-summary")).toContainText("1 moved code block");
-  await expect(page.locator(".movement-summary")).toContainText("src/greet.ts:1");
-  await expect(page.locator(".movement-summary")).toContainText("src/message.ts:1");
+  await expect(page.locator(".movement-summary")).toContainText(
+    "1 moved code block",
+  );
+  await expect(page.locator(".movement-summary")).toContainText(
+    "src/greet.ts:1",
+  );
+  await expect(page.locator(".movement-summary")).toContainText(
+    "src/message.ts:1",
+  );
   await expect(page.locator(".line-move")).not.toHaveCount(0);
 
   await page.getByRole("button", { name: "Unified" }).click();
   await expect(page.locator(".unified-lines")).toHaveCount(2);
-  await expect(page.locator(".unified-lines").first()).toContainText("hello ${person}");
+  await expect(page.locator(".unified-lines").first()).toContainText(
+    "hello ${person}",
+  );
 
   await page.locator(".toolbar-options > .toolbar-menu-button").click();
   await page.getByRole("button", { name: "Semantic", exact: true }).click();
   await expect(page.locator(".semantic-banner")).toHaveCount(0);
   await expect(page.locator(".semantic-findings")).toHaveCount(0);
   await expect(page.locator(".unified-lines")).toHaveCount(2);
-  await expect(page).toHaveURL(url =>
-    url.pathname === "/example/hunker-demo/pull/42" &&
-    url.searchParams.get("scope") === "full" &&
-    url.searchParams.get("view") === "unified" &&
-    url.searchParams.get("whitespace") === "ignore" &&
-    url.searchParams.get("semantic") === "off" &&
-    url.searchParams.get("inline") === "token" &&
-    url.searchParams.get("syntax") === "on" &&
-    url.searchParams.get("sidebar") === "expanded" &&
-    url.searchParams.get("tab") === "files" &&
-    url.searchParams.get("file") === "src/greet.ts",
+  await expect(page).toHaveURL(
+    (url) =>
+      url.pathname === "/example/hunker-demo/pull/42" &&
+      url.searchParams.get("scope") === "full" &&
+      url.searchParams.get("view") === "unified" &&
+      url.searchParams.get("whitespace") === "ignore" &&
+      url.searchParams.get("semantic") === "off" &&
+      url.searchParams.get("inline") === "token" &&
+      url.searchParams.get("syntax") === "on" &&
+      url.searchParams.get("sidebar") === "expanded" &&
+      url.searchParams.get("tab") === "files" &&
+      url.searchParams.get("file") === "src/greet.ts",
   );
 });
 
-test("loads a copied review route and refreshes it from GitHub", async ({ page }) => {
+test("loads a copied review route and refreshes it from GitHub", async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 1024, height: 768 });
   let reviewRequests = 0;
   let semanticRequests = 0;
-  await page.route("**/api/diff?**", route => {
+  await page.route("**/api/diff?**", (route) => {
     reviewRequests += 1;
     const requestUrl = new URL(route.request().url());
     expect(requestUrl.searchParams.get("refresh")).not.toBeNull();
@@ -257,7 +328,7 @@ test("loads a copied review route and refreshes it from GitHub", async ({ page }
       json: { ...reviewResponse, title: `Review revision ${reviewRequests}` },
     });
   });
-  await page.route("**/api/semantic?**", route => {
+  await page.route("**/api/semantic?**", (route) => {
     semanticRequests += 1;
     return route.fulfill({
       status: 200,
@@ -270,12 +341,16 @@ test("loads a copied review route and refreshes it from GitHub", async ({ page }
     "/example/hunker-demo/pull/42?scope=full&view=unified&whitespace=show&semantic=off&inline=off&syntax=off&sidebar=collapsed&reviews=hide&tab=files&file=src%2Fmessage.ts";
   await page.goto(sharedRoute);
 
-  await expect(page.getByRole("heading", { name: "Review revision 1" })).toBeVisible();
-  await page.getByRole("button", { name: "Open GitHub link", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Review revision 1" }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Open GitHub link", exact: true })
+    .click();
   await expect(page.getByPlaceholder("Paste any GitHub URL")).toHaveValue(
     reviewUrl,
   );
-  await page.getByRole("button", { name: "Close toolbar menu" }).click();
+  await page.keyboard.press("Escape");
   await expect(page.locator(".compact-review-toolbar")).toHaveCSS(
     "position",
     "sticky",
@@ -298,47 +373,54 @@ test("loads a copied review route and refreshes it from GitHub", async ({ page }
     classToken("is-active"),
   );
   await page.locator(".toolbar-options > .toolbar-menu-button").click();
-  await expect(page.getByRole("button", { name: "Ignore whitespace" })).toHaveAttribute(
-    "aria-pressed",
-    "false",
-  );
-  await expect(page.getByRole("button", { name: "Semantic", exact: true })).toHaveAttribute(
-    "aria-pressed",
-    "false",
-  );
-  await expect(page.getByRole("button", { name: "Off", exact: true })).toHaveClass(
-    classToken("is-active"),
-  );
-  await expect(page.getByRole("button", { name: "Syntax", exact: true })).toHaveAttribute(
-    "aria-pressed",
-    "false",
-  );
+  await expect(
+    page.getByRole("button", { name: "Ignore whitespace" }),
+  ).toHaveAttribute("aria-pressed", "false");
+  await expect(
+    page.getByRole("button", { name: "Semantic", exact: true }),
+  ).toHaveAttribute("aria-pressed", "false");
+  await expect(
+    page.getByRole("button", { name: "Off", exact: true }),
+  ).toHaveClass(classToken("is-active"));
+  await expect(
+    page.getByRole("button", { name: "Syntax", exact: true }),
+  ).toHaveAttribute("aria-pressed", "false");
   await expect(page.locator('.diff-lines [class*="hljs-"]')).toHaveCount(0);
-  await expect(page.locator(".workspace")).toHaveClass(classToken("sidebar-collapsed"));
+  await expect(page.locator(".workspace")).toHaveClass(
+    classToken("sidebar-collapsed"),
+  );
   await expect(page.locator(".full-diff .diff-panel")).toHaveCount(2);
   await expect(page.locator(".unified-lines")).toHaveCount(2);
-  await page.getByRole("button", { name: "Close toolbar menu" }).click();
+  await page.locator(".toolbar-backdrop").click({ position: { x: 1, y: 1 } });
 
   await page.getByRole("button", { name: "One file" }).click();
   await expect(page.locator(".diff-panel")).toHaveCount(1);
-  await expect(page.locator(".diff-panel .file-path")).toContainText("message.ts");
+  await expect(page.locator(".diff-panel .file-path")).toContainText(
+    "message.ts",
+  );
   await page.getByRole("button", { name: "Full diff" }).click();
   await expect(page.locator(".full-diff .diff-panel")).toHaveCount(2);
   await expect(page).toHaveURL(sharedRoute);
 
   await page.getByRole("button", { name: "Refresh diff from GitHub" }).click();
-  await expect(page.getByRole("heading", { name: "Review revision 2" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Review revision 2" }),
+  ).toBeVisible();
   await expect(page).toHaveURL(sharedRoute);
 
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Review revision 3" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Review revision 3" }),
+  ).toBeVisible();
   await expect(page).toHaveURL(sharedRoute);
   expect(reviewRequests).toBe(3);
   expect(semanticRequests).toBe(0);
 });
 
-test("lists PR commits and opens a URL-persisted commit diff", async ({ page }) => {
-  await page.route("**/api/diff?**", route => {
+test("lists PR commits and opens a URL-persisted commit diff", async ({
+  page,
+}) => {
+  await page.route("**/api/diff?**", (route) => {
     const requestUrl = new URL(route.request().url());
     const target = requestUrl.searchParams.get("url") ?? "";
     return route.fulfill({
@@ -347,18 +429,26 @@ test("lists PR commits and opens a URL-persisted commit diff", async ({ page }) 
       json: target.includes("/commit/") ? commitDiffResponse : reviewResponse,
     });
   });
-  await page.route("**/api/commits?**", route =>
+  await page.route("**/api/commits?**", (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
       json: commitsResponse,
     }),
   );
-  await page.route("**/api/semantic?**", route =>
-    route.fulfill({ status: 200, contentType: "application/json", json: semanticResponse }),
+  await page.route("**/api/semantic?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: semanticResponse,
+    }),
   );
-  await page.route("**/api/reviews?**", route =>
-    route.fulfill({ status: 200, contentType: "application/json", json: { comments: [] } }),
+  await page.route("**/api/reviews?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: { comments: [] },
+    }),
   );
 
   await page.goto("/example/hunker-demo/pull/42");
@@ -369,7 +459,9 @@ test("lists PR commits and opens a URL-persisted commit diff", async ({ page }) 
   const tabPicker = page.locator(".review-tab-picker");
   const filesPosition = await tabPicker.boundingBox();
   await page.getByRole("button", { name: "Commits", exact: true }).click();
-  await expect(page).toHaveURL(url => url.searchParams.get("tab") === "commits");
+  await expect(page).toHaveURL(
+    (url) => url.searchParams.get("tab") === "commits",
+  );
   const commitsPosition = await tabPicker.boundingBox();
   expect(commitsPosition?.x).toBeCloseTo(filesPosition?.x ?? 0, 0);
   await expect(page.locator(".commit-row")).toHaveCount(2);
@@ -378,42 +470,54 @@ test("lists PR commits and opens a URL-persisted commit diff", async ({ page }) 
   );
 
   await page.getByRole("button", { name: /Use a template literal/ }).click();
-  await expect(page).toHaveURL(url =>
-    url.searchParams.get("commit") === commitsResponse.commits[1].sha,
+  await expect(page).toHaveURL(
+    (url) => url.searchParams.get("commit") === commitsResponse.commits[1].sha,
   );
   await expect(page.locator(".commit-detail-header")).toContainText("2222222");
   await expect(page.locator(".diff-panel")).toHaveCount(1);
   await expect(page.locator(".diff-panel")).toContainText("hello ${person}");
-  await expect(page.getByRole("button", { name: "Mark reviewed" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Mark reviewed" })).toHaveCount(
+    0,
+  );
   await expect(
     page.getByRole("button", { name: "Add a review comment" }),
   ).toHaveCount(0);
 
   await page.reload();
-  await expect(page.locator(".commit-detail-header")).toContainText("Use a template literal");
+  await expect(page.locator(".commit-detail-header")).toContainText(
+    "Use a template literal",
+  );
   await expect(page.locator(".diff-panel")).toHaveCount(1);
 
   await page.getByRole("button", { name: "← All commits" }).click();
   await expect(page.locator(".commit-row")).toHaveCount(2);
-  await expect(page).toHaveURL(url => url.searchParams.get("commit") === null);
+  await expect(page).toHaveURL(
+    (url) => url.searchParams.get("commit") === null,
+  );
   await page.getByRole("button", { name: "Files", exact: true }).click();
   await expect(page.locator(".diff-panel")).toHaveCount(1);
   await expect(page.locator(".diff-panel")).toContainText("const message");
 });
 
-test("opens a direct GitHub commit without PR-only controls", async ({ page }) => {
+test("opens a direct GitHub commit without PR-only controls", async ({
+  page,
+}) => {
   let reviewRequests = 0;
-  await page.route("**/api/diff?**", route =>
+  await page.route("**/api/diff?**", (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
       json: commitDiffResponse,
     }),
   );
-  await page.route("**/api/semantic?**", route =>
-    route.fulfill({ status: 200, contentType: "application/json", json: semanticResponse }),
+  await page.route("**/api/semantic?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: semanticResponse,
+    }),
   );
-  await page.route("**/api/reviews?**", route => {
+  await page.route("**/api/reviews?**", (route) => {
     reviewRequests += 1;
     return route.fulfill({
       status: 200,
@@ -437,7 +541,7 @@ test("drops a stale commit when restoring URL state for another PR", async ({
   page,
 }) => {
   let commitDiffRequests = 0;
-  await page.route("**/api/diff?**", route => {
+  await page.route("**/api/diff?**", (route) => {
     const target = new URL(route.request().url()).searchParams.get("url") ?? "";
     if (target.includes("/commit/")) commitDiffRequests += 1;
     return route.fulfill({
@@ -446,7 +550,7 @@ test("drops a stale commit when restoring URL state for another PR", async ({
       json: reviewResponse,
     });
   });
-  await page.route("**/api/commits?**", route =>
+  await page.route("**/api/commits?**", (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -459,19 +563,26 @@ test("drops a stale commit when restoring URL state for another PR", async ({
   );
 
   await expect(page.locator(".commit-row")).toHaveCount(2);
-  await expect(page).toHaveURL(url =>
-    url.searchParams.get("tab") === "commits" &&
-    url.searchParams.get("commit") === null,
+  await expect(page).toHaveURL(
+    (url) =>
+      url.searchParams.get("tab") === "commits" &&
+      url.searchParams.get("commit") === null,
   );
   expect(commitDiffRequests).toBe(0);
 });
 
-test("shows and hides inline GitHub reviews and posts replies and review decisions", async ({ page }) => {
+test("shows and hides inline GitHub reviews and posts replies and review decisions", async ({
+  page,
+}) => {
   let reviewLoads = 0;
-  await page.route("**/api/diff?**", route =>
-    route.fulfill({ status: 200, contentType: "application/json", json: reviewResponse }),
+  await page.route("**/api/diff?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: reviewResponse,
+    }),
   );
-  await page.route("**/api/reviews?**", route => {
+  await page.route("**/api/reviews?**", (route) => {
     reviewLoads += 1;
     return route.fulfill({
       status: 200,
@@ -479,7 +590,7 @@ test("shows and hides inline GitHub reviews and posts replies and review decisio
       json: reviewCommentsResponse,
     });
   });
-  await page.route("**/api/reviews/reply", route => {
+  await page.route("**/api/reviews/reply", (route) => {
     expect(route.request().postDataJSON()).toEqual({
       url: reviewUrl,
       commentId: 100,
@@ -498,7 +609,7 @@ test("shows and hides inline GitHub reviews and posts replies and review decisio
       },
     });
   });
-  await page.route("**/api/reviews/submit", route => {
+  await page.route("**/api/reviews/submit", (route) => {
     expect(route.request().postDataJSON()).toEqual({
       url: reviewUrl,
       body: "Please address the naming concern before merging.",
@@ -524,15 +635,21 @@ test("shows and hides inline GitHub reviews and posts replies and review decisio
   await expect(openThread).toContainText(
     "The rename makes the template clearer.",
   );
-  await expect(openThread.locator(".github-comment-markdown strong")).toHaveText(
-    "original parameter name",
+  await expect(
+    openThread.locator(".github-comment-markdown strong"),
+  ).toHaveText("original parameter name");
+  await expect(openThread.locator(".markdown-inline-code")).toHaveText(
+    "callers",
   );
-  await expect(openThread.locator(".markdown-inline-code")).toHaveText("callers");
-  await expect(openThread.locator(".github-comment-markdown li")).toHaveCount(2);
+  await expect(openThread.locator(".github-comment-markdown li")).toHaveCount(
+    2,
+  );
   await expect(
     openThread.getByRole("link", { name: "the style guide" }),
   ).toHaveAttribute("href", "https://example.com/style");
-  await expect(openThread.getByRole("link", { name: "do not run this" })).toHaveCount(0);
+  await expect(
+    openThread.getByRole("link", { name: "do not run this" }),
+  ).toHaveCount(0);
   await expect(openThread.locator("script")).toHaveCount(0);
   await expect(openThread.locator(".markdown-raw")).toContainText(
     "window.markdownWasUnsafe",
@@ -541,67 +658,87 @@ test("shows and hides inline GitHub reviews and posts replies and review decisio
     hasText: "bob-reviewer",
   });
   await expect(resolvedThread).toHaveClass(classToken("is-collapsed"));
-  await expect(resolvedThread.locator(".github-review-resolved")).toHaveText("Resolved");
+  await expect(resolvedThread.locator(".github-review-resolved")).toHaveText(
+    "Resolved",
+  );
   await expect(resolvedThread.locator(".github-review-summary")).toHaveText(
     "This thread has already been handled and can stay out of the way.",
   );
-  await resolvedThread.getByRole("button", {
-    name: "Expand review thread from bob-reviewer",
-  }).click();
+  await resolvedThread
+    .getByRole("button", {
+      name: "Expand review thread from bob-reviewer",
+    })
+    .click();
   await expect(resolvedThread).not.toHaveClass(classToken("is-collapsed"));
   await expect(resolvedThread).toContainText(
     "This thread has already been handled and can stay out of the way.",
   );
-  await expect(resolvedThread.locator(".github-comment-markdown em")).toHaveText(
-    "already been handled",
-  );
+  await expect(
+    resolvedThread.locator(".github-comment-markdown em"),
+  ).toHaveText("already been handled");
 
-  await openThread.getByRole("button", {
-    name: "Collapse review thread from alice-reviewer",
-  }).click();
+  await openThread
+    .getByRole("button", {
+      name: "Collapse review thread from alice-reviewer",
+    })
+    .click();
   await expect(openThread).toHaveClass(classToken("is-collapsed"));
-  await openThread.getByRole("button", {
-    name: "Expand review thread from alice-reviewer",
-  }).click();
+  await openThread
+    .getByRole("button", {
+      name: "Expand review thread from alice-reviewer",
+    })
+    .click();
 
   const reviewsToggle = page.getByRole("button", { name: "GitHub reviews 2" });
   await page.locator(".toolbar-options > .toolbar-menu-button").click();
   await reviewsToggle.click();
   await expect(page.locator(".github-review-thread")).toHaveCount(0);
-  await expect(page).toHaveURL(url => url.searchParams.get("reviews") === "hide");
+  await expect(page).toHaveURL(
+    (url) => url.searchParams.get("reviews") === "hide",
+  );
   await reviewsToggle.click();
   await expect(page.locator(".github-review-thread")).toHaveCount(2);
   expect(reviewLoads).toBe(1);
-  await page.getByRole("button", { name: "Close toolbar menu" }).click();
+  await page.locator(".toolbar-backdrop").click({ position: { x: 1, y: 1 } });
 
-  await page.getByRole("textbox", { name: "Reply to review from alice-reviewer" }).fill(
-    "Yes, the rename is intentional.",
-  );
+  await page
+    .getByRole("textbox", { name: "Reply to review from alice-reviewer" })
+    .fill("Yes, the rename is intentional.");
   await openThread.getByRole("button", { name: "Reply", exact: true }).click();
-  await expect(openThread).toContainText(
-    "Yes, the rename is intentional.",
-  );
+  await expect(openThread).toContainText("Yes, the rename is intentional.");
 
-  await page.getByRole("textbox", { name: "GitHub review summary" }).fill(
-    "Please address the naming concern before merging.",
-  );
+  await page
+    .getByRole("textbox", { name: "GitHub review summary" })
+    .fill("Please address the naming concern before merging.");
   await page.getByRole("button", { name: "Request changes" }).click();
-  await expect(page.getByRole("status")).toHaveText("Change request posted to GitHub.");
+  await expect(page.getByRole("status")).toHaveText(
+    "Change request posted to GitHub.",
+  );
 });
 
-test("reports a semantic backend failure without hiding the patch", async ({ page }) => {
-  await page.route("**/api/diff?**", route =>
-    route.fulfill({ status: 200, contentType: "application/json", json: reviewResponse }),
+test("reports a semantic backend failure without hiding the patch", async ({
+  page,
+}) => {
+  await page.route("**/api/diff?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: reviewResponse,
+    }),
   );
-  await page.route("**/api/semantic?**", route =>
+  await page.route("**/api/semantic?**", (route) =>
     route.fulfill({
       status: 503,
       contentType: "application/json",
       json: { error: "The semantic engine could not analyze this file." },
     }),
   );
-  await page.route("**/api/reviews?**", route =>
-    route.fulfill({ status: 200, contentType: "application/json", json: { comments: [] } }),
+  await page.route("**/api/reviews?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: { comments: [] },
+    }),
   );
 
   await page.goto("/");
@@ -617,11 +754,17 @@ test("reports a semantic backend failure without hiding the patch", async ({ pag
   await expect(page.locator(".diff-lines")).toContainText("greet(person");
 });
 
-test("collapses files and hunks and expands a patch to the full file", async ({ page }) => {
-  await page.route("**/api/diff?**", route =>
-    route.fulfill({ status: 200, contentType: "application/json", json: reviewResponse }),
+test("collapses files and hunks and expands a patch to the full file", async ({
+  page,
+}) => {
+  await page.route("**/api/diff?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: reviewResponse,
+    }),
   );
-  await page.route("**/api/file?**", route => {
+  await page.route("**/api/file?**", (route) => {
     const requestUrl = new URL(route.request().url());
     expect(requestUrl.searchParams.get("url")).toBe(reviewUrl);
     expect(requestUrl.searchParams.get("path")).toBe("src/greet.ts");
@@ -654,7 +797,9 @@ export const untouchedFooter = true;
   await panel.locator(".file-header").click({ position: { x: 180, y: 27 } });
   await expect(panel).toHaveClass(classToken("is-collapsed"));
   await expect(panel.locator(".diff-lines")).toHaveCount(0);
-  await page.getByRole("button", { name: "Expand src/greet.ts", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Expand src/greet.ts", exact: true })
+    .click();
   await expect(panel).not.toHaveClass(classToken("is-collapsed"));
 
   const collapseHunk = panel.getByRole("button", { name: /Collapse hunk/ });
@@ -663,12 +808,18 @@ export const untouchedFooter = true;
   await panel.getByRole("button", { name: /Expand hunk/ }).click();
   await expect(panel.locator(".diff-line:not(.line-hunk)")).not.toHaveCount(0);
 
-  await page.getByRole("button", { name: "Expand src/greet.ts to full file" }).click();
+  await page
+    .getByRole("button", { name: "Expand src/greet.ts to full file" })
+    .click();
   await expect(panel.locator(".diff-lines")).toContainText("untouchedFooter");
   await expect(panel.locator(".diff-footer")).toContainText("End of file");
 
-  await page.getByRole("button", { name: "Show patch only for src/greet.ts" }).click();
-  await expect(panel.locator(".diff-lines")).not.toContainText("untouchedFooter");
+  await page
+    .getByRole("button", { name: "Show patch only for src/greet.ts" })
+    .click();
+  await expect(panel.locator(".diff-lines")).not.toContainText(
+    "untouchedFooter",
+  );
   await expect(panel.locator(".diff-footer")).toContainText("End of patch");
 
   await page.getByRole("button", { name: "Side by side" }).click();
@@ -682,5 +833,7 @@ export const untouchedFooter = true;
   await expect(panel.locator(".diff-lines")).toHaveCount(0);
   await panel.getByRole("button", { name: "✓ Reviewed" }).click();
   await expect(panel).not.toHaveClass(classToken("is-collapsed"));
-  await expect(panel.getByRole("button", { name: "Mark reviewed" })).toBeVisible();
+  await expect(
+    panel.getByRole("button", { name: "Mark reviewed" }),
+  ).toBeVisible();
 });

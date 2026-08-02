@@ -40,7 +40,8 @@ export const commitsResponse = {
   commits: [
     {
       sha: "1111111111111111111111111111111111111111",
-      message: "Introduce greeting helper\n\nKeep message construction in one place.",
+      message:
+        "Introduce greeting helper\n\nKeep message construction in one place.",
       author: "review-agent",
       avatarUrl: "",
       authoredAt: "2026-07-30T14:00:00Z",
@@ -94,7 +95,7 @@ export const movesResponse = {
       fromLine: 1,
       toLine: 1,
       lineCount: 2,
-      preview: "export const greetingPrefix = \"hello\";",
+      preview: 'export const greetingPrefix = "hello";',
       kind: "lexical_declaration",
       label: "greetingPrefix",
       confidence: 1,

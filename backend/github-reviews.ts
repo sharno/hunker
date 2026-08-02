@@ -32,7 +32,9 @@ const repositoryApiUrl = (target: PullTarget) =>
   `https://api.github.com/repos/${target.owner}/${target.repo}`;
 
 const asRecord = (value: unknown): Readonly<Record<string, unknown>> =>
-  typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+  typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : {};
 
 const stringField = (record: Readonly<Record<string, unknown>>, key: string) =>
   typeof record[key] === "string" ? record[key] : "";
@@ -46,7 +48,8 @@ const reviewComment = (value: unknown): ReviewComment | undefined => {
   const path = stringField(comment, "path");
   if (id === undefined || path === "") return undefined;
   const user = asRecord(comment.user);
-  const sideValue = stringField(comment, "side") || stringField(comment, "original_side");
+  const sideValue =
+    stringField(comment, "side") || stringField(comment, "original_side");
   return {
     id,
     rootId: numberField(comment, "in_reply_to_id") ?? id,
@@ -55,17 +58,22 @@ const reviewComment = (value: unknown): ReviewComment | undefined => {
     author: stringField(user, "login") || "GitHub user",
     htmlUrl: stringField(comment, "html_url"),
     createdAt: stringField(comment, "created_at"),
-    line: numberField(comment, "line") ?? numberField(comment, "original_line") ?? null,
+    line:
+      numberField(comment, "line") ??
+      numberField(comment, "original_line") ??
+      null,
     side: sideValue === "LEFT" ? "LEFT" : "RIGHT",
     resolved: false,
   };
 };
 
 const decodeComments = (value: unknown): ReadonlyArray<ReviewComment> =>
-  Array.isArray(value) ? value.flatMap(item => {
-    const comment = reviewComment(item);
-    return comment === undefined ? [] : [comment];
-  }) : [];
+  Array.isArray(value)
+    ? value.flatMap((item) => {
+        const comment = reviewComment(item);
+        return comment === undefined ? [] : [comment];
+      })
+    : [];
 
 const reviewThreadsQuery = `
   query HunkerReviewThreads($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
@@ -90,20 +98,25 @@ type ResolvedThreadsPage = Readonly<{
   nextCursor: string | null;
 }>;
 
-export const decodeResolvedThreadsPage = (value: unknown): ResolvedThreadsPage => {
+export const decodeResolvedThreadsPage = (
+  value: unknown,
+): ResolvedThreadsPage => {
   const data = asRecord(asRecord(value).data);
   const repository = asRecord(data.repository);
   const pullRequest = asRecord(repository.pullRequest);
   const reviewThreads = asRecord(pullRequest.reviewThreads);
   const nodes = Array.isArray(reviewThreads.nodes) ? reviewThreads.nodes : [];
-  const resolutions = nodes.flatMap(node => {
+  const resolutions = nodes.flatMap((node) => {
     const thread = asRecord(node);
     const comments = asRecord(thread.comments);
-    const root = Array.isArray(comments.nodes) ? asRecord(comments.nodes[0]) : {};
+    const root = Array.isArray(comments.nodes)
+      ? asRecord(comments.nodes[0])
+      : {};
     const rawId = root.fullDatabaseId;
-    const id = typeof rawId === "string" || typeof rawId === "number"
-      ? Number(rawId)
-      : Number.NaN;
+    const id =
+      typeof rawId === "string" || typeof rawId === "number"
+        ? Number(rawId)
+        : Number.NaN;
     return Number.isSafeInteger(id) && typeof thread.isResolved === "boolean"
       ? [[id, thread.isResolved] as const]
       : [];
@@ -125,7 +138,9 @@ const loadResolvedThreads = (target: PullTarget) => {
     HttpClient.HttpClient | GitHubAuth
   > =>
     Effect.gen(function* () {
-      const request = HttpClientRequest.post("https://api.github.com/graphql").pipe(
+      const request = HttpClientRequest.post(
+        "https://api.github.com/graphql",
+      ).pipe(
         HttpClientRequest.bodyJsonUnsafe({
           query: reviewThreadsQuery,
           variables: {
@@ -153,13 +168,13 @@ export const loadReviewComments = (target: PullTarget) =>
     );
     const comments = decodeComments(yield* response.json);
     const resolutions = yield* loadResolvedThreads(target).pipe(
-      Effect.catch(error =>
+      Effect.catch((error) =>
         Effect.logWarning(
           `GitHub review thread resolution state unavailable: ${error.message}`,
         ).pipe(Effect.as(new Map<number, boolean>())),
       ),
     );
-    return comments.map(comment => ({
+    return comments.map((comment) => ({
       ...comment,
       resolved: resolutions.get(comment.rootId) ?? false,
     }));
@@ -174,7 +189,10 @@ export const replyToReviewComment = (
     const request = HttpClientRequest.post(
       `${repositoryApiUrl(target)}/pulls/${target.number}/comments/${commentId}/replies`,
     ).pipe(HttpClientRequest.bodyJsonUnsafe({ body }));
-    const response = yield* executeGitHubRequest(request, "application/vnd.github+json");
+    const response = yield* executeGitHubRequest(
+      request,
+      "application/vnd.github+json",
+    );
     const comment = reviewComment(yield* response.json);
     return comment;
   });

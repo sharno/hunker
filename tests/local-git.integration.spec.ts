@@ -51,7 +51,7 @@ test("reads pinned diffs, blobs, and commits without switching the checkout", as
     const headOid = commit(repository, "head", "after\n");
     git(repository, "checkout", "--detach", baseOid);
 
-    const result = await runLocalGit(root, service =>
+    const result = await runLocalGit(root, (service) =>
       Effect.gen(function* () {
         const input = {
           repository: { owner: "acme", name: "demo" },
@@ -75,9 +75,9 @@ test("reads pinned diffs, blobs, and commits without switching the checkout", as
       oldText: "before\n",
       newText: "after\n",
     });
-    expect(Option.getOrThrow(result.commits).map(item => item.message)).toEqual([
-      "head",
-    ]);
+    expect(
+      Option.getOrThrow(result.commits).map((item) => item.message),
+    ).toEqual(["head"]);
     expect(git(repository, "rev-parse", "HEAD")).toBe(baseOid);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -104,7 +104,7 @@ test("fetches a tracked pull ref and reports a newer immutable head", async () =
     git(source, "push", "origin", `${latestHeadOid}:refs/pull/7/head`);
     execFileSync("git", ["clone", remote, repository]);
 
-    const status = await runLocalGit(root, service =>
+    const status = await runLocalGit(root, (service) =>
       service.checkPullRevision(
         { owner: "acme", name: "demo" },
         "7",

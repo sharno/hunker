@@ -15,16 +15,18 @@ test("round-trips pull, compare, and commit review routes", () => {
     _tag: "Pull",
     owner: "radarlabs",
     repository: "server",
-    number: "7848",
+    number: 7848,
   });
   expect(githubUrlFromPathname("/radarlabs/server/pull/7848")).toBe(
     "https://github.com/radarlabs/server/pull/7848",
   );
-  expect(localPathFromGitHubUrl("https://github.com/radarlabs/server/pull/7848")).toBe(
-    "/radarlabs/server/pull/7848",
-  );
   expect(
-    localPathFromGitHubUrl("https://github.com/radarlabs/server/compare/main...feature"),
+    localPathFromGitHubUrl("https://github.com/radarlabs/server/pull/7848"),
+  ).toBe("/radarlabs/server/pull/7848");
+  expect(
+    localPathFromGitHubUrl(
+      "https://github.com/radarlabs/server/compare/main...feature",
+    ),
   ).toBe("/radarlabs/server/compare/main...feature");
   expect(
     localPathFromGitHubUrl(
@@ -52,7 +54,9 @@ test("selects the best Hunker view for common GitHub links", () => {
       "https://github.com/radarlabs/server/pull/7848/commits/abcdef1234567890",
     ),
   ).toContain("commit=abcdef1234567890");
-  expect(localLocationFromGitHubUrl("https://example.com/radarlabs/server")).toBeUndefined();
+  expect(
+    localLocationFromGitHubUrl("https://example.com/radarlabs/server"),
+  ).toBeUndefined();
 });
 
 test("round-trips a complete review configuration through the query string", () => {
@@ -77,18 +81,20 @@ test("round-trips a complete review configuration through the query string", () 
   expect(href).toBe(
     "/example/hunker-demo/pull/42?scope=full&view=unified&whitespace=show&semantic=off&inline=off&syntax=off&sidebar=collapsed&reviews=hide&tab=commits&file=src%2Fmessage+with+spaces.ts&commit=abcdef1234567890",
   );
-  expect(reviewOptionsFromSearch(new URL(href!, "http://hunker.local").search)).toEqual(
-    options,
-  );
+  expect(
+    reviewOptionsFromSearch(new URL(href!, "http://hunker.local").search),
+  ).toEqual(options);
 });
 
 test("uses defaults for absent or invalid review options", () => {
-  expect(reviewOptionsFromSearch("?scope=wat&semantic=maybe&sidebar=nope")).toEqual(
-    defaultReviewOptions,
-  );
+  expect(
+    reviewOptionsFromSearch("?scope=wat&semantic=maybe&sidebar=nope"),
+  ).toEqual(defaultReviewOptions);
 });
 
 test("migrates legacy character diff links", () => {
-  expect(reviewOptionsFromSearch("?characters=on").inlineDiffMode).toBe("character");
+  expect(reviewOptionsFromSearch("?characters=on").inlineDiffMode).toBe(
+    "character",
+  );
   expect(reviewOptionsFromSearch("?characters=off").inlineDiffMode).toBe("off");
 });

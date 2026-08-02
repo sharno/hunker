@@ -13,7 +13,13 @@ import type { SourceRange } from "../src/domain";
 
 export type SupportedLanguage = Readonly<{
   ast: Parameters<typeof parse>[0];
-  name: "JavaScript" | "OpenTofu / HCL" | "Python" | "Rust" | "TypeScript" | "TSX";
+  name:
+    | "JavaScript"
+    | "OpenTofu / HCL"
+    | "Python"
+    | "Rust"
+    | "TypeScript"
+    | "TSX";
 }>;
 
 const HCL_LANGUAGE = "hcl";
@@ -55,7 +61,9 @@ export type AstUnit = Readonly<{
   order: number;
 }>;
 
-export const languageForPath = (path: string): SupportedLanguage | undefined => {
+export const languageForPath = (
+  path: string,
+): SupportedLanguage | undefined => {
   const extension = path.split(".").at(-1)?.toLowerCase();
   if (extension === "ts") return { ast: Lang.TypeScript, name: "TypeScript" };
   if (extension === "tsx") return { ast: Lang.Tsx, name: "TSX" };
@@ -172,15 +180,17 @@ const leafTokens = (node: SgNode, shape: boolean): ReadonlyArray<string> => {
       : node.text();
     return [`${kind}:${text}`];
   }
-  return children.flatMap(child => leafTokens(child, shape));
+  return children.flatMap((child) => leafTokens(child, shape));
 };
 
 const nodeLabel = (node: SgNode): string => {
   if (String(node.kind()) === "block") {
     const labels = node
       .children()
-      .filter(child => ["identifier", "string_lit"].includes(String(child.kind())))
-      .map(child => child.text().replace(/^"|"$/g, ""));
+      .filter((child) =>
+        ["identifier", "string_lit"].includes(String(child.kind())),
+      )
+      .map((child) => child.text().replace(/^"|"$/g, ""));
     const [blockType, ...blockLabels] = labels;
     if (blockType !== undefined) {
       return blockLabels.length === 0
@@ -189,9 +199,13 @@ const nodeLabel = (node: SgNode): string => {
     }
   }
   if (String(node.kind()) === "decorated_definition") {
-    const definition = node.children().find(child =>
-      ["class_definition", "function_definition"].includes(String(child.kind())),
-    );
+    const definition = node
+      .children()
+      .find((child) =>
+        ["class_definition", "function_definition"].includes(
+          String(child.kind()),
+        ),
+      );
     if (definition !== undefined) return nodeLabel(definition);
   }
   const queue = [...node.children()];
@@ -207,17 +221,28 @@ const nodeLabel = (node: SgNode): string => {
 const nodePreview = (node: SgNode) => {
   const previewNode =
     String(node.kind()) === "decorated_definition"
-      ? (node.children().find(child =>
-          ["class_definition", "function_definition"].includes(String(child.kind())),
-        ) ?? node)
+      ? (node
+          .children()
+          .find((child) =>
+            ["class_definition", "function_definition"].includes(
+              String(child.kind()),
+            ),
+          ) ?? node)
       : node;
   return (
-    previewNode.text().split("\n").find(line => line.trim() !== "")?.trim().slice(0, 100) ??
-    ""
+    previewNode
+      .text()
+      .split("\n")
+      .find((line) => line.trim() !== "")
+      ?.trim()
+      .slice(0, 100) ?? ""
   );
 };
 
-const collectUnits = (root: SgNode, includeMembers: boolean): ReadonlyArray<AstUnit> => {
+const collectUnits = (
+  root: SgNode,
+  includeMembers: boolean,
+): ReadonlyArray<AstUnit> => {
   const units: Array<AstUnit> = [];
   const visit = (node: SgNode, insideContainer: boolean) => {
     const kind = String(node.kind());
@@ -261,7 +286,10 @@ export const parseUnits = (
   };
 };
 
-export const uniqueBy = <T>(items: ReadonlyArray<T>, key: (item: T) => string) => {
+export const uniqueBy = <T>(
+  items: ReadonlyArray<T>,
+  key: (item: T) => string,
+) => {
   const grouped = new Map<string, Array<T>>();
   for (const item of items) {
     const value = key(item);
@@ -269,7 +297,9 @@ export const uniqueBy = <T>(items: ReadonlyArray<T>, key: (item: T) => string) =
   }
   return new Map(
     [...grouped].flatMap(([value, matches]) =>
-      matches.length === 1 && matches[0] !== undefined ? [[value, matches[0]] as const] : [],
+      matches.length === 1 && matches[0] !== undefined
+        ? [[value, matches[0]] as const]
+        : [],
     ),
   );
 };

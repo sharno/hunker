@@ -1,5 +1,6 @@
 import type { Html, HtmlBuilder } from "foldkit/html";
 
+import { button } from "./control";
 import { ToggledHunkCollapse } from "../domain";
 import type { CharacterDiffRow, CharacterRange, Message } from "../domain";
 import { hunkKey } from "../diff";
@@ -27,7 +28,10 @@ const isInMovedRange = (
   line: number | null,
   ranges: ReadonlyArray<Readonly<{ start: number; count: number }>>,
 ) =>
-  line !== null && ranges.some(range => line >= range.start && line < range.start + range.count);
+  line !== null &&
+  ranges.some(
+    (range) => line >= range.start && line < range.start + range.count,
+  );
 
 const characterRangesFor = (
   line: DiffLine,
@@ -35,12 +39,12 @@ const characterRangesFor = (
 ): ReadonlyArray<CharacterRange> => {
   if (line.kind === "hunk" || line.kind === "context") return [];
   const lineNumber = line.kind === "add" ? line.newNumber : line.oldNumber;
-  const row = rows.find(candidate =>
+  const row = rows.find((candidate) =>
     line.kind === "add"
       ? candidate.newLine === lineNumber
       : candidate.oldLine === lineNumber,
   );
-  return line.kind === "add" ? row?.newRanges ?? [] : row?.oldRanges ?? [];
+  return line.kind === "add" ? (row?.newRanges ?? []) : (row?.oldRanges ?? []);
 };
 
 const codeContent = (
@@ -76,7 +80,10 @@ const visibleLines = (
   interaction: DiffInteraction,
 ) =>
   lines.filter(
-    line => line.kind === "hunk" || line.hunkId === null || !isCollapsedHunk(line, interaction),
+    (line) =>
+      line.kind === "hunk" ||
+      line.hunkId === null ||
+      !isCollapsedHunk(line, interaction),
   );
 
 const hunkHeader = (
@@ -86,12 +93,16 @@ const hunkHeader = (
 ) => {
   const collapsed = isCollapsedHunk(line, interaction);
   return h.div(
-    [h.Key(`${interaction.path}-${line.hunkId}`), h.Class("diff-line line-hunk")],
+    [
+      h.Key(`${interaction.path}-${line.hunkId}`),
+      h.Class("diff-line line-hunk"),
+    ],
     [
       h.span([h.Class("line-number old")], [""]),
       h.span([h.Class("line-number new")], [""]),
       h.span([h.Class("line-marker")], [""]),
-      h.button(
+      button(
+        h,
         [
           h.Type("button"),
           h.Class("hunk-toggle"),
@@ -109,7 +120,9 @@ const hunkHeader = (
         [
           h.span([h.Class("collapse-chevron")], [collapsed ? "›" : "⌄"]),
           h.code([], [line.content]),
-          collapsed ? h.span([h.Class("collapsed-label")], ["hunk collapsed"]) : h.empty,
+          collapsed
+            ? h.span([h.Class("collapsed-label")], ["hunk collapsed"])
+            : h.empty,
         ],
       ),
     ],
@@ -149,11 +162,18 @@ export const unifiedDiffView = (
           ),
         ],
         [
-          h.span([h.Class("line-number old")], [line.oldNumber?.toString() ?? ""]),
-          h.span([h.Class("line-number new")], [line.newNumber?.toString() ?? ""]),
-          h.span([h.Class("line-marker")], [
-            line.kind === "add" ? "+" : line.kind === "remove" ? "−" : "",
-          ]),
+          h.span(
+            [h.Class("line-number old")],
+            [line.oldNumber?.toString() ?? ""],
+          ),
+          h.span(
+            [h.Class("line-number new")],
+            [line.newNumber?.toString() ?? ""],
+          ),
+          h.span(
+            [h.Class("line-marker")],
+            [line.kind === "add" ? "+" : line.kind === "remove" ? "−" : ""],
+          ),
           h.code(
             [h.Class("line-code")],
             codeContent(line, characterDiff, interaction, h),
@@ -175,6 +195,8 @@ export const unifiedDiffView = (
 
 type SplitRow = Readonly<{ left?: DiffLine; right?: DiffLine }>;
 
+// NOTE: Alignment uses function-local scratch buffers for a linear pass; the
+// returned rows are fresh values and no mutation reaches the view or Model.
 const splitRows = (
   lines: ReadonlyArray<DiffLine>,
   characterRows: ReadonlyArray<CharacterDiffRow>,
@@ -197,14 +219,14 @@ const splitRows = (
     }
     index -= 1;
     const oldLines = new Map(
-      block.flatMap(candidate =>
+      block.flatMap((candidate) =>
         candidate.kind === "remove" && candidate.oldNumber !== null
           ? [[candidate.oldNumber, candidate] as const]
           : [],
       ),
     );
     const newLines = new Map(
-      block.flatMap(candidate =>
+      block.flatMap((candidate) =>
         candidate.kind === "add" && candidate.newNumber !== null
           ? [[candidate.newNumber, candidate] as const]
           : [],
@@ -213,21 +235,23 @@ const splitRows = (
     const consumedOld = new Set<number>();
     const consumedNew = new Set<number>();
     for (const pairing of characterRows) {
-      const left = pairing.oldLine === null ? undefined : oldLines.get(pairing.oldLine);
-      const right = pairing.newLine === null ? undefined : newLines.get(pairing.newLine);
+      const left =
+        pairing.oldLine === null ? undefined : oldLines.get(pairing.oldLine);
+      const right =
+        pairing.newLine === null ? undefined : newLines.get(pairing.newLine);
       if (left === undefined && right === undefined) continue;
       rows.push({ left, right });
       if (pairing.oldLine !== null) consumedOld.add(pairing.oldLine);
       if (pairing.newLine !== null) consumedNew.add(pairing.newLine);
     }
     const remainingOld = block.filter(
-      candidate =>
+      (candidate) =>
         candidate.kind === "remove" &&
         candidate.oldNumber !== null &&
         !consumedOld.has(candidate.oldNumber),
     );
     const remainingNew = block.filter(
-      candidate =>
+      (candidate) =>
         candidate.kind === "add" &&
         candidate.newNumber !== null &&
         !consumedNew.has(candidate.newNumber),
@@ -237,7 +261,10 @@ const splitRows = (
       remainder < Math.max(remainingOld.length, remainingNew.length);
       remainder += 1
     ) {
-      rows.push({ left: remainingOld[remainder], right: remainingNew[remainder] });
+      rows.push({
+        left: remainingOld[remainder],
+        right: remainingNew[remainder],
+      });
     }
   }
   return rows;
@@ -275,12 +302,14 @@ const splitCell = (
       ),
     ],
     [
-      h.span([h.Class("line-number")], [
-        (side === "left" ? line.oldNumber : line.newNumber)?.toString() ?? "",
-      ]),
-      h.span([h.Class("line-marker")], [
-        line.kind === "add" ? "+" : line.kind === "remove" ? "−" : "",
-      ]),
+      h.span(
+        [h.Class("line-number")],
+        [(side === "left" ? line.oldNumber : line.newNumber)?.toString() ?? ""],
+      ),
+      h.span(
+        [h.Class("line-marker")],
+        [line.kind === "add" ? "+" : line.kind === "remove" ? "−" : ""],
+      ),
       h.code(
         [h.Class("line-code")],
         codeContent(line, characterDiff, interaction, h),
@@ -298,28 +327,29 @@ export const splitDiffView = (
 ) =>
   h.div(
     [h.Class("diff-lines split-lines")],
-    splitRows(visibleLines(lines, interaction), interaction.characterRows).flatMap(
-      (row, index) => {
-        if (row.left?.kind === "hunk") {
-          return [hunkHeader(row.left, interaction, h)];
-        }
-        const splitRow = h.div(
-          [h.Key(`split-${index}`), h.Class("split-row")],
-          [
-            splitCell(row.left, "left", characterDiff, moved, interaction, h),
-            splitCell(row.right, "right", characterDiff, moved, interaction, h),
-          ],
-        );
-        return [
-          splitRow,
-          ...inlineReviewThreads(
-            interaction.path,
-            row.left?.oldNumber ?? null,
-            row.right?.newNumber ?? null,
-            interaction.reviews,
-            h,
-          ),
-        ];
-      },
-    ),
+    splitRows(
+      visibleLines(lines, interaction),
+      interaction.characterRows,
+    ).flatMap((row, index) => {
+      if (row.left?.kind === "hunk") {
+        return [hunkHeader(row.left, interaction, h)];
+      }
+      const splitRow = h.div(
+        [h.Key(`split-${index}`), h.Class("split-row")],
+        [
+          splitCell(row.left, "left", characterDiff, moved, interaction, h),
+          splitCell(row.right, "right", characterDiff, moved, interaction, h),
+        ],
+      );
+      return [
+        splitRow,
+        ...inlineReviewThreads(
+          interaction.path,
+          row.left?.oldNumber ?? null,
+          row.right?.newNumber ?? null,
+          interaction.reviews,
+          h,
+        ),
+      ];
+    }),
   );

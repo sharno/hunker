@@ -10,7 +10,7 @@
     "skipLibCheck": true,
     "verbatimModuleSyntax": true,
     "allowImportingTsExtensions": true,
-    "types": ["node"]
+    "types": ["node", "vitest/globals"]
   },
-  "include": ["src", "backend", "vite.config.ts"]
+  "include": ["src", "backend", "vite.config.ts", "vitest.config.ts"]
 }

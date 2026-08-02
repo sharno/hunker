@@ -1,7 +1,16 @@
 import { homedir, tmpdir } from "node:os";
 
 import { FileFinder } from "@ff-labs/fff-node";
-import { Config, Context, Data, Effect, FileSystem, Layer, Path, Stream } from "effect";
+import {
+  Config,
+  Context,
+  Data,
+  Effect,
+  FileSystem,
+  Layer,
+  Path,
+  Stream,
+} from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 export type RepositoryFile = Readonly<{
@@ -51,7 +60,9 @@ type LocalRepositoryShape = Readonly<{
   ) => Effect.Effect<Readonly<{ path: string }>, LocalRepositoryFailed>;
 }>;
 
-export class LocalRepositoryFailed extends Data.TaggedError("LocalRepositoryFailed")<{
+export class LocalRepositoryFailed extends Data.TaggedError(
+  "LocalRepositoryFailed",
+)<{
   readonly message: string;
   readonly status: number;
 }> {}
@@ -96,23 +107,44 @@ export const layer = Layer.effect(
 
     const repositoryPath = (repository: RepositoryId) =>
       Effect.gen(function* () {
-        if (!validSegment.test(repository.owner) || !validSegment.test(repository.name)) {
+        if (
+          !validSegment.test(repository.owner) ||
+          !validSegment.test(repository.name)
+        ) {
           return yield* failure("That repository name is not valid.", 400);
         }
         const flat = paths.resolve(repositoriesRoot, repository.name);
-        const nested = paths.resolve(repositoriesRoot, repository.owner, repository.name);
-        const temporary = paths.resolve(cacheRoot, repository.owner, repository.name);
-        const flatExists = yield* fs.exists(flat).pipe(
-          Effect.mapError(() => failure(`Could not inspect ${repositoriesRoot}.`)),
+        const nested = paths.resolve(
+          repositoriesRoot,
+          repository.owner,
+          repository.name,
         );
+        const temporary = paths.resolve(
+          cacheRoot,
+          repository.owner,
+          repository.name,
+        );
+        const flatExists = yield* fs
+          .exists(flat)
+          .pipe(
+            Effect.mapError(() =>
+              failure(`Could not inspect ${repositoriesRoot}.`),
+            ),
+          );
         if (flatExists) return flat;
-        const nestedExists = yield* fs.exists(nested).pipe(
-          Effect.mapError(() => failure(`Could not inspect ${repositoriesRoot}.`)),
-        );
+        const nestedExists = yield* fs
+          .exists(nested)
+          .pipe(
+            Effect.mapError(() =>
+              failure(`Could not inspect ${repositoriesRoot}.`),
+            ),
+          );
         if (nestedExists) return nested;
-        const temporaryExists = yield* fs.exists(temporary).pipe(
-          Effect.mapError(() => failure(`Could not inspect ${cacheRoot}.`)),
-        );
+        const temporaryExists = yield* fs
+          .exists(temporary)
+          .pipe(
+            Effect.mapError(() => failure(`Could not inspect ${cacheRoot}.`)),
+          );
         if (temporaryExists) return temporary;
         return yield* failure(
           `Local repository not found. Expected ${flat}, ${nested}, or ${temporary}.`,
@@ -120,44 +152,61 @@ export const layer = Layer.effect(
         );
       });
 
-    const clone = (repository: RepositoryId, destination: RepositoryCloneDestination) =>
+    const clone = (
+      repository: RepositoryId,
+      destination: RepositoryCloneDestination,
+    ) =>
       Effect.gen(function* () {
-        if (!validSegment.test(repository.owner) || !validSegment.test(repository.name)) {
+        if (
+          !validSegment.test(repository.owner) ||
+          !validSegment.test(repository.name)
+        ) {
           return yield* failure("That repository name is not valid.", 400);
         }
-        const root = destination === "configured" ? repositoriesRoot : cacheRoot;
+        const root =
+          destination === "configured" ? repositoriesRoot : cacheRoot;
         const target =
           destination === "configured"
             ? paths.resolve(root, repository.name)
             : paths.resolve(root, repository.owner, repository.name);
-        const targetExists = yield* fs.exists(target).pipe(
-          Effect.mapError(() => failure(`Could not inspect ${target}.`)),
-        );
+        const targetExists = yield* fs
+          .exists(target)
+          .pipe(Effect.mapError(() => failure(`Could not inspect ${target}.`)));
         if (targetExists) return { path: target };
-        yield* fs.makeDirectory(paths.dirname(target), { recursive: true }).pipe(
-          Effect.mapError(() => failure(`Could not create ${paths.dirname(target)}.`)),
-        );
-        const handle = yield* spawner.spawn(
-          ChildProcess.make(
-            "gh",
-            [
-              "repo",
-              "clone",
-              `${repository.owner}/${repository.name}`,
-              target,
-              "--",
-              "--filter=blob:none",
-            ],
-            { cwd: paths.dirname(target) },
-          ),
-        ).pipe(
-          Effect.mapError(error => failure(`Could not start gh: ${String(error)}`)),
-        );
+        yield* fs
+          .makeDirectory(paths.dirname(target), { recursive: true })
+          .pipe(
+            Effect.mapError(() =>
+              failure(`Could not create ${paths.dirname(target)}.`),
+            ),
+          );
+        const handle = yield* spawner
+          .spawn(
+            ChildProcess.make(
+              "gh",
+              [
+                "repo",
+                "clone",
+                `${repository.owner}/${repository.name}`,
+                target,
+                "--",
+                "--filter=blob:none",
+              ],
+              { cwd: paths.dirname(target) },
+            ),
+          )
+          .pipe(
+            Effect.mapError((error) =>
+              failure(`Could not start gh: ${String(error)}`),
+            ),
+          );
         const [output, exitCode] = yield* Effect.all(
           [Stream.mkString(Stream.decodeText(handle.all)), handle.exitCode],
           { concurrency: "unbounded" },
         ).pipe(
-          Effect.mapError(error => failure(`Could not clone the repository: ${String(error)}`)),
+          Effect.mapError((error) =>
+            failure(`Could not clone the repository: ${String(error)}`),
+          ),
         );
         if (exitCode !== ChildProcessSpawner.ExitCode(0)) {
           return yield* failure(
@@ -172,35 +221,55 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         const root = yield* repositoryPath(repository);
         const cached = finders.get(root);
-        if (cached !== undefined && !cached.isDestroyed) return { root, finder: cached };
+        if (cached !== undefined && !cached.isDestroyed)
+          return { root, finder: cached };
         const created = yield* Effect.try({
           try: () => FileFinder.create({ basePath: root, aiMode: true }),
-          catch: error => failure(`FFF could not index ${root}: ${String(error)}`),
+          catch: (error) =>
+            failure(`FFF could not index ${root}: ${String(error)}`),
         });
-        if (!created.ok) return yield* failure(`FFF could not index ${root}: ${created.error}`);
+        if (!created.ok)
+          return yield* failure(
+            `FFF could not index ${root}: ${created.error}`,
+          );
         finders.set(root, created.value);
         const scanned = yield* Effect.tryPromise({
           try: () => created.value.waitForScan(15_000),
-          catch: error => failure(`FFF could not scan ${root}: ${String(error)}`),
+          catch: (error) =>
+            failure(`FFF could not scan ${root}: ${String(error)}`),
         });
-        if (!scanned.ok) return yield* failure(`FFF could not scan ${root}: ${scanned.error}`);
+        if (!scanned.ok)
+          return yield* failure(`FFF could not scan ${root}: ${scanned.error}`);
         return { root, finder: created.value };
       });
 
     const validatedFilePath = (root: string, relativePath: string) =>
       Effect.gen(function* () {
         const absolute = paths.resolve(root, relativePath);
-        if (relativePath === "" || !absolute.startsWith(`${root}${paths.sep}`)) {
-          return yield* failure("That file is outside the configured repository.", 400);
+        if (
+          relativePath === "" ||
+          !absolute.startsWith(`${root}${paths.sep}`)
+        ) {
+          return yield* failure(
+            "That file is outside the configured repository.",
+            400,
+          );
         }
-        const canonicalRoot = yield* fs.realPath(root).pipe(
-          Effect.mapError(() => failure(`Could not inspect ${root}.`)),
-        );
-        const canonicalFile = yield* fs.realPath(absolute).pipe(
-          Effect.mapError(() => failure(`Could not read ${relativePath}.`, 404)),
-        );
+        const canonicalRoot = yield* fs
+          .realPath(root)
+          .pipe(Effect.mapError(() => failure(`Could not inspect ${root}.`)));
+        const canonicalFile = yield* fs
+          .realPath(absolute)
+          .pipe(
+            Effect.mapError(() =>
+              failure(`Could not read ${relativePath}.`, 404),
+            ),
+          );
         if (!canonicalFile.startsWith(`${canonicalRoot}${paths.sep}`)) {
-          return yield* failure("That file is outside the configured repository.", 400);
+          return yield* failure(
+            "That file is outside the configured repository.",
+            400,
+          );
         }
         return canonicalFile;
       });
@@ -210,10 +279,12 @@ export const layer = Layer.effect(
         const { finder } = yield* finderFor(repository);
         const result = yield* Effect.try({
           try: () => finder.glob("**/*", { pageSize: 20_000 }),
-          catch: error => failure(`FFF file listing failed: ${String(error)}`),
+          catch: (error) =>
+            failure(`FFF file listing failed: ${String(error)}`),
         });
-        if (!result.ok) return yield* failure(`FFF file listing failed: ${result.error}`);
-        return result.value.items.map(item => ({
+        if (!result.ok)
+          return yield* failure(`FFF file listing failed: ${result.error}`);
+        return result.value.items.map((item) => ({
           path: item.relativePath,
           size: item.size,
           gitStatus: item.gitStatus,
@@ -225,9 +296,11 @@ export const layer = Layer.effect(
         const { root, finder } = yield* finderFor(repository);
         const files = yield* Effect.try({
           try: () => finder.fileSearch(query, { pageSize: 24 }),
-          catch: error => failure(`FFF filename search failed: ${String(error)}`),
+          catch: (error) =>
+            failure(`FFF filename search failed: ${String(error)}`),
         });
-        if (!files.ok) return yield* failure(`FFF filename search failed: ${files.error}`);
+        if (!files.ok)
+          return yield* failure(`FFF filename search failed: ${files.error}`);
         const grep = yield* Effect.try({
           try: () =>
             finder.grep(query, {
@@ -239,17 +312,21 @@ export const layer = Layer.effect(
               classifyDefinitions: true,
               timeBudgetMs: 250,
             }),
-          catch: error => failure(`FFF content search failed: ${String(error)}`),
+          catch: (error) =>
+            failure(`FFF content search failed: ${String(error)}`),
         });
-        if (!grep.ok) return yield* failure(`FFF content search failed: ${grep.error}`);
-        const matchedPaths = [...new Set(grep.value.items.map(match => match.relativePath))];
+        if (!grep.ok)
+          return yield* failure(`FFF content search failed: ${grep.error}`);
+        const matchedPaths = [
+          ...new Set(grep.value.items.map((match) => match.relativePath)),
+        ];
         const sources = new Map(
           yield* Effect.forEach(
             matchedPaths,
-            path =>
+            (path) =>
               validatedFilePath(root, path).pipe(
                 Effect.flatMap(fs.readFileString),
-                Effect.map(content => [path, content.split("\n")] as const),
+                Effect.map((content) => [path, content.split("\n")] as const),
                 Effect.catch(() =>
                   Effect.succeed([path, [] as Array<string>] as const),
                 ),
@@ -258,12 +335,12 @@ export const layer = Layer.effect(
           ),
         );
         return {
-          files: files.value.items.map(item => ({
+          files: files.value.items.map((item) => ({
             path: item.relativePath,
             size: item.size,
             gitStatus: item.gitStatus,
           })),
-          matches: grep.value.items.map(match => {
+          matches: grep.value.items.map((match) => {
             const lines = sources.get(match.relativePath) ?? [];
             const index = match.lineNumber - 1;
             return {
@@ -284,9 +361,13 @@ export const layer = Layer.effect(
       Effect.gen(function* () {
         const root = yield* repositoryPath(repository);
         const absolute = yield* validatedFilePath(root, relativePath);
-        const content = yield* fs.readFileString(absolute).pipe(
-          Effect.mapError(() => failure(`Could not read ${relativePath}.`, 404)),
-        );
+        const content = yield* fs
+          .readFileString(absolute)
+          .pipe(
+            Effect.mapError(() =>
+              failure(`Could not read ${relativePath}.`, 404),
+            ),
+          );
         return {
           path: relativePath,
           content: content.slice(0, maxFileCharacters),

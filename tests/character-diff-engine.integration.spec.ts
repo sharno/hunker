@@ -23,7 +23,7 @@ const runCharacterDiff = (input: CharacterDiffInput) =>
 const slices = (
   source: string,
   ranges: ReadonlyArray<Readonly<{ start: number; end: number }>>,
-) => ranges.map(range => source.slice(range.start, range.end));
+) => ranges.map((range) => source.slice(range.start, range.end));
 
 test("native Git aligns whole-file character changes with their actual lines", async () => {
   const oldLines = [
@@ -42,7 +42,7 @@ test("native Git aligns whole-file character changes with their actual lines", a
     mode: "character",
   });
 
-  expect(result.rows.map(row => [row.oldLine, row.newLine])).toEqual([
+  expect(result.rows.map((row) => [row.oldLine, row.newLine])).toEqual([
     [1, 1],
     [2, 2],
   ]);
@@ -50,10 +50,12 @@ test("native Git aligns whole-file character changes with their actual lines", a
     ", options: DConfigOptions = DConfigOnlyOptions",
   ]);
   expect(result.rows[0]?.oldRanges).toEqual([]);
-  expect(slices(newLines[1] ?? "", result.rows[1]?.newRanges ?? []).join(""))
-    .toContain("options");
-  expect(slices(oldLines[1] ?? "", result.rows[1]?.oldRanges ?? []).join(""))
-    .toContain("parseInt((");
+  expect(
+    slices(newLines[1] ?? "", result.rows[1]?.newRanges ?? []).join(""),
+  ).toContain("options");
+  expect(
+    slices(oldLines[1] ?? "", result.rows[1]?.oldRanges ?? []).join(""),
+  ).toContain("parseInt((");
 });
 
 test("native Git can suppress whitespace-only changes", async () => {

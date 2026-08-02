@@ -1,11 +1,11 @@
 import { BrowserStream } from "@effect/platform-browser";
-import { Schema as S, Stream } from "effect";
+import { Option, Schema as S, Stream } from "effect";
 import { Subscription } from "foldkit";
 
-import { ChangedToolbarCompact } from "../domain";
+import { UpdatedToolbarCompact } from "../domain";
 import type { Message, Model } from "../domain";
 
-const compactAfter = 80;
+const TOOLBAR_COMPACT_AFTER = 80;
 
 const toolbarScroll = Stream.suspend(() =>
   Stream.concat(
@@ -15,23 +15,31 @@ const toolbarScroll = Stream.suspend(() =>
       bufferSize: 1,
     }).pipe(Stream.map(() => undefined)),
   ).pipe(
-    Stream.map(() => window.scrollY > compactAfter),
+    Stream.map(() => window.scrollY > TOOLBAR_COMPACT_AFTER),
     Stream.changes,
-    Stream.map(value => ChangedToolbarCompact({ value })),
+    Stream.map((value) => UpdatedToolbarCompact({ value })),
   ),
 );
 
-export const toolbarSubscriptions = Subscription.make<Model, Message>()(entry => ({
-  toolbarScroll: entry(
-    { active: S.Boolean },
-    {
-      modelToDependencies: model => ({
-        active:
-          model.page === "review" &&
-          model.phase === "ready" &&
-          model.prUrl !== "",
-      }),
-      dependenciesToStream: ({ active }) => active ? toolbarScroll : Stream.empty,
-    },
-  ),
-}));
+export const toolbarSubscriptions = Subscription.make<Model, Message>()(
+  (entry) => ({
+    toolbarScroll: entry(
+      { maybeActive: S.Option(S.Null) },
+      {
+        modelToDependencies: (model) => ({
+          maybeActive:
+            model.page === "review" &&
+            model.phase._tag === "Ready" &&
+            model.prUrl !== ""
+              ? Option.some(null)
+              : Option.none(),
+        }),
+        dependenciesToStream: ({ maybeActive }) =>
+          Option.match(maybeActive, {
+            onNone: () => Stream.empty,
+            onSome: () => toolbarScroll,
+          }),
+      },
+    ),
+  }),
+);

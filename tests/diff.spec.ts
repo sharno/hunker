@@ -29,7 +29,7 @@ export { alpha };
 
   const lines = toFullDiffLines(patch, oldText, newText, false);
 
-  expect(lines.map(line => line.content)).toEqual([
+  expect(lines.map((line) => line.content)).toEqual([
     "// header",
     "const alpha = 1;",
     "@@ -3 +3 @@",
@@ -42,11 +42,7 @@ export { alpha };
     'const tail = "new";',
     "export { alpha };",
   ]);
-  expect(lines.filter(line => line.hunkId === null).map(line => line.newNumber)).toEqual([
-    1,
-    2,
-    4,
-    5,
-    7,
-  ]);
+  expect(
+    lines.filter((line) => line.hunkId === null).map((line) => line.newNumber),
+  ).toEqual([1, 2, 4, 5, 7]);
 });

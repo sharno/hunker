@@ -25,15 +25,19 @@ test("round-trips repository routes and browser options", () => {
       { query: "config key", file: "src/config.ts" },
     ),
   ).toBe("/repo/radarlabs/server?q=config+key&file=src%2Fconfig.ts");
-  expect(repositoryOptionsFromSearch("?q=config+key&file=src%2Fconfig.ts")).toEqual({
+  expect(
+    repositoryOptionsFromSearch("?q=config+key&file=src%2Fconfig.ts"),
+  ).toEqual({
     query: "config key",
     file: "src/config.ts",
   });
 });
 
-test("offers a temporary or configured clone when a repository is missing", async ({ page }) => {
+test("offers a temporary or configured clone when a repository is missing", async ({
+  page,
+}) => {
   let fileRequests = 0;
-  await page.route("**/api/repository/files?**", route => {
+  await page.route("**/api/repository/files?**", (route) => {
     fileRequests += 1;
     return fileRequests === 1
       ? route.fulfill({
@@ -47,7 +51,7 @@ test("offers a temporary or configured clone when a repository is missing", asyn
           json: { files },
         });
   });
-  await page.route("**/api/repository/clone", async route => {
+  await page.route("**/api/repository/clone", async (route) => {
     expect(route.request().postDataJSON()).toEqual({
       repository,
       destination: "temporary",
@@ -60,18 +64,24 @@ test("offers a temporary or configured clone when a repository is missing", asyn
   });
 
   await page.goto("/repo/example/hunker-demo");
-  await expect(page.getByRole("heading", { name: "Clone this repository for local browsing" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", {
+      name: "Clone this repository for local browsing",
+    }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Clone to /tmp" }).click();
   await expect(page.locator(".repository-file-row")).toHaveCount(3);
   expect(fileRequests).toBe(2);
 });
 
-test("opens repository links without accepting a late response from the previous repo", async ({ page }) => {
+test("opens repository links without accepting a late response from the previous repo", async ({
+  page,
+}) => {
   let releaseFirst: () => void = () => undefined;
-  const firstGate = new Promise<void>(resolve => {
+  const firstGate = new Promise<void>((resolve) => {
     releaseFirst = resolve;
   });
-  await page.route("**/api/repository/files?**", async route => {
+  await page.route("**/api/repository/files?**", async (route) => {
     const requestUrl = new URL(route.request().url());
     const requested = requestUrl.searchParams.get("repository");
     if (requested === "example/first") await firstGate;
@@ -91,20 +101,24 @@ test("opens repository links without accepting a late response from the previous
   });
 
   await page.goto("/repo/example/first");
-  await page.getByPlaceholder("Paste any GitHub URL").fill(
-    "https://github.com/example/second",
-  );
+  await page
+    .getByPlaceholder("Paste any GitHub URL")
+    .fill("https://github.com/example/second");
   await page.getByRole("button", { name: "Open", exact: true }).click();
   await expect(page).toHaveURL("/repo/example/second");
   await expect(page.locator(".repository-file-row")).toContainText("second.ts");
 
   releaseFirst();
   await expect(page.locator(".repository-file-row")).toContainText("second.ts");
-  await expect(page.locator(".repository-file-row")).not.toContainText("first.ts");
+  await expect(page.locator(".repository-file-row")).not.toContainText(
+    "first.ts",
+  );
 });
 
-test("browses local files and shows fuzzy content results with context", async ({ page }) => {
-  await page.route("**/api/repository/files?**", route => {
+test("browses local files and shows fuzzy content results with context", async ({
+  page,
+}) => {
+  await page.route("**/api/repository/files?**", (route) => {
     const requestUrl = new URL(route.request().url());
     expect(requestUrl.searchParams.get("repository")).toBe(repository);
     return route.fulfill({
@@ -113,7 +127,7 @@ test("browses local files and shows fuzzy content results with context", async (
       json: { files },
     });
   });
-  await page.route("**/api/repository/search?**", route =>
+  await page.route("**/api/repository/search?**", (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -137,7 +151,7 @@ test("browses local files and shows fuzzy content results with context", async (
       },
     }),
   );
-  await page.route("**/api/repository/file?**", route =>
+  await page.route("**/api/repository/file?**", (route) =>
     route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -151,16 +165,20 @@ test("browses local files and shows fuzzy content results with context", async (
   );
 
   await page.goto("/repo/example/hunker-demo");
-  await expect(page.getByRole("navigation", { name: "Repository files" })).toContainText(
-    "src/greet.ts",
-  );
+  await expect(
+    page.getByRole("navigation", { name: "Repository files" }),
+  ).toContainText("src/greet.ts");
   await expect(page.locator(".repository-file-row")).toHaveCount(3);
 
-  await page.getByRole("searchbox", {
-    name: "Search repository files and contents",
-  }).fill("gret person");
+  await page
+    .getByRole("searchbox", {
+      name: "Search repository files and contents",
+    })
+    .fill("gret person");
   await page.getByRole("button", { name: "Search", exact: true }).click();
-  await expect(page).toHaveURL(url => url.searchParams.get("q") === "gret person");
+  await expect(page).toHaveURL(
+    (url) => url.searchParams.get("q") === "gret person",
+  );
   await expect(page.locator(".repository-filename-results")).toContainText(
     "src/greet.ts",
   );
@@ -171,16 +189,21 @@ test("browses local files and shows fuzzy content results with context", async (
   await expect(match).toContainText("4");
 
   await match.click();
-  await expect(page).toHaveURL(url => url.searchParams.get("file") === "src/greet.ts");
-  await expect(page.locator(".repository-file-view")).toContainText("src/greet.ts");
-  await expect(page.locator(".repository-source .hljs-keyword").first()).toHaveText(
-    "export",
+  await expect(page).toHaveURL(
+    (url) => url.searchParams.get("file") === "src/greet.ts",
   );
+  await expect(page.locator(".repository-file-view")).toContainText(
+    "src/greet.ts",
+  );
+  await expect(
+    page.locator(".repository-source .hljs-keyword").first(),
+  ).toHaveText("export");
 
   await page.getByRole("button", { name: "← Search results" }).click();
   await expect(page.locator(".repository-search-match")).toBeVisible();
-  await expect(page).toHaveURL(url =>
-    url.searchParams.get("q") === "gret person" &&
-    url.searchParams.get("file") === null,
+  await expect(page).toHaveURL(
+    (url) =>
+      url.searchParams.get("q") === "gret person" &&
+      url.searchParams.get("file") === null,
   );
 });

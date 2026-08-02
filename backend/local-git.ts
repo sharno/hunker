@@ -135,8 +135,11 @@ export const layer = Layer.effect(
           return { stdout, stderr, status: Number(exitCode) };
         }),
       ).pipe(
-        Effect.mapError(error =>
-          failure(`Could not run Git in ${repositoryPath}: ${String(error)}`, 502),
+        Effect.mapError((error) =>
+          failure(
+            `Could not run Git in ${repositoryPath}: ${String(error)}`,
+            502,
+          ),
         ),
       );
 
@@ -145,7 +148,7 @@ export const layer = Layer.effect(
       arguments_: ReadonlyArray<string>,
     ) =>
       runGit(repositoryPath, arguments_).pipe(
-        Effect.flatMap(result =>
+        Effect.flatMap((result) =>
           result.status === 0
             ? Effect.succeed(result.stdout)
             : Effect.fail(
@@ -170,7 +173,11 @@ export const layer = Layer.effect(
             kind: "checkout",
           },
           {
-            path: paths.resolve(repositoriesRoot, repository.owner, repository.name),
+            path: paths.resolve(
+              repositoriesRoot,
+              repository.owner,
+              repository.name,
+            ),
             kind: "checkout",
           },
           {
@@ -179,11 +186,18 @@ export const layer = Layer.effect(
           },
         ];
         for (const candidate of candidates) {
-          const exists = yield* fs.exists(candidate.path).pipe(
-            Effect.mapError(() => failure(`Could not inspect ${candidate.path}.`)),
-          );
+          const exists = yield* fs
+            .exists(candidate.path)
+            .pipe(
+              Effect.mapError(() =>
+                failure(`Could not inspect ${candidate.path}.`),
+              ),
+            );
           if (!exists) continue;
-          const inspected = yield* runGit(candidate.path, ["rev-parse", "--git-dir"]);
+          const inspected = yield* runGit(candidate.path, [
+            "rev-parse",
+            "--git-dir",
+          ]);
           if (inspected.status === 0) return Option.some(candidate);
         }
         return Option.none();
@@ -192,7 +206,7 @@ export const layer = Layer.effect(
     const hasObject = (repositoryPath: string, oid: string) =>
       validOid.test(oid)
         ? runGit(repositoryPath, ["cat-file", "-e", `${oid}^{commit}`]).pipe(
-            Effect.map(result => result.status === 0),
+            Effect.map((result) => result.status === 0),
           )
         : Effect.succeed(false);
 
@@ -228,8 +242,12 @@ export const layer = Layer.effect(
           hasObject(repository.path, input.headOid),
         ]);
         if (input.pullNumber !== undefined) {
-          yield* fetchPull(repository, input.pullNumber, !hasBase || !hasHead).pipe(
-            Effect.catch(error =>
+          yield* fetchPull(
+            repository,
+            input.pullNumber,
+            !hasBase || !hasHead,
+          ).pipe(
+            Effect.catch((error) =>
               Effect.logWarning(error.message).pipe(Effect.as(undefined)),
             ),
           );
@@ -304,9 +322,9 @@ export const layer = Layer.effect(
         ]);
         const commits = output
           .split("\x1e")
-          .map(record => record.trim())
-          .filter(record => record !== "")
-          .flatMap(record => {
+          .map((record) => record.trim())
+          .filter((record) => record !== "")
+          .flatMap((record) => {
             const [sha, message, author, authoredAt] = record.split("\x1f");
             if (sha === undefined || message === undefined) return [];
             return [
@@ -332,12 +350,10 @@ export const layer = Layer.effect(
         const repository = yield* find(repositoryId);
         if (Option.isNone(repository)) return Option.none<PullRevisionStatus>();
         const checkedAt = yield* fetchPull(repository.value, pullNumber, false);
-        const latestHeadOid = (
-          yield* runGitChecked(repository.value.path, [
-            "rev-parse",
-            `refs/hunker/pull/${pullNumber}/head^{commit}`,
-          ])
-        ).trim();
+        const latestHeadOid = (yield* runGitChecked(repository.value.path, [
+          "rev-parse",
+          `refs/hunker/pull/${pullNumber}/head^{commit}`,
+        ])).trim();
         return Option.some({
           repository: repository.value,
           pinnedHeadOid,

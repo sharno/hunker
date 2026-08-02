@@ -2,8 +2,15 @@ import { Context, Data, Effect, Layer } from "effect";
 
 import {
   MovedBlock,
-  SemanticResult,
+  SemanticDeleted,
+  SemanticInserted,
+  SemanticParsed,
+  SemanticParseFailed,
+  SemanticRenamed,
+  SemanticUnsupported,
+  SemanticUpdated,
   type SemanticChange,
+  type SemanticResult,
 } from "../src/domain";
 import type { FileDescriptor } from "./github";
 import {
@@ -33,7 +40,9 @@ type SemanticDiffEngineShape = Readonly<{
   ) => Effect.Effect<ReadonlyArray<MovedBlock>, SemanticEngineFailed>;
 }>;
 
-export class SemanticEngineFailed extends Data.TaggedError("SemanticEngineFailed")<{
+export class SemanticEngineFailed extends Data.TaggedError(
+  "SemanticEngineFailed",
+)<{
   readonly message: string;
   readonly status: number;
 }> {}
@@ -52,11 +61,11 @@ const analyzeParsedFile = (
   const before = parseUnits(language, oldText, false);
   const after = parseUnits(language, newText, false);
   if (before.parseFailed || after.parseFailed) {
-    return SemanticResult.make({
-      _tag: "ParseFailed",
+    return SemanticParseFailed({
       path,
       language: language.name,
-      reason: "ast-grep found an incomplete syntax tree, so the regular patch is shown.",
+      reason:
+        "ast-grep found an incomplete syntax tree, so the regular patch is shown.",
     });
   }
 
@@ -81,59 +90,62 @@ const analyzeParsedFile = (
   };
 
   consumeUnique(
-    unit => unit.exactFingerprint,
-    unit => unit.exactFingerprint,
+    (unit) => unit.exactFingerprint,
+    (unit) => unit.exactFingerprint,
     () => undefined,
   );
   consumeUnique(
-    unit => `${unit.kind}|${unit.label}`,
-    unit => `${unit.kind}|${unit.label}`,
+    (unit) => `${unit.kind}|${unit.label}`,
+    (unit) => `${unit.kind}|${unit.label}`,
     (oldUnit, newUnit) =>
-      changes.push({
-        _tag: "Updated",
-        kind: oldUnit.kind,
-        label: oldUnit.label,
-        oldRange: oldUnit.range,
-        newRange: newUnit.range,
-        confidence: 1,
-      }),
+      changes.push(
+        SemanticUpdated({
+          kind: oldUnit.kind,
+          label: oldUnit.label,
+          oldRange: oldUnit.range,
+          newRange: newUnit.range,
+          confidence: 1,
+        }),
+      ),
   );
   consumeUnique(
-    unit => unit.shapeFingerprint,
-    unit => unit.shapeFingerprint,
+    (unit) => unit.shapeFingerprint,
+    (unit) => unit.shapeFingerprint,
     (oldUnit, newUnit) =>
-      changes.push({
-        _tag: "Renamed",
-        kind: oldUnit.kind,
-        oldLabel: oldUnit.label,
-        newLabel: newUnit.label,
-        oldRange: oldUnit.range,
-        newRange: newUnit.range,
-        confidence: 0.85,
-      }),
+      changes.push(
+        SemanticRenamed({
+          kind: oldUnit.kind,
+          oldLabel: oldUnit.label,
+          newLabel: newUnit.label,
+          oldRange: oldUnit.range,
+          newRange: newUnit.range,
+          confidence: 0.85,
+        }),
+      ),
   );
 
   for (const unit of oldRemaining) {
-    changes.push({
-      _tag: "Deleted",
-      kind: unit.kind,
-      label: unit.label,
-      oldRange: unit.range,
-      confidence: 1,
-    });
+    changes.push(
+      SemanticDeleted({
+        kind: unit.kind,
+        label: unit.label,
+        oldRange: unit.range,
+        confidence: 1,
+      }),
+    );
   }
   for (const unit of newRemaining) {
-    changes.push({
-      _tag: "Inserted",
-      kind: unit.kind,
-      label: unit.label,
-      newRange: unit.range,
-      confidence: 1,
-    });
+    changes.push(
+      SemanticInserted({
+        kind: unit.kind,
+        label: unit.label,
+        newRange: unit.range,
+        confidence: 1,
+      }),
+    );
   }
 
-  return SemanticResult.make({
-    _tag: "Parsed",
+  return SemanticParsed({
     path,
     language: language.name,
     semanticEqual: before.fingerprint === after.fingerprint,
@@ -157,10 +169,14 @@ const locatedUnits = (
     const parsed = parseUnits(language, source, true);
     if (parsed.parseFailed) return [];
     const path = side === "old" ? fileOldPath(file) : file.path;
-    return parsed.units.map(unit => ({ ...unit, path, pairIndex }));
+    return parsed.units.map((unit) => ({ ...unit, path, pairIndex }));
   });
 
-const isContainedMove = (move: MovedBlock, oldUnit: LocatedUnit, newUnit: LocatedUnit) =>
+const isContainedMove = (
+  move: MovedBlock,
+  oldUnit: LocatedUnit,
+  newUnit: LocatedUnit,
+) =>
   move.fromPath === oldUnit.path &&
   move.toPath === newUnit.path &&
   oldUnit.range.startLine >= move.fromLine &&
@@ -179,7 +195,8 @@ const longestIncreasingIndexes = (values: ReadonlyArray<number>) => {
     while (low < high) {
       const middle = Math.floor((low + high) / 2);
       const tailIndex = tails[middle];
-      if (tailIndex !== undefined && (values[tailIndex] ?? -1) < value) low = middle + 1;
+      if (tailIndex !== undefined && (values[tailIndex] ?? -1) < value)
+        low = middle + 1;
       else high = middle;
     }
     previous[index] = low > 0 ? (tails[low - 1] ?? -1) : -1;
@@ -201,7 +218,10 @@ const detectReviewMoves = (files: ReadonlyArray<FilePair>) => {
   const newRemaining = new Set(newUnits);
   const moves: Array<MovedBlock> = [];
 
-  const match = (fingerprint: (unit: LocatedUnit) => string, changed: boolean) => {
+  const match = (
+    fingerprint: (unit: LocatedUnit) => string,
+    changed: boolean,
+  ) => {
     const oldUnique = uniqueBy([...oldRemaining], fingerprint);
     const newUnique = uniqueBy([...newRemaining], fingerprint);
     const pairs = [...oldUnique].flatMap(([key, oldUnit]) => {
@@ -217,14 +237,17 @@ const detectReviewMoves = (files: ReadonlyArray<FilePair>) => {
       for (const pair of pairs) {
         if (pair.oldUnit.pairIndex !== pair.newUnit.pairIndex) continue;
         const pairIndex = pair.oldUnit.pairIndex;
-        sameFilePairs.set(pairIndex, [...(sameFilePairs.get(pairIndex) ?? []), pair]);
+        sameFilePairs.set(pairIndex, [
+          ...(sameFilePairs.get(pairIndex) ?? []),
+          pair,
+        ]);
       }
       for (const filePairs of sameFilePairs.values()) {
         const ordered = [...filePairs].sort(
           (left, right) => left.oldUnit.order - right.oldUnit.order,
         );
         const stableIndexes = longestIncreasingIndexes(
-          ordered.map(pair => pair.newUnit.order),
+          ordered.map((pair) => pair.newUnit.order),
         );
         for (const index of stableIndexes) {
           const pair = ordered[index];
@@ -237,19 +260,26 @@ const detectReviewMoves = (files: ReadonlyArray<FilePair>) => {
       oldRemaining.delete(oldUnit);
       newRemaining.delete(newUnit);
       const differentFilePair = oldUnit.pairIndex !== newUnit.pairIndex;
-      const reorderedInFile = !changed && !differentFilePair && !stableInFile.has(pair);
+      const reorderedInFile =
+        !changed && !differentFilePair && !stableInFile.has(pair);
       if (!differentFilePair && !reorderedInFile) continue;
-      if (moves.some(move => isContainedMove(move, oldUnit, newUnit))) continue;
+      if (moves.some((move) => isContainedMove(move, oldUnit, newUnit)))
+        continue;
       moves.push(
         MovedBlock.make({
           fromPath: oldUnit.path,
           toPath: newUnit.path,
           fromLine: oldUnit.range.startLine,
           toLine: newUnit.range.startLine,
-          lineCount: Math.max(1, oldUnit.range.endLine - oldUnit.range.startLine + 1),
+          lineCount: Math.max(
+            1,
+            oldUnit.range.endLine - oldUnit.range.startLine + 1,
+          ),
           preview: oldUnit.preview,
           kind: oldUnit.kind,
-          label: changed ? `${oldUnit.label} → ${newUnit.label}` : oldUnit.label,
+          label: changed
+            ? `${oldUnit.label} → ${newUnit.label}`
+            : oldUnit.label,
           confidence: changed ? 0.8 : 1,
           changed,
         }),
@@ -257,34 +287,39 @@ const detectReviewMoves = (files: ReadonlyArray<FilePair>) => {
     }
   };
 
-  match(unit => unit.exactFingerprint, false);
-  match(unit => unit.shapeFingerprint, true);
+  match((unit) => unit.exactFingerprint, false);
+  match((unit) => unit.shapeFingerprint, true);
   return moves;
 };
 
 const engine = SemanticDiffEngine.of({
-  analyzeFile: file =>
+  analyzeFile: (file) =>
     Effect.sync(() => {
       const language = languageForPath(file.path);
       if (language === undefined) {
-        return SemanticResult.make({
-          _tag: "Unsupported",
+        return SemanticUnsupported({
           path: file.path,
-          reason: "ast-grep semantic analysis currently supports JavaScript, TypeScript, Python, Rust, and OpenTofu/HCL.",
+          reason:
+            "ast-grep semantic analysis currently supports JavaScript, TypeScript, Python, Rust, and OpenTofu/HCL.",
         });
       }
       try {
-        return analyzeParsedFile(file.path, language, file.oldText, file.newText);
+        return analyzeParsedFile(
+          file.path,
+          language,
+          file.oldText,
+          file.newText,
+        );
       } catch {
-        return SemanticResult.make({
-          _tag: "ParseFailed",
+        return SemanticParseFailed({
           path: file.path,
           language: language.name,
-          reason: "ast-grep could not parse this file, so the regular patch is shown.",
+          reason:
+            "ast-grep could not parse this file, so the regular patch is shown.",
         });
       }
     }),
-  analyzeReview: files =>
+  analyzeReview: (files) =>
     Effect.try({
       try: () => detectReviewMoves(files),
       catch: () =>
