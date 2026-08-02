@@ -14,6 +14,7 @@ The stack is Effect end to end:
 - `src/domain.ts` — schemas, model, and messages
 - `src/state.ts` — root review reducer and route orchestration
 - `src/features/commits.ts` — commit-list and commit-diff commands
+- `src/features/revision.ts` — local PR freshness command and two-minute subscription
 - `src/features/repository.ts` — local-repository routes, commands, and reducer transitions
 - `src/diff.ts` — unified-diff parsing and full-file context stitching
 - `src/view/commits-view.ts` — PR commit timeline and selected-commit workspace
@@ -26,6 +27,8 @@ The stack is Effect end to end:
 - `backend/github-auth.ts` — environment and `gh` credential discovery
 - `backend/github.ts` — GitHub URL parsing, API calls, and base/head content loading
 - `backend/github-reviews.ts` — review-thread reads, replies, and review submission
+- `backend/local-git.ts` — OID-pinned Git diffs, blobs, commits, and PR-ref freshness
+- `backend/review-backing.ts` — local-object selection and pinned GitHub fallback
 - `backend/local-repository.ts` — scoped local clone discovery, FFF indexes, and file reads
 - `backend/ast-grep-analysis.ts` — parser selection, AST units, and structural fingerprints
 - `backend/semantic-engine.ts` — Effect service, semantic matching, and review-wide move detection
@@ -51,8 +54,8 @@ tab or reloading it fetches the review automatically. The query string records
 the selected file, full/file scope, layout, whitespace, semantic, inline-diff,
 syntax-highlighting, review, sidebar, active tab, and selected commit settings,
 so copying the address restores the same review view. Use the Refresh button in
-the review toolbar to discard cached semantic results and pull the latest diff
-from GitHub without losing those settings.
+the review toolbar to discard cached semantic results and load the latest diff
+without losing those settings.
 
 The Commits tab loads the PR commit timeline. Selecting a commit reuses the same
 diff workspace and controls for that commit's parent-to-commit change, and the
@@ -113,7 +116,14 @@ the configured repos root or into `/tmp/hunker/repositories`. Set
 `HUNKER_CACHE_ROOT` to move temporary Hunker clones elsewhere. Cloning uses the
 local `gh` authentication, including access to private repositories.
 
-The planned local Git backing design is documented in
+After a checkout or cache clone exists, Hunker automatically uses its Git object
+database for PR and commit diffs, file revisions, and commit logs. Each loaded
+review is pinned to immutable base/head OIDs, so separate tabs never switch a
+shared checkout or silently change an already-rendered diff. Locally backed PRs
+fetch at most every two minutes and show “New revision available” when the
+tracked PR ref advances. GitHub remains the source for PR metadata and review
+actions and is the fallback when a local object is unavailable. The design and
+remaining repository-status/worktree work are documented in
 [`docs/local-git-backing.md`](docs/local-git-backing.md).
 
 ## Useful commands
@@ -139,7 +149,7 @@ The token never enters the browser. Run `gh auth login` if private repositories 
 
 Semantic analysis is lazy and cached per file in the browser model. When you open a file with the Semantic toggle enabled, the Effect backend:
 
-1. Fetches that file at the PR base and head SHAs with the server-side GitHub credential.
+1. Reads that file at the pinned PR base and head OIDs from local Git when available, otherwise through the server-side GitHub credential.
 2. Parses both versions in-process with ast-grep's tree-sitter grammars.
 3. Matches declarations by exact AST fingerprint, then by name and structural shape.
 4. Emits typed Inserted, Deleted, Updated, and Renamed changes while retaining GitHub's patch as the rendering source of truth.

@@ -152,23 +152,44 @@ const apiUrl = (target: GitHubTarget) =>
     }),
   );
 
-export const loadReview = (target: GitHubTarget) =>
-  Effect.gen(function* () {
-    const webUrl = M.value(target).pipe(
-      M.tagsExhaustive({
-        PullTarget: ({ owner, repo, number }) =>
-          `https://github.com/${owner}/${repo}/pull/${number}`,
-        CompareTarget: ({ owner, repo, range }) =>
-          `https://github.com/${owner}/${repo}/compare/${range}`,
-        CommitTarget: ({ owner, repo, sha }) =>
-          `https://github.com/${owner}/${repo}/commit/${sha}`,
-      }),
-    );
-    const diffResponse = yield* executeGitHub(apiUrl(target), "application/vnd.github.diff");
-    const diff = yield* diffResponse.text;
+const webUrl = (target: GitHubTarget) =>
+  M.value(target).pipe(
+    M.tagsExhaustive({
+      PullTarget: ({ owner, repo, number }) =>
+        `https://github.com/${owner}/${repo}/pull/${number}`,
+      CompareTarget: ({ owner, repo, range }) =>
+        `https://github.com/${owner}/${repo}/compare/${range}`,
+      CommitTarget: ({ owner, repo, sha }) =>
+        `https://github.com/${owner}/${repo}/commit/${sha}`,
+    }),
+  );
 
+export type ReviewMetadata = Readonly<{
+  title: string;
+  repository: string;
+  number: string;
+  author: string;
+  base: string;
+  head: string;
+  url: string;
+  baseOid: string;
+  headOid: string;
+  headRef: string;
+}>;
+
+export const loadReviewMetadata = (target: GitHubTarget) =>
+  Effect.gen(function* () {
+    const metadataResponse = yield* executeGitHub(
+      apiUrl(target),
+      "application/vnd.github+json",
+    );
+    const metadata = asRecord(yield* metadataResponse.json);
     if (target._tag === "CompareTarget") {
       const [base = "base", head = "head"] = target.range.split("...");
+      const baseCommit = asRecord(metadata.base_commit);
+      const commits = Array.isArray(metadata.commits) ? metadata.commits : [];
+      const headCommit = asRecord(commits.at(-1));
+      const baseOid = stringField(baseCommit, "sha", "");
       return {
         title: target.range,
         repository: `${target.owner}/${target.repo}`,
@@ -176,16 +197,12 @@ export const loadReview = (target: GitHubTarget) =>
         author: "GitHub",
         base,
         head,
-        url: webUrl,
-        diff,
+        url: webUrl(target),
+        baseOid,
+        headOid: stringField(headCommit, "sha", baseOid),
+        headRef: head,
       };
     }
-
-    const metadataResponse = yield* executeGitHub(
-      apiUrl(target),
-      "application/vnd.github+json",
-    );
-    const metadata = asRecord(yield* metadataResponse.json);
     if (target._tag === "CommitTarget") {
       const commit = asRecord(metadata.commit);
       const commitAuthor = asRecord(commit.author);
@@ -202,8 +219,10 @@ export const loadReview = (target: GitHubTarget) =>
           stringField(commitAuthor, "name", "GitHub user"),
         base: stringField(parent, "sha", ""),
         head: stringField(metadata, "sha", target.sha),
-        url: webUrl,
-        diff,
+        url: webUrl(target),
+        baseOid: stringField(parent, "sha", ""),
+        headOid: stringField(metadata, "sha", target.sha),
+        headRef: stringField(metadata, "sha", target.sha),
       };
     }
     const user = asRecord(metadata.user);
@@ -217,9 +236,32 @@ export const loadReview = (target: GitHubTarget) =>
       author: stringField(user, "login", "GitHub"),
       base: stringField(base, "ref", "base"),
       head: stringField(head, "ref", "head"),
-      url: webUrl,
-      diff,
+      url: webUrl(target),
+      baseOid: stringField(base, "sha", ""),
+      headOid: stringField(head, "sha", ""),
+      headRef: stringField(head, "ref", "head"),
     };
+  });
+
+export const loadReviewDiff = (target: GitHubTarget) =>
+  executeGitHub(apiUrl(target), "application/vnd.github.diff").pipe(
+    Effect.flatMap(response => response.text),
+  );
+
+export const loadDiffAtRevision = (
+  target: GitHubTarget,
+  refs: Readonly<{ base: string; head: string }>,
+) =>
+  executeGitHub(
+    `https://api.github.com/repos/${target.owner}/${target.repo}/compare/${encodeURIComponent(refs.base)}...${encodeURIComponent(refs.head)}`,
+    "application/vnd.github.diff",
+  ).pipe(Effect.flatMap(response => response.text));
+
+export const loadReview = (target: GitHubTarget) =>
+  Effect.gen(function* () {
+    const metadata = yield* loadReviewMetadata(target);
+    const diff = yield* loadReviewDiff(target);
+    return { ...metadata, diff };
   });
 
 export type FileVersion = "base" | "head";
@@ -279,28 +321,9 @@ export const loadPullCommits = (target: PullTarget) =>
   });
 
 const loadTargetRefs = (target: GitHubTarget) =>
-  target._tag === "CompareTarget"
-    ? Effect.succeed(
-        (() => {
-          const [base = "base", head = "head"] = target.range.split("...");
-          return { base, head };
-        })(),
-      )
-    : Effect.gen(function* () {
-        const response = yield* executeGitHub(apiUrl(target), "application/vnd.github+json");
-        const metadata = asRecord(yield* response.json);
-        if (target._tag === "CommitTarget") {
-          const parents = Array.isArray(metadata.parents) ? metadata.parents : [];
-          return {
-            base: stringField(asRecord(parents[0]), "sha", ""),
-            head: stringField(metadata, "sha", target.sha),
-          };
-        }
-        return {
-          base: stringField(asRecord(metadata.base), "sha", ""),
-          head: stringField(asRecord(metadata.head), "sha", ""),
-        };
-      });
+  loadReviewMetadata(target).pipe(
+    Effect.map(metadata => ({ base: metadata.baseOid, head: metadata.headOid })),
+  );
 
 const encodePath = (path: string) => path.split("/").map(encodeURIComponent).join("/");
 
@@ -355,6 +378,19 @@ export const loadFilePair = (
     return { oldText, newText };
   });
 
+export const loadFilePairAtRevision = (
+  target: GitHubTarget,
+  refs: Readonly<{ base: string; head: string }>,
+  path: string,
+  previousPath: string,
+  status: FileStatus,
+) =>
+  loadFilePairWithRefs(target, refs, {
+    path,
+    previousPath,
+    status,
+  }).pipe(Effect.map(({ oldText, newText }) => ({ oldText, newText })));
+
 export const loadFilePairs = (
   target: GitHubTarget,
   files: ReadonlyArray<FileDescriptor>,
@@ -367,3 +403,14 @@ export const loadFilePairs = (
       { concurrency: 6 },
     );
   });
+
+export const loadFilePairsAtRevision = (
+  target: GitHubTarget,
+  refs: Readonly<{ base: string; head: string }>,
+  files: ReadonlyArray<FileDescriptor>,
+) =>
+  Effect.forEach(
+    files,
+    file => loadFilePairWithRefs(target, refs, file),
+    { concurrency: 6 },
+  );

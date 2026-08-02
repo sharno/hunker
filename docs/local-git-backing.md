@@ -64,3 +64,22 @@ editing, rebasing, or stacked-change tool. Today they would add a second VCS
 model and installation requirement around data Git already exposes directly.
 Keeping the backing interface typed makes a future Jujutsu implementation
 possible without coupling the UI to it.
+
+## Implementation status
+
+The read-only review path is now wired in:
+
+- Existing checkouts and Hunker cache clones are discovered without changing
+  their checked-out branch.
+- Pull request metadata resolves to immutable base/head OIDs. Local Git supplies
+  the patch, blobs, semantic inputs, move-analysis inputs, and commit log when
+  those objects are available; GitHub is the fallback.
+- PR heads are fetched into `refs/hunker/pull/<number>/head` at most once every
+  two minutes. The browser remains pinned and offers a refresh when that ref
+  advances.
+- Follow-up browser requests carry the pinned OIDs, so full-file and analysis
+  requests cannot drift to a newer PR revision.
+
+Repository branch status, dirty/upstream/ahead/behind presentation, explicit
+`git pull --ff-only`, and detached worktrees for indexing historical OIDs remain
+future work.

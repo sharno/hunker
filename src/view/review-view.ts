@@ -4,6 +4,7 @@ import {
   ChangedFilter,
   ClosedToolbarMenus,
   RefreshedReview,
+  RequestedRevisionCheck,
   SelectedFile,
   SelectedInlineDiffMode,
   SelectedReviewTab,
@@ -66,7 +67,7 @@ const reviewLoadingView = (model: Model, h: HtmlBuilder<Message>) =>
       h.div([h.Class("review-loading-copy")], [
         h.strong([], ["Loading the latest change…"]),
         h.code([], [reviewTarget(model.prUrl)]),
-        h.span([], ["Fetching metadata and the current diff from GitHub."]),
+        h.span([], ["Resolving metadata and an immutable diff revision."]),
       ]),
     ]),
   ]);
@@ -351,8 +352,16 @@ const compactReviewToolbar = (model: Model, h: HtmlBuilder<Message>): Html => {
         [
           h.Type("button"),
           h.Class("toolbar-refresh"),
-          h.Title("Pull the latest diff from GitHub"),
-          h.AriaLabel("Refresh diff from GitHub"),
+          h.Title(
+            model.meta.backing.source === "local"
+              ? "Fetch and load the latest local Git revision"
+              : "Pull the latest diff from GitHub",
+          ),
+          h.AriaLabel(
+            model.meta.backing.source === "local"
+              ? "Refresh diff from local Git"
+              : "Refresh diff from GitHub",
+          ),
           h.Disabled(model.phase === "loading"),
           h.OnClick(RefreshedReview()),
         ],
@@ -420,6 +429,41 @@ const reviewHeaderView = (model: Model, h: HtmlBuilder<Message>): Html => {
             ),
         h.span([h.Class("pr-number")], [`#${model.meta.number}`]),
         h.span([h.Class("agent-badge")], ["AGENT PR"]),
+        model.meta.backing.source === "local"
+          ? h.button(
+              [
+                h.Type("button"),
+                h.Class("review-backing is-local"),
+                h.Title(
+                  `${model.meta.backing.path} @ ${model.meta.backing.headOid}. Check for a newer PR revision.`,
+                ),
+                h.Disabled(model.reviewRevision._tag === "Checking"),
+                h.OnClick(RequestedRevisionCheck()),
+              ],
+              ["LOCAL GIT"],
+            )
+          : h.span(
+              [
+                h.Class("review-backing is-github"),
+                h.Title(`GitHub @ ${model.meta.backing.headOid}`),
+              ],
+              ["GITHUB"],
+            ),
+        model.reviewRevision._tag === "Available"
+          ? h.button(
+              [
+                h.Type("button"),
+                h.Class("revision-available"),
+                h.Title(
+                  `Pinned at ${model.meta.backing.headOid}; ${model.reviewRevision.latestHeadOid} is available`,
+                ),
+                h.OnClick(RefreshedReview()),
+              ],
+              ["New revision available · refresh"],
+            )
+          : model.reviewRevision._tag === "Checking"
+            ? h.span([h.Class("revision-checking")], ["checking…"])
+            : h.empty,
       ]),
       h.h1([], [model.meta.title]),
       h.div([h.Class("branch-line")], [

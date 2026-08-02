@@ -1,4 +1,4 @@
-import { Data, Effect, Layer, Schema as S } from "effect";
+import { Data, Effect, Layer, Option, Schema as S } from "effect";
 import {
   HttpRouter,
   HttpServerRequest,
@@ -22,14 +22,17 @@ import {
 import {
   GitHubFetchFailed,
   InvalidGitHubUrl,
-  loadFilePair,
-  loadFilePairs,
   loadPullCommits,
-  loadReview,
+  loadReviewMetadata,
   parseGitHubUrl,
 } from "./github";
 import type { FileStatus } from "./github";
 import { layer as githubAuthLayer } from "./github-auth";
+import {
+  LocalGit,
+  LocalGitFailed,
+  layer as localGitLayer,
+} from "./local-git";
 import {
   LocalRepository,
   LocalRepositoryFailed,
@@ -45,6 +48,15 @@ import {
   SemanticEngineFailed,
   layer as semanticDiffLayer,
 } from "./semantic-engine";
+import {
+  isGitOid,
+  localFallback,
+  loadPinnedDiff,
+  loadPinnedFilePair,
+  loadPinnedFilePairs,
+  loadReviewData,
+  pinnedRefs,
+} from "./review-backing";
 
 class InvalidFileRequest extends Data.TaggedError("InvalidFileRequest")<{
   readonly message: string;
@@ -53,6 +65,11 @@ class InvalidFileRequest extends Data.TaggedError("InvalidFileRequest")<{
 class InvalidReviewRequest extends Data.TaggedError("InvalidReviewRequest")<{
   readonly message: string;
 }> {}
+
+const repositoryId = (target: Readonly<{ owner: string; repo: string }>) => ({
+  owner: target.owner,
+  name: target.repo,
+});
 
 const isFileStatus = (value: string): value is FileStatus =>
   value === "modified" ||
@@ -72,7 +89,7 @@ const fileRequest = (request: HttpServerRequest.HttpServerRequest) =>
         message: "Choose a reviewable file before loading its revisions.",
       });
     }
-    return { target, path, previousPath, status };
+    return { target, path, previousPath, status, refs: pinnedRefs(requestUrl) };
   });
 
 const pullTarget = (url: string) =>
@@ -138,7 +155,7 @@ const handleDiff = (request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
     const requestUrl = new URL(request.url, "http://localhost:8787");
     const target = yield* parseGitHubUrl(requestUrl.searchParams.get("url") ?? "");
-    const review = yield* loadReview(target);
+    const review = yield* loadReviewData(target);
     return HttpServerResponse.jsonUnsafe(review);
   }).pipe(
     Effect.catchTags({
@@ -157,7 +174,22 @@ const handleCommits = (request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
     const requestUrl = new URL(request.url, "http://localhost:8787");
     const target = yield* pullTarget(requestUrl.searchParams.get("url") ?? "");
-    const commits = yield* loadPullCommits(target);
+    const requestedRefs = pinnedRefs(requestUrl);
+    const refs = Option.isSome(requestedRefs)
+      ? requestedRefs.value
+      : yield* loadReviewMetadata(target).pipe(
+          Effect.map(metadata => ({ base: metadata.baseOid, head: metadata.headOid })),
+        );
+    const localGit = yield* LocalGit;
+    const local = yield* localFallback(
+      localGit.loadCommits({
+        repository: repositoryId(target),
+        baseOid: refs.base,
+        headOid: refs.head,
+        pullNumber: target.number,
+      }),
+    );
+    const commits = Option.isSome(local) ? local.value : yield* loadPullCommits(target);
     return HttpServerResponse.jsonUnsafe({ commits });
   }).pipe(
     Effect.catchTags({
@@ -266,9 +298,10 @@ const handleCloneRepository = (request: HttpServerRequest.HttpServerRequest) =>
 
 const handleSemantic = (request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
-    const { target, path, previousPath, status } = yield* fileRequest(request);
-    const pair = yield* loadFilePair(
+    const { target, path, previousPath, status, refs } = yield* fileRequest(request);
+    const pair = yield* loadPinnedFilePair(
       target,
+      refs,
       path,
       previousPath,
       status,
@@ -300,8 +333,14 @@ const handleSemantic = (request: HttpServerRequest.HttpServerRequest) =>
 
 const handleFile = (request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
-    const { target, path, previousPath, status } = yield* fileRequest(request);
-    const pair = yield* loadFilePair(target, path, previousPath, status);
+    const { target, path, previousPath, status, refs } = yield* fileRequest(request);
+    const pair = yield* loadPinnedFilePair(
+      target,
+      refs,
+      path,
+      previousPath,
+      status,
+    );
     return HttpServerResponse.jsonUnsafe(pair);
   }).pipe(
     Effect.catchTags({
@@ -323,8 +362,14 @@ const handleFile = (request: HttpServerRequest.HttpServerRequest) =>
 const handleCharacters = (request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
     const requestUrl = new URL(request.url, "http://localhost:8787");
-    const { target, path, previousPath, status } = yield* fileRequest(request);
-    const pair = yield* loadFilePair(target, path, previousPath, status);
+    const { target, path, previousPath, status, refs } = yield* fileRequest(request);
+    const pair = yield* loadPinnedFilePair(
+      target,
+      refs,
+      path,
+      previousPath,
+      status,
+    );
     const engine = yield* CharacterDiffEngine;
     const mode = requestUrl.searchParams.get("mode");
     const result = yield* engine.analyzeFile({
@@ -445,11 +490,12 @@ const handleMoves = (request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
     const requestUrl = new URL(request.url, "http://localhost:8787");
     const target = yield* parseGitHubUrl(requestUrl.searchParams.get("url") ?? "");
-    const review = yield* loadReview(target);
-    const files = parseGitDiff(review.diff).filter(
+    const refs = pinnedRefs(requestUrl);
+    const diff = yield* loadPinnedDiff(target, refs);
+    const files = parseGitDiff(diff).filter(
       file => file.patch.includes("@@") && !isGeneratedDiffPath(file.path),
     );
-    const pairs = yield* loadFilePairs(target, files);
+    const pairs = yield* loadPinnedFilePairs(target, refs, files);
     const semantic = yield* SemanticDiffEngine;
     const moves = yield* semantic.analyzeReview(pairs);
     return HttpServerResponse.jsonUnsafe({ moves });
@@ -470,6 +516,52 @@ const handleMoves = (request: HttpServerRequest.HttpServerRequest) =>
     }),
   );
 
+const handleRevision = (request: HttpServerRequest.HttpServerRequest) =>
+  Effect.gen(function* () {
+    const requestUrl = new URL(request.url, "http://localhost:8787");
+    const target = yield* pullTarget(requestUrl.searchParams.get("url") ?? "");
+    const headOid = requestUrl.searchParams.get("headOid") ?? "";
+    if (!isGitOid(headOid)) {
+      return yield* new InvalidReviewRequest({
+        message: "A pinned pull request revision is required.",
+      });
+    }
+    const localGit = yield* LocalGit;
+    const status = yield* localGit.checkPullRevision(
+      repositoryId(target),
+      target.number,
+      headOid,
+    );
+    return HttpServerResponse.jsonUnsafe(
+      Option.match(status, {
+        onNone: () => ({ source: "github" as const }),
+        onSome: revision => ({
+          source: "local" as const,
+          path: revision.repository.path,
+          pinnedHeadOid: revision.pinnedHeadOid,
+          latestHeadOid: revision.latestHeadOid,
+          checkedAt: revision.checkedAt,
+          current: revision.pinnedHeadOid === revision.latestHeadOid,
+        }),
+      }),
+    );
+  }).pipe(
+    Effect.catchTags({
+      InvalidGitHubUrl: error =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+        ),
+      InvalidReviewRequest: error =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 400 }),
+        ),
+      LocalGitFailed: (error: LocalGitFailed) =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ error: error.message }, { status: error.status }),
+        ),
+    }),
+  );
+
 const platformLayer = Layer.mergeAll(
   NodeServices.layer,
   NodeHttpClient.layerUndici,
@@ -477,6 +569,7 @@ const platformLayer = Layer.mergeAll(
 
 const applicationLayer = Layer.mergeAll(
   localRepositoryLayer,
+  localGitLayer,
   characterDiffLayer,
   githubAuthLayer,
   semanticDiffLayer,
@@ -486,6 +579,7 @@ const runtimeLayer = Layer.mergeAll(platformLayer, applicationLayer);
 
 const routesLayer = Layer.mergeAll(
   HttpRouter.add("GET", "/api/diff", handleDiff),
+  HttpRouter.add("GET", "/api/revision", handleRevision),
   HttpRouter.add("GET", "/api/commits", handleCommits),
   HttpRouter.add("GET", "/api/repository/files", handleRepositoryFiles),
   HttpRouter.add("GET", "/api/repository/search", handleRepositorySearch),

@@ -15,6 +15,7 @@ import {
   ChangedReplyDraft,
   ChangedRepositoryQuery,
   ChangedReviewBody,
+  CheckedReviewRevision,
   ClonedRepository,
   ClosedRepositoryFile,
   ClosedToolbarMenus,
@@ -28,6 +29,7 @@ import {
   FailedMoves,
   FailedReply,
   FailedReview,
+  FailedRevisionCheck,
   FailedReviewSubmission,
   FailedRepositoryFile,
   FailedRepositoryClone,
@@ -51,6 +53,7 @@ import {
   PostedReply,
   PostedReview,
   RefreshedReview,
+  RequestedRevisionCheck,
   RequestedRepositoryClone,
   RequestedNavigation,
   SelectedFile,
@@ -89,6 +92,7 @@ import {
   FetchCommitDiff,
   FetchCommits,
 } from "./features/commits";
+import { CheckReviewRevision } from "./features/revision";
 import {
   changeRepositoryQuery,
   closeRepositoryFile,
@@ -138,8 +142,18 @@ const setMembership = <A>(
 const isApiReview = (value: unknown): value is ApiReview => {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
-  return ["title", "repository", "number", "author", "base", "head", "url", "diff"].every(
-    key => typeof record[key] === "string",
+  const backing = record.backing;
+  return (
+    ["title", "repository", "number", "author", "base", "head", "url", "diff"].every(
+      key => typeof record[key] === "string",
+    ) &&
+    typeof backing === "object" &&
+    backing !== null &&
+    ((backing as Record<string, unknown>).source === "github" ||
+      (backing as Record<string, unknown>).source === "local") &&
+    ["baseOid", "headOid", "headRef", "path"].every(
+      key => typeof (backing as Record<string, unknown>)[key] === "string",
+    )
   );
 };
 
@@ -216,15 +230,24 @@ const Navigate = Command.define("Navigate", {
 const FetchSemantic = Command.define("FetchSemantic", {
   args: {
     url: S.String,
+    baseOid: S.String,
+    headOid: S.String,
     path: S.String,
     previousPath: S.String,
     status: S.Literals(["modified", "added", "deleted", "renamed"]),
   },
   messages: [LoadedSemantic, FailedSemantic],
-  execute: ({ url, path, previousPath, status }) =>
+  execute: ({ url, baseOid, headOid, path, previousPath, status }) =>
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient;
-      const query = new URLSearchParams({ url, path, previousPath, status });
+      const query = new URLSearchParams({
+        url,
+        baseOid,
+        headOid,
+        path,
+        previousPath,
+        status,
+      });
       const response = yield* client.execute(
         HttpClientRequest.get(`/api/semantic?${query.toString()}`),
       );
@@ -254,6 +277,8 @@ const GitHubReplyResponse = S.Struct({ comment: GitHubReviewComment });
 const FetchCharacterDiff = Command.define("FetchCharacterDiff", {
   args: {
     url: S.String,
+    baseOid: S.String,
+    headOid: S.String,
     path: S.String,
     previousPath: S.String,
     status: S.Literals(["modified", "added", "deleted", "renamed"]),
@@ -261,11 +286,22 @@ const FetchCharacterDiff = Command.define("FetchCharacterDiff", {
     mode: S.Literals(["token", "character"]),
   },
   messages: [LoadedCharacterDiff, FailedCharacterDiff],
-  execute: ({ url, path, previousPath, status, ignoreWhitespace, mode }) =>
+  execute: ({
+    url,
+    baseOid,
+    headOid,
+    path,
+    previousPath,
+    status,
+    ignoreWhitespace,
+    mode,
+  }) =>
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient;
       const query = new URLSearchParams({
         url,
+        baseOid,
+        headOid,
         path,
         previousPath,
         status,
@@ -302,15 +338,24 @@ const FetchCharacterDiff = Command.define("FetchCharacterDiff", {
 const FetchFullFile = Command.define("FetchFullFile", {
   args: {
     url: S.String,
+    baseOid: S.String,
+    headOid: S.String,
     path: S.String,
     previousPath: S.String,
     status: S.Literals(["modified", "added", "deleted", "renamed"]),
   },
   messages: [LoadedFullFile, FailedFullFile],
-  execute: ({ url, path, previousPath, status }) =>
+  execute: ({ url, baseOid, headOid, path, previousPath, status }) =>
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient;
-      const query = new URLSearchParams({ url, path, previousPath, status });
+      const query = new URLSearchParams({
+        url,
+        baseOid,
+        headOid,
+        path,
+        previousPath,
+        status,
+      });
       const response = yield* client.execute(
         HttpClientRequest.get(`/api/file?${query.toString()}`),
       );
@@ -413,13 +458,14 @@ const PostPullRequestReview = Command.define("PostPullRequestReview", {
 });
 
 const FetchMoves = Command.define("FetchMoves", {
-  args: { url: S.String },
+  args: { url: S.String, baseOid: S.String, headOid: S.String },
   messages: [LoadedMoves, FailedMoves],
-  execute: ({ url }) =>
+  execute: ({ url, baseOid, headOid }) =>
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient;
+      const query = new URLSearchParams({ url, baseOid, headOid });
       const response = yield* client.execute(
-        HttpClientRequest.get(`/api/moves?url=${encodeURIComponent(url)}`),
+        HttpClientRequest.get(`/api/moves?${query.toString()}`),
       );
       const data: unknown = yield* response.json;
       if (response.status < 200 || response.status >= 300) {
@@ -441,6 +487,14 @@ const activeDiffUrl = (model: ModelType) =>
   model.reviewTab === "commits" && model.selectedCommit !== ""
     ? commitGitHubUrl(model.meta, model.selectedCommit)
     : model.meta.url;
+
+const activeRevision = (model: ModelType) =>
+  model.reviewTab === "commits" && model.selectedCommit !== ""
+    ? { baseOid: "", headOid: "" }
+    : {
+        baseOid: model.meta.backing.baseOid,
+        headOid: model.meta.backing.headOid,
+      };
 
 const isCurrentReviewRequest = (model: ModelType, requestedUrl: string) =>
   model.phase === "loading" && model.prUrl === requestedUrl;
@@ -473,6 +527,7 @@ const requestSemantic = (model: ModelType, file: FileChange): UpdateReturn => {
     [
       FetchSemantic({
         url: activeDiffUrl(model),
+        ...activeRevision(model),
         path: file.path,
         previousPath: file.previousPath,
         status: file.status,
@@ -494,7 +549,7 @@ const requestMoves = (model: ModelType): UpdateReturn => {
   }
   return [
     evo(model, { reviewMoves: () => ({ _tag: "Loading" as const }) }),
-    [FetchMoves({ url: activeDiffUrl(model) })],
+    [FetchMoves({ url: activeDiffUrl(model), ...activeRevision(model) })],
   ];
 };
 
@@ -556,6 +611,7 @@ const requestCharacterDiff = (
     [
       FetchCharacterDiff({
         url: activeDiffUrl(model),
+        ...activeRevision(model),
         path: file.path,
         previousPath: file.previousPath,
         status: file.status,
@@ -613,7 +669,13 @@ const requestCommits = (model: ModelType): UpdateReturn => {
   }
   return [
     evo(model, { commits: () => ({ _tag: "Loading" as const }) }),
-    [FetchCommits({ url: model.meta.url })],
+    [
+      FetchCommits({
+        url: model.meta.url,
+        baseOid: model.meta.backing.baseOid,
+        headOid: model.meta.backing.headOid,
+      }),
+    ],
   ];
 };
 
@@ -672,6 +734,7 @@ const beginReviewLoad = (model: ModelType, url: string): ModelType =>
     githubInput: () => url,
     githubInputError: () => "",
     prUrl: () => url,
+    reviewRevision: () => ({ _tag: "Idle" as const }),
     filter: () => "",
     files: () => [],
     pullRequestFiles: () => [],
@@ -703,6 +766,7 @@ const sampleModel = (model: ModelType): ModelType =>
     githubInputError: () => "",
     prUrl: () => "",
     meta: () => sampleMeta,
+    reviewRevision: () => ({ _tag: "Idle" as const }),
     files: () => sampleFiles,
     pullRequestFiles: () => sampleFiles,
     reviewTab: () => "files" as const,
@@ -816,6 +880,28 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         const url = model.meta.url || model.prUrl.trim();
         return [beginReviewLoad(model, url), [FetchReview({ url })]];
       },
+      RequestedRevisionCheck: () => {
+        if (
+          model.page !== "review" ||
+          model.phase !== "ready" ||
+          model.meta.backing.source !== "local" ||
+          !isPullRequestUrl(model.meta.url) ||
+          model.reviewRevision._tag === "Checking"
+        ) {
+          return [model, []];
+        }
+        return [
+          evo(model, {
+            reviewRevision: () => ({ _tag: "Checking" as const }),
+          }),
+          [
+            CheckReviewRevision({
+              url: model.meta.url,
+              headOid: model.meta.backing.headOid,
+            }),
+          ],
+        ];
+      },
       ToggledToolbarMenu: ({ value }) => [
         evo(model, {
           toolbarMenu: current => current === value ? "none" : value,
@@ -884,6 +970,7 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
           githubInputError: () => "",
           prUrl: () => meta.url,
           meta: () => meta,
+          reviewRevision: () => ({ _tag: "Idle" as const }),
           files: () => files,
           pullRequestFiles: () => files,
           selectedPath: selectedPath =>
@@ -912,6 +999,42 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
         isCurrentReviewRequest(model, requestedUrl)
           ? [
               evo(model, { phase: () => "error" as const, error: () => error }),
+              [],
+            ]
+          : [model, []],
+      CheckedReviewRevision: ({
+        requestedUrl,
+        pinnedHeadOid,
+        latestHeadOid,
+        checkedAt,
+        current,
+      }) =>
+        model.phase === "ready" &&
+        model.meta.url === requestedUrl &&
+        model.meta.backing.source === "local" &&
+        model.meta.backing.headOid === pinnedHeadOid
+          ? [
+              evo(model, {
+                reviewRevision: () =>
+                  current
+                    ? ({ _tag: "Current" as const, checkedAt })
+                    : ({
+                        _tag: "Available" as const,
+                        latestHeadOid,
+                        checkedAt,
+                      }),
+              }),
+              [],
+            ]
+          : [model, []],
+      FailedRevisionCheck: ({ requestedUrl, error }) =>
+        model.phase === "ready" &&
+        model.meta.url === requestedUrl &&
+        model.meta.backing.source === "local"
+          ? [
+              evo(model, {
+                reviewRevision: () => ({ _tag: "Failed" as const, error }),
+              }),
               [],
             ]
           : [model, []],
@@ -1370,6 +1493,7 @@ export const update = (model: ModelType, message: Message): UpdateReturn =>
           [
             FetchFullFile({
               url: activeDiffUrl(model),
+              ...activeRevision(model),
               path,
               previousPath: file.previousPath,
               status: file.status,
@@ -1390,6 +1514,7 @@ const initialModel = (prUrl: string, options: ReviewOptions) =>
     prUrl,
     filter: "",
     meta: sampleMeta,
+    reviewRevision: { _tag: "Idle" },
     files: sampleFiles,
     pullRequestFiles: sampleFiles,
     reviewTab: options.reviewTab,

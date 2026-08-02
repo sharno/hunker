@@ -29,6 +29,13 @@ const reviewResponse = S.Struct({
   base: S.String,
   head: S.String,
   url: S.String,
+  backing: S.Struct({
+    source: S.Literals(["github", "local"]),
+    baseOid: S.String,
+    headOid: S.String,
+    headRef: S.String,
+    path: S.String,
+  }),
   diff: S.String,
 });
 
@@ -36,13 +43,14 @@ export const commitGitHubUrl = (meta: ReviewMeta, sha: string) =>
   `https://github.com/${meta.repository}/commit/${sha}`;
 
 export const FetchCommits = Command.define("FetchCommits", {
-  args: { url: S.String },
+  args: { url: S.String, baseOid: S.String, headOid: S.String },
   messages: [LoadedCommits, FailedCommits],
-  execute: ({ url }) =>
+  execute: ({ url, baseOid, headOid }) =>
     Effect.gen(function* () {
       const client = yield* HttpClient.HttpClient;
+      const query = new URLSearchParams({ url, baseOid, headOid });
       const response = yield* client.execute(
-        HttpClientRequest.get(`/api/commits?url=${encodeURIComponent(url)}`),
+        HttpClientRequest.get(`/api/commits?${query.toString()}`),
       );
       const data: unknown = yield* response.json;
       if (response.status < 200 || response.status >= 300) {

@@ -11,6 +11,15 @@ export const FileChange = S.Struct({
 });
 export type FileChange = typeof FileChange.Type;
 
+export const ReviewBacking = S.Struct({
+  source: S.Literals(["github", "local"]),
+  baseOid: S.String,
+  headOid: S.String,
+  headRef: S.String,
+  path: S.String,
+});
+export type ReviewBacking = typeof ReviewBacking.Type;
+
 export const ReviewMeta = S.Struct({
   title: S.String,
   repository: S.String,
@@ -19,8 +28,21 @@ export const ReviewMeta = S.Struct({
   base: S.String,
   head: S.String,
   url: S.String,
+  backing: ReviewBacking,
 });
 export type ReviewMeta = typeof ReviewMeta.Type;
+
+export const ReviewRevision = S.Union([
+  S.TaggedStruct("Idle", {}),
+  S.TaggedStruct("Checking", {}),
+  S.TaggedStruct("Current", { checkedAt: S.Number }),
+  S.TaggedStruct("Available", {
+    latestHeadOid: S.String,
+    checkedAt: S.Number,
+  }),
+  S.TaggedStruct("Failed", { error: S.String }),
+]);
+export type ReviewRevision = typeof ReviewRevision.Type;
 
 export const PullCommit = S.Struct({
   sha: S.String,
@@ -307,6 +329,7 @@ export const Model = S.Struct({
   prUrl: S.String,
   filter: S.String,
   meta: ReviewMeta,
+  reviewRevision: ReviewRevision,
   files: S.Array(FileChange),
   pullRequestFiles: S.Array(FileChange),
   reviewTab: S.Literals(["files", "commits"]),
@@ -345,6 +368,18 @@ export type Model = typeof Model.Type;
 export const ChangedPrUrl = m("ChangedPrUrl", { value: S.String });
 export const SubmittedPrUrl = m("SubmittedPrUrl");
 export const RefreshedReview = m("RefreshedReview");
+export const RequestedRevisionCheck = m("RequestedRevisionCheck");
+export const CheckedReviewRevision = m("CheckedReviewRevision", {
+  requestedUrl: S.String,
+  pinnedHeadOid: S.String,
+  latestHeadOid: S.String,
+  checkedAt: S.Number,
+  current: S.Boolean,
+});
+export const FailedRevisionCheck = m("FailedRevisionCheck", {
+  requestedUrl: S.String,
+  error: S.String,
+});
 export const ToggledToolbarMenu = m("ToggledToolbarMenu", {
   value: S.Literals(["options", "open-review"]),
 });
@@ -536,6 +571,9 @@ export const Message = S.Union([
   ChangedPrUrl,
   SubmittedPrUrl,
   RefreshedReview,
+  RequestedRevisionCheck,
+  CheckedReviewRevision,
+  FailedRevisionCheck,
   ToggledToolbarMenu,
   ClosedToolbarMenus,
   ChangedToolbarCompact,

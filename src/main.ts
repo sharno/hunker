@@ -1,7 +1,9 @@
-import { Runtime } from "foldkit";
+import { Runtime, Subscription } from "foldkit";
 
 import { Model } from "./domain";
+import type { Message } from "./domain";
 import { toolbarSubscriptions } from "./features/toolbar";
+import { revisionSubscriptions } from "./features/revision";
 import { init, routing, update } from "./state";
 import { view } from "./view/review-view";
 import { withTailwind } from "./view/tailwind";
@@ -12,7 +14,10 @@ export const makeReviewApplication = (container: HTMLElement) =>
     init,
     update,
     routing,
-    subscriptions: toolbarSubscriptions,
+    subscriptions: Subscription.aggregate<Model, Message>()(
+      toolbarSubscriptions,
+      revisionSubscriptions,
+    ),
     container,
     preserveScroll: true,
     view: (model, h) => {

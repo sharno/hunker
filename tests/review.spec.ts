@@ -90,6 +90,57 @@ test("shows an empty loading state for initial loads and refreshes", async ({ pa
   await expect(page.locator(".review-loading")).toHaveCount(0);
 });
 
+test("shows local Git backing and offers a fetched PR revision without replacing the diff", async ({ page }) => {
+  const pinnedHeadOid = "2222222222222222222222222222222222222222";
+  const latestHeadOid = "3333333333333333333333333333333333333333";
+  await page.route("**/api/diff?**", route =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: {
+        ...reviewResponse,
+        backing: {
+          ...reviewResponse.backing,
+          source: "local",
+          path: "/tmp/hunker/example/hunker-demo",
+        },
+      },
+    }),
+  );
+  await page.route("**/api/semantic?**", route =>
+    route.fulfill({ status: 200, contentType: "application/json", json: semanticResponse }),
+  );
+  await page.route("**/api/reviews?**", route =>
+    route.fulfill({ status: 200, contentType: "application/json", json: { comments: [] } }),
+  );
+  await page.route("**/api/revision?**", route =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: {
+        source: "local",
+        path: "/tmp/hunker/example/hunker-demo",
+        pinnedHeadOid,
+        latestHeadOid,
+        checkedAt: Date.now(),
+        current: false,
+      },
+    }),
+  );
+
+  await page.goto("/example/hunker-demo/pull/42");
+  const backing = page.getByRole("button", { name: "LOCAL GIT", exact: true });
+  await expect(backing).toBeVisible();
+  await backing.click();
+
+  const available = page.getByRole("button", {
+    name: "New revision available · refresh",
+  });
+  await expect(available).toBeVisible();
+  await expect(page.getByRole("heading", { name: reviewResponse.title })).toBeVisible();
+  await expect(page.locator(".diff-panel")).toBeVisible();
+});
+
 test("loads a PR and renders ast-grep intelligence in both review layouts", async ({ page }) => {
   await page.route("**/api/diff?**", route =>
     route.fulfill({ status: 200, contentType: "application/json", json: reviewResponse }),

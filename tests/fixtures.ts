@@ -8,6 +8,13 @@ export const reviewResponse = {
   base: "main",
   head: "feature/greeting",
   url: reviewUrl,
+  backing: {
+    source: "github",
+    baseOid: "1111111111111111111111111111111111111111",
+    headOid: "2222222222222222222222222222222222222222",
+    headRef: "feature/greeting",
+    path: "",
+  },
   diff: `diff --git a/src/greet.ts b/src/greet.ts
 index 1111111..2222222 100644
 --- a/src/greet.ts
@@ -60,6 +67,13 @@ export const commitDiffResponse = {
   base: "1111111111111111111111111111111111111111",
   head: "2222222222222222222222222222222222222222",
   url: commitsResponse.commits[1].htmlUrl,
+  backing: {
+    source: "github",
+    baseOid: "1111111111111111111111111111111111111111",
+    headOid: "2222222222222222222222222222222222222222",
+    headRef: "2222222222222222222222222222222222222222",
+    path: "",
+  },
   diff: `diff --git a/src/greet.ts b/src/greet.ts
 index 1111111..2222222 100644
 --- a/src/greet.ts

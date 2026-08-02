@@ -82,4 +82,11 @@ export const sampleMeta = ReviewMeta.make({
   base: "main",
   head: "feature/bounded-agent-retries",
   url: "https://github.com/radarlabs/server/pull/8421",
+  backing: {
+    source: "github",
+    baseOid: "",
+    headOid: "",
+    headRef: "feature/bounded-agent-retries",
+    path: "",
+  },
 });
