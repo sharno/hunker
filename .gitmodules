@@ -1,0 +1,3 @@
+[submodule "vendor/foldkit"]
+	path = vendor/foldkit
+	url = https://github.com/foldkit/foldkit.git
