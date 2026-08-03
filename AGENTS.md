@@ -32,6 +32,9 @@
   top-level slot callback that builds the `Html`. Do not pass already-rendered
   `Html` containing nested event functions; Foldkit can only auto-scope
   top-level callbacks to the parent boundary.
+- Apply project `HtmlBuilder` adapters inside every Foldkit Submodel view.
+  Foldkit intentionally supplies its singleton builder at each child boundary,
+  so a builder wrapped by the parent does not propagate into the child.
 - Record durable Effect, Foldkit, tooling, and architecture discoveries in this
   file as they are learned. Keep the guidance general and remove or correct it
   when the vendored sources prove it wrong.

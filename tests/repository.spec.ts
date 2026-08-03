@@ -138,6 +138,14 @@ test("lists and paginates repository pull requests without a local clone", async
   });
 
   await page.goto("/example/hunker-demo/pulls");
+  await expect(page.locator(".repository-toolbar")).toHaveCSS(
+    "position",
+    "sticky",
+  );
+  await expect(page.locator(".repository-toolbar")).toHaveCSS(
+    "display",
+    "grid",
+  );
   await expect(
     page.getByRole("heading", {
       name: "Pull requests for example/hunker-demo",

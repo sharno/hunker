@@ -18,6 +18,7 @@ import {
   UpdatedRepositoriesRoot,
 } from "./message";
 import type { Model } from "./model";
+import { withTailwind } from "../../view/tailwind";
 
 export type ViewInputs = Readonly<{ homeHref: string }>;
 
@@ -288,8 +289,9 @@ const settingsForm = (model: Model, h: HtmlBuilder<Message>): Html => {
 };
 
 export const view = Submodel.defineView<Model, Message, ViewInputs>(
-  (model, viewInputs, h) =>
-    h.main(
+  (model, viewInputs, html) => {
+    const h = withTailwind(html);
+    return h.main(
       [h.Class("settings-shell")],
       [
         h.header(
@@ -334,5 +336,6 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
               )
             : settingsForm(model, h),
       ],
-    ),
+    );
+  },
 );

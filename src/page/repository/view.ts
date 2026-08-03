@@ -26,6 +26,7 @@ import { syntaxHighlightedContent } from "../../view/syntax-highlight";
 import { fileTreeView } from "../../view/file-tree-view";
 import { commitRouter } from "../../app-route";
 import { repositoryPullRequestsView } from "./pulls-view";
+import { withTailwind } from "../../view/tailwind";
 
 export type ViewInputs = Readonly<{
   homeHref: string;
@@ -426,7 +427,8 @@ const repositoryCloneView = (model: Model, h: HtmlBuilder<Message>): Html => {
 };
 
 export const view = Submodel.defineView<Model, Message, ViewInputs>(
-  (model, viewInputs, h) => {
+  (model, viewInputs, html) => {
+    const h = withTailwind(html);
     const files = AsyncData.getOrElse(model.files, () => []);
     const filesError = Option.getOrUndefined(AsyncData.getError(model.files));
     return h.main(

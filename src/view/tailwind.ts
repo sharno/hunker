@@ -1,4 +1,5 @@
-import type { HtmlBuilder } from "foldkit/html";
+import { Submodel } from "foldkit";
+import type { Html, HtmlBuilder } from "foldkit/html";
 
 const utilities: Readonly<Record<string, string>> = {
   "app-shell": "min-h-screen bg-canvas review-grid",
@@ -467,3 +468,10 @@ export const withTailwind = <Message>(
         ? (className: string) => target.Class(utilityClasses(className))
         : Reflect.get(target, property, receiver),
   });
+
+export const defineTailwindView = <Model, Message>(
+  view: (model: Model, html: HtmlBuilder<Message>) => Html,
+) =>
+  Submodel.defineView<Model, Message>((model, html) =>
+    view(model, withTailwind(html)),
+  );

@@ -1,12 +1,12 @@
 import { Option } from "effect";
-import { Submodel } from "foldkit";
 import { Input, Button } from "@foldkit/ui";
 
+import { defineTailwindView } from "../../view/tailwind";
 import type { Message } from "./message";
 import { SubmittedForm, UpdatedInput } from "./message";
 import type { Model } from "./model";
 
-export const view = Submodel.defineView<Model, Message>((model, h) =>
+export const view = defineTailwindView<Model, Message>((model, h) =>
   h.form(
     [
       h.Class(
