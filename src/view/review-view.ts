@@ -24,6 +24,7 @@ import {
   ToggledSidebar,
   ToggledSyntaxHighlighting,
   GotDiffOptionsPopoverMessage,
+  GotHomeMessage,
   GotOpenReviewPopoverMessage,
   GotRepositoryMessage,
   GotSettingsMessage,
@@ -41,6 +42,7 @@ import { toDiffLines, toFullDiffLines } from "../diff";
 import { homeRouter, settingsRouter } from "../app-route";
 import * as Repository from "../page/repository";
 import * as Settings from "../page/settings";
+import * as Home from "../page/home";
 import { isPullRequestUrl } from "../review-route";
 import {
   compileTextSearch,
@@ -1420,6 +1422,18 @@ const diffPanelView = (
 };
 
 export const view = (model: Model, h: HtmlBuilder<Message>): Html => {
+  if (model.page === "home") {
+    return h.submodel({
+      slotId: "home",
+      model: model.home,
+      view: Home.view,
+      viewInputs: {
+        settingsHref: settingsRouter(),
+        renderLocationForm: () => githubLocationForm(model, "pr-loader", h),
+      },
+      toParentMessage: (message) => GotHomeMessage({ message }),
+    });
+  }
   if (model.page === "settings") {
     return h.submodel({
       slotId: "settings",

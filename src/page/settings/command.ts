@@ -12,33 +12,31 @@ import {
 } from "./message";
 
 export const FetchSettings = Command.define("FetchSettings", {
-  args: {},
   messages: [SucceededFetchSettings, FailedFetchSettings],
-  execute: () =>
-    Effect.gen(function* () {
-      const client = yield* HttpClient.HttpClient;
-      const response = yield* client.execute(
-        HttpClientRequest.get("/api/settings"),
+  execute: Effect.gen(function* () {
+    const client = yield* HttpClient.HttpClient;
+    const response = yield* client.execute(
+      HttpClientRequest.get("/api/settings"),
+    );
+    const data: unknown = yield* response.json;
+    if (response.status < 200 || response.status >= 300) {
+      return yield* Effect.fail(
+        new Error(responseError(data, "Could not load Hunker settings.")),
       );
-      const data: unknown = yield* response.json;
-      if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(responseError(data, "Could not load Hunker settings.")),
-        );
-      }
-      return SucceededFetchSettings({
-        document: yield* S.decodeUnknownEffect(SettingsDocument)(data),
-      });
-    }).pipe(
-      Effect.catch((error) =>
-        Effect.succeed(
-          FailedFetchSettings({
-            error: requestError(error, "Could not load Hunker settings."),
-          }),
-        ),
+    }
+    return SucceededFetchSettings({
+      document: yield* S.decodeUnknownEffect(SettingsDocument)(data),
+    });
+  }).pipe(
+    Effect.catch((error) =>
+      Effect.succeed(
+        FailedFetchSettings({
+          error: requestError(error, "Could not load Hunker settings."),
+        }),
       ),
-      Effect.provide(Http.layer),
     ),
+    Effect.provide(Http.layer),
+  ),
 });
 
 export const SaveSettings = Command.define("SaveSettings", {

@@ -192,6 +192,29 @@ const utilities: Readonly<Record<string, string>> = {
     "mt-4 flex flex-wrap justify-center gap-2 [&_button]:min-h-9 [&_button]:cursor-pointer [&_button]:rounded-md [&_button]:border [&_button]:border-[#aeb89a] [&_button]:bg-paper [&_button]:px-4 [&_button]:text-[11px] [&_button]:font-[700] [&_button]:text-ink [&_button:first-child]:bg-lime [&_button:disabled]:cursor-wait [&_button:disabled]:opacity-60",
   "repository-clone-error":
     "mt-3 rounded-md border border-[#e9aea3] bg-[#fff0ed] px-3 py-2 text-[10px] text-[#73251d]",
+  "home-shell": "min-h-screen bg-canvas pb-16",
+  "home-toolbar":
+    "sticky top-0 z-30 grid min-h-[68px] grid-cols-[auto_minmax(360px,680px)_auto] items-center justify-between gap-5 border-b border-[#3b4659] bg-ink px-7 py-3 text-white shadow-[0_5px_18px_rgb(16_27_44/18%)] [&_.pr-loader]:w-full max-[760px]:static max-[760px]:grid-cols-[1fr_auto] max-[760px]:gap-3 max-[760px]:px-4 max-[760px]:[&_.pr-loader]:order-3 max-[760px]:[&_.pr-loader]:col-span-2",
+  "home-heading":
+    "mx-auto flex w-[min(1120px,calc(100%-40px))] items-end justify-between gap-8 border-b border-line pt-12 pb-7 max-[700px]:w-[calc(100%-28px)] max-[700px]:flex-col max-[700px]:items-stretch max-[700px]:pt-8 [&>div>span]:font-mono [&>div>span]:text-[9px] [&>div>span]:font-[800] [&>div>span]:tracking-[0.12em] [&>div>span]:text-[#738044] [&_h1]:mt-1 [&_h1]:mb-1 [&_h1]:text-[32px] [&_h1]:tracking-[-0.04em] [&_p]:m-0 [&_p]:text-xs [&_p]:text-muted [&>input]:h-10 [&>input]:w-[320px] [&>input]:rounded-lg [&>input]:border [&>input]:border-[#c9cbc4] [&>input]:bg-paper [&>input]:px-3.5 [&>input]:text-xs [&>input]:outline-none [&>input]:focus-visible:border-[#9bbb2f] [&>input]:focus-visible:ring-2 [&>input]:focus-visible:ring-[#9bbb2f]/20 max-[700px]:[&>input]:w-full",
+  "home-repository-state":
+    "mx-auto mt-8 flex w-[min(1120px,calc(100%-40px))] flex-col gap-1 rounded-xl border border-line bg-paper px-5 py-8 text-center shadow-[0_6px_22px_rgb(16_27_44/7%)] [&>strong]:text-sm [&>span]:text-[10px] [&>span]:text-muted [&.is-error]:border-[#edcbc5] [&.is-error]:bg-[#fff0ed]",
+  "home-repository-sections":
+    "mx-auto grid w-[min(1120px,calc(100%-40px))] gap-8 pt-8 max-[700px]:w-[calc(100%-28px)]",
+  "home-repository-section": "min-w-0",
+  "home-repository-section-heading":
+    "mb-3 flex items-end justify-between gap-4 px-1 [&>div]:min-w-0 [&_h2]:m-0 [&_h2]:text-sm [&_h2]:font-[760] [&_code]:mt-1 [&_code]:block [&_code]:overflow-hidden [&_code]:font-mono [&_code]:text-[9px] [&_code]:text-muted [&_code]:text-ellipsis [&_code]:whitespace-nowrap [&>span]:grid [&>span]:h-6 [&>span]:min-w-6 [&>span]:place-items-center [&>span]:rounded-full [&>span]:bg-[#dedfd8] [&>span]:px-2 [&>span]:font-mono [&>span]:text-[9px] [&>span]:text-muted",
+  "home-repository-grid": "grid grid-cols-2 gap-2.5 max-[800px]:grid-cols-1",
+  "home-repository-card":
+    "grid min-h-[76px] grid-cols-[38px_minmax(0,1fr)_auto_18px] items-center gap-3 rounded-xl border border-line bg-paper px-4 py-3 text-ink no-underline shadow-[0_2px_7px_rgb(16_27_44/4%)] transition-[border-color,box-shadow,transform] hover:-translate-y-px hover:border-[#aaba74] hover:shadow-[0_7px_18px_rgb(16_27_44/8%)]",
+  "home-repository-icon":
+    "grid size-[38px] place-items-center rounded-lg bg-[#e7edcf] font-mono text-[9px] font-[850] text-[#526323]",
+  "home-repository-copy":
+    "flex min-w-0 flex-col gap-1 [&>strong]:overflow-hidden [&>strong]:text-xs [&>strong]:text-ellipsis [&>strong]:whitespace-nowrap [&>code]:overflow-hidden [&>code]:font-mono [&>code]:text-[8px] [&>code]:text-muted [&>code]:text-ellipsis [&>code]:whitespace-nowrap",
+  "home-repository-source":
+    "rounded-full border px-2 py-1 text-[8px] font-[700] [&.is-configured]:border-[#c7d49c] [&.is-configured]:bg-[#eff5db] [&.is-configured]:text-[#536524] [&.is-temporary]:border-[#ccd3dd] [&.is-temporary]:bg-[#eef1f5] [&.is-temporary]:text-[#536071]",
+  "home-repository-empty":
+    "rounded-xl border border-dashed border-[#caccc5] px-5 py-8 text-center text-[10px] text-muted",
   "settings-shell": "min-h-screen bg-canvas pb-14",
   "settings-toolbar":
     "sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-[#3b4659] bg-ink px-5 text-white shadow-[0_5px_18px_rgb(16_27_44/18%)] [&>.compact-brand]:mr-auto [&>span]:text-[10px] [&>span]:tracking-[0.08em] [&>span]:text-[#9da7b4] [&>span]:uppercase [&>a:last-child]:rounded-md [&>a:last-child]:border [&>a:last-child]:border-[#4a5669] [&>a:last-child]:px-3 [&>a:last-child]:py-2 [&>a:last-child]:text-[10px] [&>a:last-child]:font-[700] [&>a:last-child]:text-white [&>a:last-child]:no-underline",

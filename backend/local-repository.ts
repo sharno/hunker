@@ -52,8 +52,23 @@ export type RepositoryCommits = Readonly<{
 
 type RepositoryId = Readonly<{ owner: string; name: string }>;
 export type RepositoryCloneDestination = "temporary" | "configured";
+export type LocalRepositorySummary = Readonly<{
+  owner: string;
+  name: string;
+  path: string;
+  source: RepositoryCloneDestination;
+}>;
+export type LocalRepositories = Readonly<{
+  configuredRoot: string;
+  temporaryRoot: string;
+  repositories: ReadonlyArray<LocalRepositorySummary>;
+}>;
 
 type LocalRepositoryShape = Readonly<{
+  listRepositories: () => Effect.Effect<
+    LocalRepositories,
+    LocalRepositoryFailed
+  >;
   listFiles: (
     repository: RepositoryId,
   ) => Effect.Effect<ReadonlyArray<RepositoryFile>, LocalRepositoryFailed>;
@@ -148,6 +163,19 @@ export const cloneArguments = (
   "--no-tags",
 ];
 
+export const parseGitHubRemote = (remote: string): RepositoryId | undefined => {
+  const match = remote
+    .trim()
+    .match(
+      /^(?:git@github\.com:|https?:\/\/github\.com\/|ssh:\/\/git@github\.com\/)([^/]+)\/([^/]+?)(?:\.git)?$/,
+    );
+  const owner = match?.[1];
+  const name = match?.[2];
+  return owner === undefined || name === undefined
+    ? undefined
+    : { owner, name };
+};
+
 const failure = (message: string, status = 500) =>
   new LocalRepositoryFailed({ message, status });
 
@@ -229,6 +257,137 @@ export const layer = Layer.effect(
             : failure(`Could not run ripgrep: ${String(error)}`, 502),
         ),
       );
+
+    const directoriesAt = (root: string) =>
+      Effect.gen(function* () {
+        const exists = yield* fs
+          .exists(root)
+          .pipe(Effect.mapError(() => failure(`Could not inspect ${root}.`)));
+        if (!exists) return [];
+        const entries = yield* fs
+          .readDirectory(root)
+          .pipe(Effect.mapError(() => failure(`Could not inspect ${root}.`)));
+        const inspected = yield* Effect.forEach(
+          entries,
+          (entry) =>
+            fs.stat(paths.resolve(root, entry)).pipe(
+              Effect.map((info) => (info.type === "Directory" ? entry : "")),
+              Effect.catch(() => Effect.succeed("")),
+            ),
+          { concurrency: 16 },
+        );
+        return inspected.filter((entry) => entry !== "").toSorted();
+      });
+
+    const isGitRepository = (repositoryPath: string) =>
+      fs
+        .exists(paths.resolve(repositoryPath, ".git"))
+        .pipe(
+          Effect.mapError(() =>
+            failure(`Could not inspect ${repositoryPath}.`),
+          ),
+        );
+
+    const repositorySummary = (
+      repositoryPath: string,
+      fallback: RepositoryId,
+      source: RepositoryCloneDestination,
+    ) =>
+      runGit(repositoryPath, ["config", "--get", "remote.origin.url"]).pipe(
+        Effect.map(
+          (remote) =>
+            parseGitHubRemote(remote) ?? {
+              owner: fallback.owner,
+              name: fallback.name,
+            },
+        ),
+        Effect.catch(() => Effect.succeed(fallback)),
+        Effect.map(({ owner, name }) => ({
+          owner,
+          name,
+          path: repositoryPath,
+          source,
+        })),
+      );
+
+    const repositoriesUnder = (
+      root: string,
+      source: RepositoryCloneDestination,
+    ) =>
+      Effect.gen(function* () {
+        const topLevel = yield* directoriesAt(root);
+        const groups = yield* Effect.forEach(
+          topLevel,
+          (entry) =>
+            Effect.gen(function* () {
+              const direct = paths.resolve(root, entry);
+              if (yield* isGitRepository(direct)) {
+                return [
+                  yield* repositorySummary(
+                    direct,
+                    { owner: "local", name: entry },
+                    source,
+                  ),
+                ];
+              }
+              const nested = yield* directoriesAt(direct);
+              return yield* Effect.forEach(
+                nested,
+                (name) =>
+                  Effect.gen(function* () {
+                    const repositoryPath = paths.resolve(direct, name);
+                    return (yield* isGitRepository(repositoryPath))
+                      ? yield* repositorySummary(
+                          repositoryPath,
+                          { owner: entry, name },
+                          source,
+                        )
+                      : undefined;
+                  }),
+                { concurrency: 8 },
+              ).pipe(
+                Effect.map((repositories) =>
+                  repositories.filter(
+                    (repository): repository is LocalRepositorySummary =>
+                      repository !== undefined,
+                  ),
+                ),
+              );
+            }),
+          { concurrency: 8 },
+        );
+        return groups.flat();
+      });
+
+    const listRepositories = () =>
+      Effect.gen(function* () {
+        const { settings } = yield* currentSettings.pipe(
+          Effect.mapError((error) => failure(error.message)),
+        );
+        const configuredRoot = yield* configuredPath(settings.repositoriesRoot);
+        const temporaryRoot = yield* configuredPath(settings.cacheRoot);
+        const [configured, temporary] = yield* Effect.all(
+          [
+            repositoriesUnder(configuredRoot, "configured"),
+            repositoriesUnder(temporaryRoot, "temporary"),
+          ],
+          { concurrency: "unbounded" },
+        );
+        const unique = new Map<string, LocalRepositorySummary>();
+        for (const repository of [...configured, ...temporary]) {
+          const key = `${repository.owner}/${repository.name}`.toLowerCase();
+          if (!unique.has(key)) unique.set(key, repository);
+        }
+        return {
+          configuredRoot,
+          temporaryRoot,
+          repositories: [...unique.values()].toSorted((left, right) =>
+            `${left.owner}/${left.name}`.localeCompare(
+              `${right.owner}/${right.name}`,
+            ),
+          ),
+        };
+      });
 
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
@@ -667,6 +826,7 @@ export const layer = Layer.effect(
       });
 
     return LocalRepository.of({
+      listRepositories,
       listFiles,
       search,
       readFile,

@@ -22,6 +22,8 @@
 - Foldkit Message bindings must exactly match their `m()` tags, and Command
   bindings must exactly match their `Command.define` names. Treat these names as
   stable DevTools identities rather than local aliases.
+- For no-argument Foldkit Commands, omit `args`, provide the Effect directly as
+  `execute`, and invoke the Command with no object argument.
 - Update nested Foldkit records with a nested `evo`; spreading a nested record
   inside a parent `evo` updater escapes the strict Model update path and is
   rejected by the Foldkit Oxlint rule.

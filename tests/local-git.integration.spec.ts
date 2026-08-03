@@ -8,7 +8,12 @@ import { expect, test } from "@playwright/test";
 import { ConfigProvider, Effect, Layer, Option } from "effect";
 
 import { LocalGit, layer as localGitLayer } from "../backend/local-git";
-import { cloneArguments } from "../backend/local-repository";
+import {
+  LocalRepository,
+  cloneArguments,
+  layer as localRepositoryLayer,
+  parseGitHubRemote,
+} from "../backend/local-repository";
 
 const git = (cwd: string, ...arguments_: ReadonlyArray<string>) =>
   execFileSync("git", arguments_, { cwd, encoding: "utf8" }).trim();
@@ -40,6 +45,30 @@ const runLocalGit = <A>(
     ),
   );
 
+const runLocalRepository = <A>(
+  repositoriesRoot: string,
+  cacheRoot: string,
+  use: (service: LocalRepository["Service"]) => Effect.Effect<A, unknown>,
+) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const service = yield* LocalRepository;
+      return yield* use(service);
+    }).pipe(
+      Effect.provide(
+        localRepositoryLayer.pipe(Layer.provide(NodeServices.layer)),
+      ),
+      Effect.provideService(
+        ConfigProvider.ConfigProvider,
+        ConfigProvider.fromUnknown({
+          HUNKER_REPOS_ROOT: repositoriesRoot,
+          HUNKER_CACHE_ROOT: cacheRoot,
+          HUNKER_CONFIG_FILE: join(repositoriesRoot, "missing-settings.json"),
+        }),
+      ),
+    ),
+  );
+
 test("creates shallow partial clones without tags or unrelated branches", () => {
   expect(cloneArguments({ owner: "acme", name: "demo" }, "/tmp/demo")).toEqual([
     "repo",
@@ -52,6 +81,61 @@ test("creates shallow partial clones without tags or unrelated branches", () => 
     "--filter=blob:none",
     "--no-tags",
   ]);
+});
+
+test("parses GitHub repository remotes", () => {
+  expect(parseGitHubRemote("git@github.com:acme/demo.git")).toEqual({
+    owner: "acme",
+    name: "demo",
+  });
+  expect(parseGitHubRemote("https://github.com/acme/demo")).toEqual({
+    owner: "acme",
+    name: "demo",
+  });
+  expect(parseGitHubRemote("file:///tmp/demo.git")).toBeUndefined();
+});
+
+test("discovers configured and temporary repositories and prefers configured clones", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunker-local-catalog-"));
+  const repositoriesRoot = join(root, "repos");
+  const cacheRoot = join(root, "cache");
+  const configured = join(repositoriesRoot, "demo");
+  const temporaryDuplicate = join(cacheRoot, "acme", "demo");
+  const temporary = join(cacheRoot, "acme", "scratch");
+  try {
+    for (const repository of [configured, temporaryDuplicate, temporary]) {
+      mkdirSync(repository, { recursive: true });
+      git(repository, "init", "-b", "main");
+    }
+    git(configured, "remote", "add", "origin", "git@github.com:acme/demo.git");
+
+    const catalog = await runLocalRepository(
+      repositoriesRoot,
+      cacheRoot,
+      (service) => service.listRepositories(),
+    );
+
+    expect(catalog).toEqual({
+      configuredRoot: repositoriesRoot,
+      temporaryRoot: cacheRoot,
+      repositories: [
+        {
+          owner: "acme",
+          name: "demo",
+          path: configured,
+          source: "configured",
+        },
+        {
+          owner: "acme",
+          name: "scratch",
+          path: temporary,
+          source: "temporary",
+        },
+      ],
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("reads pinned diffs, blobs, and commits without switching the checkout", async () => {

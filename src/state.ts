@@ -24,6 +24,7 @@ import {
   GitHubReviews,
   GotDiffOptionsPopoverMessage,
   GotGitHubLocationMessage,
+  GotHomeMessage,
   GotOpenReviewPopoverMessage,
   GotRepositoryMessage,
   GotSettingsMessage,
@@ -36,6 +37,7 @@ import {
   ReviewLoading,
   ReviewMoves,
   ReviewReady,
+  ReviewMeta,
   ReviewRevisionAvailable,
   ReviewRevisionChecking,
   ReviewRevisionCurrent,
@@ -57,6 +59,7 @@ import {
 import { CheckReviewRevision } from "./features/revision";
 import * as Repository from "./page/repository";
 import * as Settings from "./page/settings";
+import * as Home from "./page/home";
 import type { HunkerSettings } from "./settings";
 import {
   defaultReviewOptions,
@@ -69,7 +72,6 @@ import {
   reviewRouteFromAppRoute,
   type ReviewOptions,
 } from "./review-route";
-import { sampleFiles, sampleMeta } from "./sample";
 import * as GitHubLocation from "./features/github-location";
 
 type UpdateReturn = Update.Return<ModelType, Message>;
@@ -359,6 +361,7 @@ const requestReviewLocation = (model: ModelType): UpdateReturn => {
 
 const beginReviewLoad = (model: ModelType, url: string): ModelType =>
   evo(model, {
+    page: () => "review" as const,
     phase: () => ReviewLoading(),
     githubLocation: () => GitHubLocation.replaceValue(url, true),
     prUrl: () => url,
@@ -386,40 +389,6 @@ const beginReviewLoad = (model: ModelType, url: string): ModelType =>
     commitDiff: () => CommitDiff.Idle(),
     diffOptionsPopover: initialDiffOptionsPopover,
     openReviewPopover: initialOpenReviewPopover,
-  });
-
-const sampleModel = (model: ModelType): ModelType =>
-  evo(model, {
-    page: () => "review" as const,
-    phase: () => ReviewReady(),
-    githubLocation: () => GitHubLocation.replaceValue("", false),
-    prUrl: () => "",
-    meta: () => sampleMeta,
-    reviewRevision: () => ReviewRevisionIdle(),
-    files: () => sampleFiles,
-    pullRequestFiles: () => sampleFiles,
-    reviewTab: () => "files" as const,
-    commits: () => PullCommits.Idle(),
-    selectedCommit: () => "",
-    commitDiff: () => CommitDiff.Idle(),
-    diffOptionsPopover: initialDiffOptionsPopover,
-    openReviewPopover: initialOpenReviewPopover,
-    selectedPath: () => sampleFiles[0]?.path ?? "",
-    reviewedPaths: () => [],
-    collapsedFileTreeFolders: () => [],
-    semanticResults: () => [],
-    semanticRequest: () => SemanticRequestIdle(),
-    reviewMoves: () => ReviewMoves.Idle(),
-    characterDiffStates: () => [],
-    collapsedPaths: () => [],
-    collapsedHunks: () => [],
-    fullFileStates: () => [],
-    githubReviews: () => GitHubReviews.Idle(),
-    collapsedReviewThreads: () => [],
-    replyDrafts: () => [],
-    replyStates: () => [],
-    reviewBody: () => "",
-    reviewSubmission: () => ReviewSubmission.Idle(),
   });
 
 const reviewOptions = (model: ModelType): ReviewOptions => ({
@@ -600,10 +569,18 @@ const loadSettingsPage = (model: ModelType): UpdateReturn => {
   return [
     evo(model, { page: () => "settings" as const }),
     shouldLoad
-      ? Command.mapMessages([Settings.FetchSettings({})], (message) =>
+      ? Command.mapMessages([Settings.FetchSettings()], (message) =>
           GotSettingsMessage({ message }),
         )
       : [],
+  ];
+};
+
+const loadHomeLocation = (model: ModelType): UpdateReturn => {
+  const [home, commands] = Home.load(model.home);
+  return [
+    evo(model, { page: () => "home" as const, home: () => home }),
+    Command.mapMessages(commands, (message) => GotHomeMessage({ message })),
   ];
 };
 
@@ -690,6 +667,15 @@ export const update = (
           evo(model, { repositoryBrowser: () => repositoryBrowser }),
           Command.mapMessages(commands, (childMessage) =>
             GotRepositoryMessage({ message: childMessage }),
+          ),
+        ];
+      },
+      GotHomeMessage: ({ message }) => {
+        const [home, commands] = Home.update(model.home, message);
+        return [
+          evo(model, { home: () => home }),
+          Command.mapMessages(commands, (childMessage) =>
+            GotHomeMessage({ message: childMessage }),
           ),
         ];
       },
@@ -795,7 +781,7 @@ export const update = (
         return M.value(route).pipe(
           M.withReturnType<UpdateReturn>(),
           M.tagsExhaustive({
-            Home: () => [sampleModel(model), []],
+            Home: () => loadHomeLocation(model),
             Settings: () => loadSettingsPage(model),
             Repository: ({ owner, repository }) =>
               loadRepositoryLocation(
@@ -1414,27 +1400,45 @@ export const update = (
     }),
   );
 
+const emptyReviewMeta = ReviewMeta.make({
+  title: "",
+  repository: "",
+  number: "",
+  author: "",
+  base: "",
+  head: "",
+  url: "",
+  backing: {
+    source: "github",
+    baseOid: "",
+    headOid: "",
+    headRef: "",
+    path: "",
+  },
+});
+
 const initialModel = (
   prUrl: string,
   options: ReviewOptions,
   legacyReviewSettings = false,
 ) =>
   Model.make({
-    page: "review",
+    page: prUrl === "" ? "home" : "review",
     phase: prUrl === "" ? ReviewReady() : ReviewLoading(),
     githubLocation: GitHubLocation.init(prUrl, prUrl !== ""),
     prUrl,
     filter: "",
     filterMode: "literal",
-    meta: sampleMeta,
+    meta: emptyReviewMeta,
     reviewRevision: ReviewRevisionIdle(),
-    files: sampleFiles,
-    pullRequestFiles: sampleFiles,
+    files: [],
+    pullRequestFiles: [],
     reviewTab: options.reviewTab,
     commits: PullCommits.Idle(),
     selectedCommit: options.selectedCommit,
     commitDiff: CommitDiff.Idle(),
     repositoryBrowser: Repository.empty(),
+    home: Home.empty(),
     settings: Settings.Model.make({
       ...Settings.empty(),
       load: Settings.Load.Loading(),
@@ -1443,7 +1447,7 @@ const initialModel = (
     diffOptionsPopover: initialDiffOptionsPopover(),
     openReviewPopover: initialOpenReviewPopover(),
     toolbarCompact: false,
-    selectedPath: options.selectedPath || sampleFiles[0]?.path || "",
+    selectedPath: options.selectedPath,
     sidebarCollapsed: options.sidebarCollapsed,
     collapsedFileTreeFolders: [],
     reviewScope: options.reviewScope,
@@ -1470,7 +1474,7 @@ const initialModel = (
   });
 
 const initialSettingsCommand = () =>
-  Command.mapMessages([Settings.FetchSettings({})], (message) =>
+  Command.mapMessages([Settings.FetchSettings()], (message) =>
     GotSettingsMessage({ message }),
   );
 
@@ -1501,10 +1505,12 @@ export const init: Runtime.RoutingApplicationInit<ModelType, Message> = (
   return M.value(route).pipe(
     M.withReturnType<UpdateReturn>(),
     M.tagsExhaustive({
-      Home: () => [
-        initialModel("", defaultReviewOptions),
-        initialSettingsCommand(),
-      ],
+      Home: () => {
+        const [model, commands] = loadHomeLocation(
+          initialModel("", defaultReviewOptions),
+        );
+        return [model, [...initialSettingsCommand(), ...commands]];
+      },
       Settings: () => [
         evo(initialModel("", defaultReviewOptions), {
           page: () => "settings" as const,

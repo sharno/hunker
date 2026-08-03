@@ -411,6 +411,11 @@ const handleCloneRepository = (request: HttpServerRequest.HttpServerRequest) =>
     }),
   );
 
+const handleRepositories = Effect.gen(function* () {
+  const local = yield* LocalRepository;
+  return HttpServerResponse.jsonUnsafe(yield* local.listRepositories());
+}).pipe(Effect.catchTag("LocalRepositoryFailed", localRepositoryError));
+
 const settingsError = (error: SettingsFailed) =>
   Effect.succeed(
     HttpServerResponse.jsonUnsafe({ error: error.message }, { status: 500 }),
@@ -806,6 +811,7 @@ const routesLayer = Layer.mergeAll(
   HttpRouter.add("GET", "/api/diff", handleDiff),
   HttpRouter.add("GET", "/api/revision", handleRevision),
   HttpRouter.add("GET", "/api/commits", handleCommits),
+  HttpRouter.add("GET", "/api/repositories", handleRepositories),
   HttpRouter.add("GET", "/api/repository/files", handleRepositoryFiles),
   HttpRouter.add("GET", "/api/repository/commits", handleRepositoryCommits),
   HttpRouter.add("GET", "/api/repository/pulls", handleRepositoryPullRequests),

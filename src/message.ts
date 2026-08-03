@@ -8,6 +8,7 @@ import * as GitHubLocation from "./features/github-location";
 import { TextSearchMode } from "./features/code-search";
 import * as Repository from "./page/repository";
 import * as Settings from "./page/settings";
+import * as Home from "./page/home";
 import {
   CharacterDiffResult,
   FileChange,
@@ -25,6 +26,9 @@ export const GotGitHubLocationMessage = m("GotGitHubLocationMessage", {
 });
 export const GotRepositoryMessage = m("GotRepositoryMessage", {
   message: Repository.Message,
+});
+export const GotHomeMessage = m("GotHomeMessage", {
+  message: Home.Message,
 });
 export const GotSettingsMessage = m("GotSettingsMessage", {
   message: Settings.Message,
@@ -195,6 +199,7 @@ export const FailedPostPullRequestReview = m("FailedPostPullRequestReview", {
 
 export const Message = S.Union([
   GotGitHubLocationMessage,
+  GotHomeMessage,
   GotRepositoryMessage,
   GotSettingsMessage,
   ClickedRefreshReview,
