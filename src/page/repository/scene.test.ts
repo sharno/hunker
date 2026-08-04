@@ -131,6 +131,35 @@ describe("repository browser", () => {
     );
   });
 
+  test("switches search modes without opening a native select menu", () => {
+    scene(
+      { update, view: repositoryView() },
+      given(loaded),
+      expect(selector(".repository-search select")).toBeAbsent(),
+      expect(
+        role("button", { name: "Literal text search", pressed: true }),
+      ).toExist(),
+      click(role("button", { name: "Regular expression search" })),
+      Command.resolve(NavigateRepository, CompletedNavigate()),
+      expect(
+        role("button", { name: "Regular expression search", pressed: true }),
+      ).toExist(),
+      expect(label("Search repository files and contents")).toHaveAttr(
+        "placeholder",
+        "Search with a regular expression",
+      ),
+      click(role("button", { name: "Fuzzy FFF search" })),
+      Command.resolve(NavigateRepository, CompletedNavigate()),
+      expect(
+        role("button", { name: "Fuzzy FFF search", pressed: true }),
+      ).toExist(),
+      expect(label("Search repository files and contents")).toHaveAttr(
+        "placeholder",
+        "Find approximate matches",
+      ),
+    );
+  });
+
   test("clones a missing repository from the rendered offer", () => {
     const missing = Model.make({
       ...loaded,

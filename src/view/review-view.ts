@@ -61,9 +61,12 @@ import {
 } from "./github-review-view";
 import { githubLocationForm } from "./github-location-view";
 import { fileTreeView } from "./file-tree-view";
+import { searchModePicker, type SearchModeChoice } from "./search-mode-view";
 
-const reviewSearchMode = (value: string): TextSearchMode =>
-  value === "regex" ? "regex" : "literal";
+const reviewSearchModes: ReadonlyArray<SearchModeChoice<TextSearchMode>> = [
+  { mode: "literal", symbol: "Aa", label: "Literal text search" },
+  { mode: "regex", symbol: ".*", label: "Regular expression search" },
+];
 
 const reviewSearchError = (model: Model) => {
   const search = compileTextSearch(model.filter, model.filterMode);
@@ -825,21 +828,11 @@ const fileSidebarView = (
       h.div(
         [h.Class("file-search")],
         [
-          h.span([], ["⌕"]),
-          h.select(
-            [
-              h.Value(model.filterMode),
-              h.AriaLabel("Pull request search mode"),
-              h.OnInput((value) =>
-                SelectedReviewSearchMode({
-                  value: reviewSearchMode(value),
-                }),
-              ),
-            ],
-            [
-              h.option([h.Value("literal")], ["Text"]),
-              h.option([h.Value("regex")], ["Regex"]),
-            ],
+          searchModePicker(
+            model.filterMode,
+            reviewSearchModes,
+            (value) => SelectedReviewSearchMode({ value }),
+            h,
           ),
           input("review-filter", h, [
             h.Type("search"),

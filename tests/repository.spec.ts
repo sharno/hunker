@@ -47,6 +47,10 @@ test("keeps the active repository when an earlier browser request finishes late"
     "background-color",
     "rgb(48, 59, 80)",
   );
+  const searchModes = page.getByRole("group", { name: "Search mode" });
+  await expect(searchModes).toHaveCSS("display", "flex");
+  await expect(searchModes.getByRole("button")).toHaveCount(3);
+  await expect(page.locator(".repository-search select")).toHaveCount(0);
   const locationForm = page.locator(".repository-github-loader");
   const locationInput = locationForm.getByLabel("GitHub URL");
   const locationSubmit = locationForm.getByRole("button", {

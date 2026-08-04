@@ -27,6 +27,10 @@ import { fileTreeView } from "../../view/file-tree-view";
 import { commitRouter } from "../../app-route";
 import { repositoryPullRequestsView } from "./pulls-view";
 import { withTailwind } from "../../view/tailwind";
+import {
+  searchModePicker,
+  type SearchModeChoice,
+} from "../../view/search-mode-view";
 
 export type ViewInputs = Readonly<{
   homeHref: string;
@@ -51,8 +55,13 @@ const authoredDate = (value: string) => {
       }).format(date);
 };
 
-const repositorySearchMode = (value: string): RepositorySearchMode =>
-  value === "regex" ? "regex" : value === "fuzzy" ? "fuzzy" : "literal";
+const repositorySearchModes: ReadonlyArray<
+  SearchModeChoice<RepositorySearchMode>
+> = [
+  { mode: "literal", symbol: "Aa", label: "Literal text search" },
+  { mode: "regex", symbol: ".*", label: "Regular expression search" },
+  { mode: "fuzzy", symbol: "≈", label: "Fuzzy FFF search" },
+];
 
 const searchDescription = (mode: RepositorySearchMode) =>
   mode === "fuzzy"
@@ -498,22 +507,11 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
                 h.OnSubmit(SubmittedRepositorySearch()),
               ],
               [
-                h.span([], ["⌕"]),
-                h.select(
-                  [
-                    h.Value(model.searchMode),
-                    h.AriaLabel("Repository search mode"),
-                    h.OnInput((value) =>
-                      SelectedRepositorySearchMode({
-                        mode: repositorySearchMode(value),
-                      }),
-                    ),
-                  ],
-                  [
-                    h.option([h.Value("literal")], ["Text"]),
-                    h.option([h.Value("regex")], ["Regex"]),
-                    h.option([h.Value("fuzzy")], ["Fuzzy · FFF"]),
-                  ],
+                searchModePicker(
+                  model.searchMode,
+                  repositorySearchModes,
+                  (mode) => SelectedRepositorySearchMode({ mode }),
+                  h,
                 ),
                 input("repository-query", h, [
                   h.Type("search"),
@@ -528,7 +526,11 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
                   h.AriaLabel("Search repository files and contents"),
                   h.OnInput((value) => UpdatedRepositoryQuery({ value })),
                 ]),
-                button(h, [h.Type("submit")], ["Search"]),
+                button(
+                  h,
+                  [h.Type("submit"), h.Class("repository-search-submit")],
+                  ["Search"],
+                ),
               ],
             ),
             h.a(
