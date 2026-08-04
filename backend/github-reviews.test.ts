@@ -1,6 +1,6 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "vitest";
 
-import { decodeResolvedThreadsPage } from "../backend/github-reviews";
+import { decodeResolvedThreadsPage } from "./github-reviews";
 
 test("decodes resolved GitHub review threads and their pagination cursor", () => {
   expect(

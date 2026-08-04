@@ -69,5 +69,13 @@
   stored in a service and executed later runs in its caller's fiber context;
   provide the captured provider to that Effect instead of assuming the Layer's
   build context will be retained.
+- Test Foldkit state machines with colocated `story.test.ts` files and rendered
+  user flows with colocated `scene.test.ts` files. Keep Playwright deliberately
+  thin: browser history and reload, real transport wiring, computed CSS/layout,
+  and browser-only behavior. Pure domain and backend integration tests belong in
+  Vitest, not under the Playwright test directory.
+- Scope test `ManagedRuntime`s to the Layer fixture. Reuse one suite runtime for
+  a stable Layer and dispose it in `afterAll`; construct per-fixture runtimes
+  when a Layer captures test-specific configuration such as temporary paths.
 - Run `bun run format:check`, `bun run lint`, `bun run test`, `bun run build`,
   and `bun run test:integration` before pushing.

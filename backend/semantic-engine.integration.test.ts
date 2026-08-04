@@ -1,19 +1,22 @@
-import { expect, test } from "@playwright/test";
-import { Effect } from "effect";
+import { afterAll, expect, test } from "vitest";
+import { Effect, ManagedRuntime } from "effect";
 
 import {
   SemanticDiffEngine,
   type FilePair,
   layer as semanticDiffLayer,
-} from "../backend/semantic-engine";
-import { runWithLayer } from "./effect-runtime";
+} from "./semantic-engine";
+
+const runtime = ManagedRuntime.make(semanticDiffLayer);
+
+afterAll(() => runtime.dispose());
 
 const runFile = (file: FilePair) => {
   const analysis = Effect.gen(function* () {
     const engine = yield* SemanticDiffEngine;
     return yield* engine.analyzeFile(file);
   });
-  return runWithLayer(semanticDiffLayer, analysis);
+  return runtime.runPromise(analysis);
 };
 
 const runReview = (files: ReadonlyArray<FilePair>) => {
@@ -21,7 +24,7 @@ const runReview = (files: ReadonlyArray<FilePair>) => {
     const engine = yield* SemanticDiffEngine;
     return yield* engine.analyzeReview(files);
   });
-  return runWithLayer(semanticDiffLayer, analysis);
+  return runtime.runPromise(analysis);
 };
 
 test("classifies a changed TypeScript declaration", async () => {

@@ -1,17 +1,21 @@
-import { expect, test } from "@playwright/test";
+import { afterAll, expect, test } from "vitest";
 import { NodeServices } from "@effect/platform-node";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, ManagedRuntime } from "effect";
 
 import {
   CharacterDiffEngine,
   type CharacterDiffInput,
   layer as characterDiffLayer,
-} from "../backend/character-diff-engine";
-import { runWithLayer } from "./effect-runtime";
+} from "./character-diff-engine";
+
+const runtime = ManagedRuntime.make(
+  characterDiffLayer.pipe(Layer.provide(NodeServices.layer)),
+);
+
+afterAll(() => runtime.dispose());
 
 const runCharacterDiff = (input: CharacterDiffInput) =>
-  runWithLayer(
-    characterDiffLayer.pipe(Layer.provide(NodeServices.layer)),
+  runtime.runPromise(
     Effect.gen(function* () {
       const engine = yield* CharacterDiffEngine;
       return yield* engine.analyzeFile(input);

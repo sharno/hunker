@@ -1,11 +1,11 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "vitest";
 
 import {
   buildFileTree,
   directoryPaths,
   parentFolderPaths,
   revealFileInTree,
-} from "../src/file-tree";
+} from "./file-tree";
 
 test("builds a directory-first tree with descendant file counts", () => {
   const tree = buildFileTree(

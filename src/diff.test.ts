@@ -1,6 +1,6 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "vitest";
 
-import { toFullDiffLines } from "../src/diff";
+import { toFullDiffLines } from "./diff";
 
 test("fills omitted file context around multiple patch hunks", () => {
   const patch = `@@ -3 +3 @@

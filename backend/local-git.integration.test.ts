@@ -4,22 +4,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { NodeServices } from "@effect/platform-node";
-import { expect, test } from "@playwright/test";
+import { expect, test } from "vitest";
 import { ConfigProvider, Effect, Layer, Option } from "effect";
 
-import {
-  LocalGit,
-  LocalGitFailed,
-  layer as localGitLayer,
-} from "../backend/local-git";
+import { LocalGit, LocalGitFailed, layer as localGitLayer } from "./local-git";
 import {
   LocalRepository,
   LocalRepositoryFailed,
   cloneArguments,
   layer as localRepositoryLayer,
   parseGitHubRemote,
-} from "../backend/local-repository";
-import { runWithLayer } from "./effect-runtime";
+} from "./local-repository";
+import { runWithLayer } from "../tests/effect-runtime";
 
 const git = (cwd: string, ...arguments_: ReadonlyArray<string>) =>
   execFileSync("git", arguments_, { cwd, encoding: "utf8" }).trim();

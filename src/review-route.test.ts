@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "vitest";
 
 import {
   defaultReviewOptions,
@@ -8,7 +8,7 @@ import {
   localPathFromGitHubUrl,
   reviewOptionsFromSearch,
   reviewRouteFromPathname,
-} from "../src/review-route";
+} from "./review-route";
 
 test("round-trips pull, compare, and commit review routes", () => {
   expect(reviewRouteFromPathname("/radarlabs/server/pull/7848")).toEqual({

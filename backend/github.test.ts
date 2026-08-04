@@ -1,11 +1,11 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "vitest";
 import { Effect } from "effect";
 
 import {
   decodePullCommits,
   decodeRepositoryPullRequests,
   parseGitHubUrl,
-} from "../backend/github";
+} from "./github";
 
 test("parses commit URLs as first-class diff targets", async () => {
   await expect(

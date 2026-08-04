@@ -4,6 +4,6 @@ export default defineConfig({
   test: {
     environment: "happy-dom",
     setupFiles: ["./src/vitest-setup.ts"],
-    include: ["src/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "backend/**/*.test.ts"],
   },
 });
