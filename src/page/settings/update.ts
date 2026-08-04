@@ -6,8 +6,9 @@ import { SaveSettings } from "./command";
 import type { Message } from "./message";
 import { Load, type Model, Save } from "./model";
 import type { HunkerSettings } from "../../settings";
+import type { AppResources } from "../../resources";
 
-type SettingsUpdate = Update.Return<Model, Message>;
+type SettingsUpdate = Update.Return<Model, Message, AppResources>;
 
 const sameSettings = (left: HunkerSettings, right: HunkerSettings): boolean =>
   left.repositoriesRoot === right.repositoriesRoot &&

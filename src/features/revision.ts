@@ -2,7 +2,7 @@ import { Effect, Option, Schema as S, Stream } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { Command, Subscription } from "foldkit";
 
-import { provideBrowserHttp, requestError, responseFailure } from "../api";
+import { requestError, responseFailure } from "../api";
 import {
   SucceededCheckReviewRevision,
   FailedCheckReviewRevision,
@@ -56,7 +56,6 @@ export const CheckReviewRevision = Command.define("CheckReviewRevision", {
           }),
         ),
       ),
-      provideBrowserHttp,
     ),
 });
 

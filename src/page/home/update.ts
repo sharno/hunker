@@ -5,8 +5,9 @@ import { evo } from "foldkit/struct";
 import { FetchRepositories } from "./command";
 import type { Message } from "./message";
 import { Repositories, type Model } from "./model";
+import type { AppResources } from "../../resources";
 
-type HomeUpdate = Update.Return<Model, Message>;
+type HomeUpdate = Update.Return<Model, Message, AppResources>;
 
 export const load = (model: Model): HomeUpdate => [
   evo(model, { repositories: () => Repositories.Loading() }),

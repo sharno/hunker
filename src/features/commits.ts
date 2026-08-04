@@ -2,7 +2,7 @@ import { Effect, Schema as S } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { Command } from "foldkit";
 
-import { provideBrowserHttp, requestError, responseFailure } from "../api";
+import { requestError, responseFailure } from "../api";
 import {
   FailedFetchCommitDiff,
   FailedFetchCommits,
@@ -11,7 +11,7 @@ import {
   SucceededFetchCommits,
   PullCommit,
 } from "../domain";
-import type { Message, ReviewMeta } from "../domain";
+import type { ReviewMeta } from "../domain";
 import { parseGitDiff } from "../diff";
 
 const commitsResponse = S.Struct({ commits: S.Array(PullCommit) });
@@ -67,7 +67,6 @@ export const FetchCommits = Command.define("FetchCommits", {
           }),
         ),
       ),
-      provideBrowserHttp,
     ),
 });
 
@@ -100,8 +99,5 @@ export const FetchCommitDiff = Command.define("FetchCommitDiff", {
           }),
         ),
       ),
-      provideBrowserHttp,
     ),
 });
-
-export type CommitCommand = Command.Command<Message>;

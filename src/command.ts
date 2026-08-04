@@ -2,12 +2,7 @@ import { Array as EffectArray, Clock, Effect, Schema as S } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { Command, Navigation } from "foldkit";
 
-import {
-  ApiRequestFailed,
-  provideBrowserHttp,
-  requestError,
-  responseFailure,
-} from "./api";
+import { ApiRequestFailed, requestError, responseFailure } from "./api";
 import {
   CharacterDiffResult,
   CompletedNavigate,
@@ -85,7 +80,6 @@ export const FetchReview = Command.define("FetchReview", {
           }),
         ),
       ),
-      provideBrowserHttp,
     ),
 });
 
@@ -144,7 +138,6 @@ export const FetchSemantic = Command.define("FetchSemantic", {
           }),
         ),
       ),
-      provideBrowserHttp,
     ),
 });
 
@@ -216,7 +209,6 @@ export const FetchCharacterDiff = Command.define("FetchCharacterDiff", {
           }),
         ),
       ),
-      provideBrowserHttp,
     ),
 });
 
@@ -263,7 +255,6 @@ export const FetchFullFile = Command.define("FetchFullFile", {
           }),
         ),
       ),
-      provideBrowserHttp,
     ),
 });
 
@@ -294,7 +285,6 @@ export const FetchGitHubReviews = Command.define("FetchGitHubReviews", {
           }),
         ),
       ),
-      provideBrowserHttp,
     ),
 });
 
@@ -323,7 +313,6 @@ export const PostReviewReply = Command.define("PostReviewReply", {
           }),
         ),
       ),
-      provideBrowserHttp,
     ),
 });
 
@@ -357,7 +346,6 @@ export const PostPullRequestReview = Command.define("PostPullRequestReview", {
           }),
         ),
       ),
-      provideBrowserHttp,
     ),
 });
 
@@ -392,6 +380,5 @@ export const FetchMoves = Command.define("FetchMoves", {
           }),
         ),
       ),
-      provideBrowserHttp,
     ),
 });

@@ -5,6 +5,7 @@ import type { Message } from "./domain";
 import { toolbarSubscriptions } from "./features/toolbar";
 import { revisionSubscriptions } from "./features/revision";
 import { init, routing, update } from "./state";
+import { appResources } from "./resources";
 import { view } from "./view/review-view";
 import { withTailwind } from "./view/tailwind";
 
@@ -32,6 +33,7 @@ export const makeReviewApplication = (container: HTMLElement) =>
       toolbarSubscriptions,
       revisionSubscriptions,
     ),
+    resources: appResources,
     container,
     preserveScroll: true,
     view: (model, h) => {

@@ -60,6 +60,7 @@ import { CheckReviewRevision } from "./features/revision";
 import * as Repository from "./page/repository";
 import * as Settings from "./page/settings";
 import * as Home from "./page/home";
+import type { AppResources } from "./resources";
 import type { HunkerSettings } from "./settings";
 import {
   defaultReviewOptions,
@@ -74,7 +75,8 @@ import {
 } from "./review-route";
 import * as GitHubLocation from "./features/github-location";
 
-type UpdateReturn = Update.Return<ModelType, Message>;
+type UpdateReturn = Update.Return<ModelType, Message, AppResources>;
+type AppCommands = Update.Commands<Message, AppResources>;
 
 const initialDiffOptionsPopover = () =>
   Popover.init({ id: "diff-options-popover" });
@@ -444,7 +446,7 @@ const applySettings = (model: ModelType, settings: HunkerSettings): ModelType =>
 
 const persistReviewSettings = (
   model: ModelType,
-  commands: ReadonlyArray<Command.Command<Message>>,
+  commands: AppCommands,
 ): UpdateReturn => {
   const [settings, settingsCommands] = Settings.save(model.settings, {
     ...model.settings.draft,
@@ -473,7 +475,7 @@ const persistReviewSettings = (
 
 const synchronizeReviewUrl = (
   model: ModelType,
-  commands: ReadonlyArray<Command.Command<Message>>,
+  commands: AppCommands,
 ): UpdateReturn => {
   if (model.phase._tag !== "Ready" || model.prUrl !== model.meta.url) {
     return [model, commands];
@@ -1497,9 +1499,12 @@ const initialReviewLocation = (
   ];
 };
 
-export const init: Runtime.RoutingApplicationInit<ModelType, Message> = (
-  url,
-) => {
+export const init: Runtime.RoutingApplicationInit<
+  ModelType,
+  Message,
+  void,
+  AppResources
+> = (url) => {
   const route = urlToAppRoute(url);
   const search = Option.getOrElse(url.search, () => "");
   return M.value(route).pipe(

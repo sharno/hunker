@@ -19,6 +19,7 @@ import {
   layer as localRepositoryLayer,
   parseGitHubRemote,
 } from "../backend/local-repository";
+import { runWithLayer } from "./effect-runtime";
 
 const git = (cwd: string, ...arguments_: ReadonlyArray<string>) =>
   execFileSync("git", arguments_, { cwd, encoding: "utf8" }).trim();
@@ -34,22 +35,22 @@ const runLocalGit = <A>(
   repositoriesRoot: string,
   use: (service: LocalGit["Service"]) => Effect.Effect<A, LocalGitFailed>,
 ) =>
-  Effect.runPromise(
+  runWithLayer(
+    localGitLayer.pipe(
+      Layer.provide(NodeServices.layer),
+      Layer.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({
+            HUNKER_REPOS_ROOT: repositoriesRoot,
+            HUNKER_CACHE_ROOT: join(repositoriesRoot, ".cache"),
+          }),
+        ),
+      ),
+    ),
     Effect.gen(function* () {
       const service = yield* LocalGit;
       return yield* use(service);
-    }).pipe(
-      // This test helper is the application entry point for the test runtime.
-      // oxlint-disable-next-line effecttsgo/strict-effect-provide
-      Effect.provide(localGitLayer.pipe(Layer.provide(NodeServices.layer))),
-      Effect.provideService(
-        ConfigProvider.ConfigProvider,
-        ConfigProvider.fromUnknown({
-          HUNKER_REPOS_ROOT: repositoriesRoot,
-          HUNKER_CACHE_ROOT: join(repositoriesRoot, ".cache"),
-        }),
-      ),
-    ),
+    }),
   );
 
 const runLocalRepository = <A>(
@@ -59,25 +60,23 @@ const runLocalRepository = <A>(
     service: LocalRepository["Service"],
   ) => Effect.Effect<A, LocalRepositoryFailed>,
 ) =>
-  Effect.runPromise(
+  runWithLayer(
+    localRepositoryLayer.pipe(
+      Layer.provide(NodeServices.layer),
+      Layer.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({
+            HUNKER_REPOS_ROOT: repositoriesRoot,
+            HUNKER_CACHE_ROOT: cacheRoot,
+            HUNKER_CONFIG_FILE: join(repositoriesRoot, "missing-settings.json"),
+          }),
+        ),
+      ),
+    ),
     Effect.gen(function* () {
       const service = yield* LocalRepository;
       return yield* use(service);
-    }).pipe(
-      // This test helper is the application entry point for the test runtime.
-      // oxlint-disable-next-line effecttsgo/strict-effect-provide
-      Effect.provide(
-        localRepositoryLayer.pipe(Layer.provide(NodeServices.layer)),
-      ),
-      Effect.provideService(
-        ConfigProvider.ConfigProvider,
-        ConfigProvider.fromUnknown({
-          HUNKER_REPOS_ROOT: repositoriesRoot,
-          HUNKER_CACHE_ROOT: cacheRoot,
-          HUNKER_CONFIG_FILE: join(repositoriesRoot, "missing-settings.json"),
-        }),
-      ),
-    ),
+    }),
   );
 
 test("creates shallow partial clones without tags or unrelated branches", () => {

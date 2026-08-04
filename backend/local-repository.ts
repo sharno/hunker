@@ -1,6 +1,7 @@
 import { FileFinder } from "@ff-labs/fff-node";
 import {
   Context,
+  ConfigProvider,
   Data,
   Effect,
   FileSystem,
@@ -182,8 +183,10 @@ export const layer = Layer.effect(
     const fs = yield* FileSystem.FileSystem;
     const paths = yield* Path.Path;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const configProvider = yield* ConfigProvider.ConfigProvider;
     const finders = new Map<string, FileFinder>();
     const currentSettings = loadSettings.pipe(
+      Effect.provideService(ConfigProvider.ConfigProvider, configProvider),
       Effect.provideService(FileSystem.FileSystem, fs),
       Effect.provideService(Path.Path, paths),
     );

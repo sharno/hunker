@@ -1,5 +1,5 @@
 import { Array, Match as M, Option, Schema as S } from "effect";
-import { AsyncData, Command, Update } from "foldkit";
+import { AsyncData, Update } from "foldkit";
 import { evo } from "foldkit/struct";
 
 import {
@@ -43,6 +43,7 @@ import {
   type SearchMatch as RepositorySearchMatchType,
 } from "./model";
 import { directoryPaths, revealFileInTree } from "../../file-tree";
+import type { AppResources } from "../../resources";
 
 export type RepositoryRoute = Readonly<{ owner: string; name: string }>;
 export type RepositoryOptions = Readonly<{
@@ -178,13 +179,14 @@ export const localRepositoryUrl = (
   return `${location}${search}`;
 };
 
-type RepositoryUpdate = Update.Return<Model, Message>;
+type RepositoryUpdate = Update.Return<Model, Message, AppResources>;
+type RepositoryCommand = Update.Commands<Message, AppResources>[number];
 
 const repositoryName = (model: Model) => `${model.owner}/${model.name}`;
 
 const synchronizeRepositoryUrl = (
   model: Model,
-  commands: ReadonlyArray<Command.Command<Message>>,
+  commands: Update.Commands<Message, AppResources>,
 ): RepositoryUpdate => {
   const href = localRepositoryUrl(
     { owner: model.owner, name: model.name },
@@ -249,7 +251,7 @@ export const load = (
             ? PullRequests.Loading()
             : PullRequests.Idle(),
       });
-  const maybeFilesCommand: Option.Option<Command.Command<Message>> =
+  const maybeFilesCommand: Option.Option<RepositoryCommand> =
     options.tab === "pulls" ||
     (sameRepository &&
       (AsyncData.hasData(current.files) || AsyncData.isPending(current.files)))
@@ -259,7 +261,7 @@ export const load = (
             repository: `${route.owner}/${route.name}`,
           }),
         );
-  const maybeSearchCommand: Option.Option<Command.Command<Message>> =
+  const maybeSearchCommand: Option.Option<RepositoryCommand> =
     options.tab !== "files" ||
     options.query === "" ||
     (sameSearch &&
@@ -277,7 +279,7 @@ export const load = (
             mode: options.searchMode,
           }),
         );
-  const maybeFileCommand: Option.Option<Command.Command<Message>> =
+  const maybeFileCommand: Option.Option<RepositoryCommand> =
     options.tab !== "files" ||
     options.file === "" ||
     (sameRepository &&
@@ -293,7 +295,7 @@ export const load = (
             path: options.file,
           }),
         );
-  const maybePullRequestsCommand: Option.Option<Command.Command<Message>> =
+  const maybePullRequestsCommand: Option.Option<RepositoryCommand> =
     options.tab !== "pulls" ||
     (samePullRequestList &&
       (AsyncData.isPending(current.pullRequests) ||
@@ -306,7 +308,7 @@ export const load = (
             page: 1,
           }),
         );
-  const maybeCommitsCommand: Option.Option<Command.Command<Message>> =
+  const maybeCommitsCommand: Option.Option<RepositoryCommand> =
     options.tab !== "commits" ||
     (sameRepository &&
       (AsyncData.isPending(current.commits) ||

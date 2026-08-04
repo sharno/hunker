@@ -2,7 +2,7 @@ import { Effect, Schema as S } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { Command } from "foldkit";
 
-import { provideBrowserHttp, requestError, responseFailure } from "../../api";
+import { requestError, responseFailure } from "../../api";
 import { HunkerSettings, SettingsDocument } from "../../settings";
 import {
   FailedFetchSettings,
@@ -33,7 +33,6 @@ export const FetchSettings = Command.define("FetchSettings", {
         }),
       ),
     ),
-    provideBrowserHttp,
   ),
 });
 
@@ -63,6 +62,5 @@ export const SaveSettings = Command.define("SaveSettings", {
           }),
         ),
       ),
-      provideBrowserHttp,
     ),
 });

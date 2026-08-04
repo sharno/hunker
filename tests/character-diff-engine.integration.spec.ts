@@ -7,19 +7,15 @@ import {
   type CharacterDiffInput,
   layer as characterDiffLayer,
 } from "../backend/character-diff-engine";
+import { runWithLayer } from "./effect-runtime";
 
 const runCharacterDiff = (input: CharacterDiffInput) =>
-  Effect.runPromise(
+  runWithLayer(
+    characterDiffLayer.pipe(Layer.provide(NodeServices.layer)),
     Effect.gen(function* () {
       const engine = yield* CharacterDiffEngine;
       return yield* engine.analyzeFile(input);
-    }).pipe(
-      // This test helper is the application entry point for the test runtime.
-      // oxlint-disable-next-line effecttsgo/strict-effect-provide
-      Effect.provide(
-        characterDiffLayer.pipe(Layer.provide(NodeServices.layer)),
-      ),
-    ),
+    }),
   );
 
 const slices = (

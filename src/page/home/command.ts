@@ -2,7 +2,7 @@ import { Effect, Schema as S } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { Command } from "foldkit";
 
-import { provideBrowserHttp, requestError, responseFailure } from "../../api";
+import { requestError, responseFailure } from "../../api";
 import { FailedFetchRepositories, SucceededFetchRepositories } from "./message";
 import { RepositoryCatalog } from "./model";
 
@@ -28,6 +28,5 @@ export const FetchRepositories = Command.define("FetchRepositories", {
         }),
       ),
     ),
-    provideBrowserHttp,
   ),
 });

@@ -59,5 +59,15 @@
   prepare hook. The Effect patch validates that the installed `oxlint` and
   `oxlint-tsgolint` versions are compatible; rerun the hook after dependency
   installation or tooling upgrades.
+- Do not use lint-disable or TypeScript-suppression comments to paper over an
+  architectural or typing mismatch in first-party code. Move Effect Layers to
+  the owning Foldkit runtime's `resources`, use a properly disposed
+  `ManagedRuntime` at imperative test boundaries, or improve the domain type so
+  the rule passes without suppression.
+- Capture dependencies used by lazy service methods when constructing the
+  service. A `ConfigProvider` Layer controls Layer construction, but an Effect
+  stored in a service and executed later runs in its caller's fiber context;
+  provide the captured provider to that Effect instead of assuming the Layer's
+  build context will be retained.
 - Run `bun run format:check`, `bun run lint`, `bun run test`, `bun run build`,
   and `bun run test:integration` before pushing.

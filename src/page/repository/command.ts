@@ -2,12 +2,7 @@ import { Data, Effect, Schema as S } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { Command, Navigation } from "foldkit";
 
-import {
-  provideBrowserHttp,
-  requestError,
-  responseError,
-  responseFailure,
-} from "../../api";
+import { requestError, responseError, responseFailure } from "../../api";
 import { RepositorySearchMode } from "../../features/code-search";
 import {
   PullRequestFilter,
@@ -99,7 +94,6 @@ export const FetchRepositoryFiles = Command.define("FetchRepositoryFiles", {
           }),
         ),
       ),
-      provideBrowserHttp,
     ),
 });
 
@@ -129,7 +123,6 @@ export const FetchRepositoryCommits = Command.define("FetchRepositoryCommits", {
           }),
         ),
       ),
-      provideBrowserHttp,
     ),
 });
 
@@ -178,7 +171,6 @@ export const FetchRepositoryPullRequests = Command.define(
             }),
           ),
         ),
-        provideBrowserHttp,
       ),
   },
 );
@@ -212,7 +204,6 @@ export const CloneRepository = Command.define("CloneRepository", {
           }),
         ),
       ),
-      provideBrowserHttp,
     ),
 });
 
@@ -255,7 +246,6 @@ export const SearchRepository = Command.define("SearchRepository", {
           }),
         ),
       ),
-      provideBrowserHttp,
     ),
 });
 
@@ -285,7 +275,6 @@ export const FetchRepositoryFile = Command.define("FetchRepositoryFile", {
           }),
         ),
       ),
-      provideBrowserHttp,
     ),
 });
 
