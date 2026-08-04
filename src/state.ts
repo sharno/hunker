@@ -503,6 +503,7 @@ const changeReviewLocation = (
   const tabChanged = options.reviewTab !== model.reviewTab;
   const withOptions = applyReviewOptions(model, options);
   const locatedOptions = evo(withOptions, {
+    page: (): "review" => "review",
     legacyReviewSettings: () => hasLegacyReviewSettings(search),
   });
   if (reviewUrl === model.prUrl && model.phase._tag === "Loading") {

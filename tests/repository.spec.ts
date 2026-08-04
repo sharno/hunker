@@ -1,6 +1,11 @@
 import { expect, test } from "@playwright/test";
 
-import { settingsResponse } from "./fixtures";
+import {
+  characterDiffResponse,
+  commitDiffResponse,
+  semanticResponse,
+  settingsResponse,
+} from "./fixtures";
 
 test("keeps the active repository when an earlier browser request finishes late", async ({
   page,
@@ -99,4 +104,83 @@ test("keeps the active repository when an earlier browser request finishes late"
   await expect(page.locator(".repository-file-row")).not.toContainText(
     "first.ts",
   );
+});
+
+test("reopens the same cached commit review after browser Back", async ({
+  page,
+}) => {
+  const commit = {
+    sha: "2222222222222222222222222222222222222222",
+    parents: ["1111111111111111111111111111111111111111"],
+    authorName: "Review Agent",
+    authorEmail: "review@example.com",
+    authoredAt: "2026-07-31T15:30:00Z",
+    subject: "Use a template literal",
+  };
+  await page.route("**/api/settings", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: settingsResponse,
+    }),
+  );
+  await page.route("**/api/repository/commits?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: { ref: "main", shallow: false, commits: [commit] },
+    }),
+  );
+  await page.route("**/api/repository/files?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: {
+        files: [{ path: "src/greet.ts", size: 143, gitStatus: "clean" }],
+      },
+    }),
+  );
+  await page.route("**/api/diff?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: commitDiffResponse,
+    }),
+  );
+  await page.route("**/api/semantic?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: semanticResponse,
+    }),
+  );
+  await page.route("**/api/characters?**", (route) => {
+    const requestUrl = new URL(route.request().url());
+    const path = requestUrl.searchParams.get("path") ?? "";
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: characterDiffResponse(path, true, "token"),
+    });
+  });
+
+  await page.goto("/example/hunker-demo/commits");
+  const commitLink = page.getByRole("link", {
+    name: /Use a template literal/,
+  });
+  await expect(commitLink).toBeVisible();
+  await commitLink.click();
+  await expect(page).toHaveURL(`/example/hunker-demo/commit/${commit.sha}`);
+  await expect(
+    page.getByRole("heading", { name: commitDiffResponse.title }),
+  ).toBeVisible();
+
+  await page.goBack();
+  await expect(page).toHaveURL("/example/hunker-demo/commits");
+  await expect(commitLink).toBeVisible();
+  await commitLink.click();
+  await expect(page).toHaveURL(`/example/hunker-demo/commit/${commit.sha}`);
+  await expect(
+    page.getByRole("heading", { name: commitDiffResponse.title }),
+  ).toBeVisible();
 });
