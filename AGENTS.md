@@ -91,6 +91,10 @@
   thin: browser history and reload, real transport wiring, computed CSS/layout,
   and browser-only behavior. Pure domain and backend integration tests belong in
   Vitest, not under the Playwright test directory.
+- In diff grids, make code tracks shrinkable with `minmax(0, 1fr)` and code
+  items `min-width: 0`. Preserve indentation with `white-space: break-spaces`
+  and allow long tokens to wrap; a `max-content` code track can paint one side
+  of a split diff through the other instead of participating in row sizing.
 - Scope test `ManagedRuntime`s to the Layer fixture. Reuse one suite runtime for
   a stable Layer and dispose it in `afterAll`; construct per-fixture runtimes
   when a Layer captures test-specific configuration such as temporary paths.

@@ -366,11 +366,12 @@ const utilities: Readonly<Record<string, string>> = {
     "flex flex-wrap gap-1.5 border-b border-[#ded5f1] bg-[#f3effc] px-[13px] py-2 text-[9px] text-[#584b78] [&_span]:rounded-sm [&_span]:bg-[#e7dff8] [&_span]:px-1.5 [&_span]:py-[3px]",
   "diff-lines": "overflow-x-auto bg-paper font-mono text-[11px] leading-[1.7]",
   "diff-line":
-    "grid min-h-[22px] grid-cols-[46px_46px_20px_minmax(max-content,1fr)]",
+    "grid min-h-[22px] grid-cols-[46px_46px_20px_minmax(0,1fr)] items-stretch",
   "line-number":
     "select-none border-r border-[rgb(216_215_208/72%)] bg-[rgb(241_240_234/72%)] py-px pr-[9px] pl-1 text-right text-[9px] text-[#9ca09a]",
   "line-marker": "select-none pl-[7px] font-extrabold text-[#7f847e]",
-  "line-code": "block min-w-max py-px pr-3.5 pl-0.5 whitespace-pre",
+  "line-code":
+    "block min-w-0 py-px pr-3.5 pl-0.5 whitespace-break-spaces [overflow-wrap:anywhere]",
   "line-add":
     "bg-add [&_.line-number]:bg-add-strong [&_.line-number]:text-[#27805a] [&_.line-marker]:bg-add-strong [&_.line-marker]:text-[#27805a] [&_.char-change]:bg-[rgb(24_126_77/25%)] [&_.char-change]:shadow-[inset_0_-1px_rgb(16_101_59/22%)]",
   "line-remove":
@@ -381,7 +382,7 @@ const utilities: Readonly<Record<string, string>> = {
   "line-hunk":
     "border-y border-[#ddd7ec] bg-[#f0edf8] text-[#726a8e] [&_.line-number]:bg-[#e6e0f4] [&_.line-number]:text-transparent",
   "hunk-toggle":
-    "flex min-w-max cursor-pointer items-center gap-2 border-0 bg-transparent py-px pr-3.5 pl-0.5 text-left text-[inherit] text-[#665d82] hover:text-[#403456]",
+    "flex min-w-0 cursor-pointer items-start gap-2 border-0 bg-transparent py-px pr-3.5 pl-0.5 text-left text-[inherit] text-[#665d82] hover:text-[#403456] [&_code]:min-w-0 [&_code]:whitespace-break-spaces [&_code]:[overflow-wrap:anywhere]",
   "collapse-chevron": "inline-grid w-[15px] place-items-center text-[13px]",
   "collapsed-label":
     "rounded-sm bg-[#e3ddf2] px-[5px] py-px text-[8px] font-[720] tracking-[0.04em] text-[#756b92] uppercase",
@@ -433,7 +434,7 @@ const utilities: Readonly<Record<string, string>> = {
   "github-review-submit-actions":
     "flex items-center gap-2 [&_button]:min-h-[30px] [&_button]:cursor-pointer [&_button]:rounded-[5px] [&_button]:border [&_button]:border-[#bdc2cc] [&_button]:bg-white [&_button]:px-[11px] [&_button]:text-[10px] [&_button]:font-[680] [&_button:disabled]:cursor-not-allowed [&_button:disabled]:opacity-50 [&_.request-changes-button]:border-[#d8a39b] [&_.request-changes-button]:text-[#8d372e] [&_.approve-button]:border-lime-dark [&_.approve-button]:bg-lime [&_.approve-button]:text-[#233700]",
   "char-change":
-    "rounded-sm bg-[rgb(178_64_48/22%)] py-px shadow-[inset_0_-1px_rgb(126_41_30/20%)]",
+    "box-decoration-clone rounded-sm bg-[rgb(178_64_48/22%)] py-px shadow-[inset_0_-1px_rgb(126_41_30/20%)]",
   "hljs-comment": "text-[#6e7781] italic",
   "hljs-quote": "text-[#6e7781] italic",
   "hljs-keyword": "text-[#8250df]",
@@ -459,9 +460,9 @@ const utilities: Readonly<Record<string, string>> = {
   "hljs-meta": "text-[#57606a]",
   "hljs-deletion": "text-[#cf222e]",
   "split-lines": "min-w-[850px]",
-  "split-row": "grid grid-cols-2",
+  "split-row": "grid grid-cols-2 items-stretch [&>*]:min-w-0",
   "split-cell":
-    "grid min-h-[22px] min-w-0 grid-cols-[46px_20px_minmax(max-content,1fr)] [&.left]:border-r [&.left]:border-[#cfd0ca] [&.line-hunk]:col-auto",
+    "grid min-h-[22px] min-w-0 grid-cols-[46px_20px_minmax(0,1fr)] items-stretch overflow-hidden [&.left]:border-r [&.left]:border-[#cfd0ca] [&.line-hunk]:col-auto",
   "empty-cell":
     "bg-[#f3f2ed] shadow-[inset_12px_0_14px_-14px_rgb(16_27_44/35%)]",
   "diff-footer":

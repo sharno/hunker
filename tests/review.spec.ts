@@ -106,6 +106,66 @@ test("does not show stale review content while browser Fetch requests are pendin
   ).toBeVisible();
 });
 
+test("wraps long split diff lines without painting across columns", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const longLine = `export const description = "${"long review text ".repeat(18)}";`;
+  await page.route("**/api/diff?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: {
+        ...reviewResponse,
+        diff: `diff --git a/src/long.ts b/src/long.ts
+index 1111111..2222222 100644
+--- a/src/long.ts
++++ b/src/long.ts
+@@ -1 +1 @@
+-${longLine}
++export const description = "short review text";
+`,
+      },
+    }),
+  );
+
+  await page.goto(
+    "/example/hunker-demo/pull/42?scope=file&view=split&semantic=off&inline=off&syntax=off&file=src%2Flong.ts",
+  );
+  await expect(page.locator(".split-row")).toHaveCount(1);
+
+  const layout = await page.locator(".split-row").evaluate((row) => {
+    const left = row.querySelector<HTMLElement>(".split-cell.left");
+    const right = row.querySelector<HTMLElement>(".split-cell.right");
+    if (left === null || right === null) {
+      throw new Error("Expected a complete split diff row");
+    }
+    const leftCode = left.querySelector<HTMLElement>(".line-code");
+    if (leftCode === null) throw new Error("Expected split diff code");
+    const leftBounds = left.getBoundingClientRect();
+    const rightBounds = right.getBoundingClientRect();
+    return {
+      leftHeight: leftBounds.height,
+      rightHeight: rightBounds.height,
+      leftRight: leftBounds.right,
+      rightLeft: rightBounds.left,
+      codeClientWidth: leftCode.clientWidth,
+      codeScrollWidth: leftCode.scrollWidth,
+      overflowWrap: getComputedStyle(leftCode).overflowWrap,
+      whiteSpace: getComputedStyle(leftCode).whiteSpace,
+    };
+  });
+
+  expect(layout.leftHeight).toBeGreaterThan(22);
+  expect(layout.leftHeight).toBe(layout.rightHeight);
+  expect(layout.leftRight).toBeLessThanOrEqual(layout.rightLeft + 1);
+  expect(layout.codeScrollWidth).toBeLessThanOrEqual(
+    layout.codeClientWidth + 1,
+  );
+  expect(layout.overflowWrap).toBe("anywhere");
+  expect(layout.whiteSpace).toBe("break-spaces");
+});
+
 test("canonicalizes copied review URLs and preserves browser layout across reloads", async ({
   page,
 }) => {
