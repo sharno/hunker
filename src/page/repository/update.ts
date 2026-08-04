@@ -187,6 +187,7 @@ const repositoryName = (model: Model) => `${model.owner}/${model.name}`;
 const synchronizeRepositoryUrl = (
   model: Model,
   commands: Update.Commands<Message, AppResources>,
+  method: "push" | "replace" = "replace",
 ): RepositoryUpdate => {
   const href = localRepositoryUrl(
     { owner: model.owner, name: model.name },
@@ -198,7 +199,7 @@ const synchronizeRepositoryUrl = (
       pullRequestFilter: model.pullRequestFilter,
     },
   );
-  return [model, [...commands, NavigateRepository({ href })]];
+  return [model, [...commands, NavigateRepository({ href, method })]];
 };
 
 export const load = (
@@ -449,13 +450,17 @@ const submitSearch = (model: Model): RepositoryUpdate => {
     query: () => query,
     search: () => Search.Loading(),
   });
-  return synchronizeRepositoryUrl(next, [
-    SearchRepository({
-      repository: repositoryName(next),
-      query,
-      mode: next.searchMode,
-    }),
-  ]);
+  return synchronizeRepositoryUrl(
+    next,
+    [
+      SearchRepository({
+        repository: repositoryName(next),
+        query,
+        mode: next.searchMode,
+      }),
+    ],
+    "push",
+  );
 };
 
 const selectSearchMode = (
@@ -531,9 +536,11 @@ const selectFile = (model: Model, path: string): RepositoryUpdate => {
     collapsedFolders: (folders) => revealFileInTree(folders, path),
     file: () => FileContent.Loading(),
   });
-  return synchronizeRepositoryUrl(next, [
-    FetchRepositoryFile({ repository: repositoryName(next), path }),
-  ]);
+  return synchronizeRepositoryUrl(
+    next,
+    [FetchRepositoryFile({ repository: repositoryName(next), path })],
+    "push",
+  );
 };
 
 const closeFile = (model: Model): RepositoryUpdate =>
@@ -543,6 +550,7 @@ const closeFile = (model: Model): RepositoryUpdate =>
       file: () => FileContent.Idle(),
     }),
     [],
+    "push",
   );
 
 const fileLoaded = (
@@ -629,6 +637,7 @@ const selectTab = (
           ]
         : []),
     ],
+    "push",
   );
 };
 
@@ -647,13 +656,17 @@ const selectPullRequestFilter = (
     pullRequestFilter: () => state,
     pullRequests: () => PullRequests.Loading(),
   });
-  return synchronizeRepositoryUrl(next, [
-    FetchRepositoryPullRequests({
-      repository: repositoryName(next),
-      state,
-      page: 1,
-    }),
-  ]);
+  return synchronizeRepositoryUrl(
+    next,
+    [
+      FetchRepositoryPullRequests({
+        repository: repositoryName(next),
+        state,
+        page: 1,
+      }),
+    ],
+    "push",
+  );
 };
 
 const loadMorePullRequests = (model: Model): RepositoryUpdate => {

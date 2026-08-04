@@ -263,6 +263,12 @@ describe("review update", () => {
       update,
       given(review),
       message(SelectedReviewTab({ value: "commits" })),
+      Command.expectHas(
+        Navigate({
+          href: "/example/hunker-demo/pull/42/commits",
+          method: "push",
+        }),
+      ),
       Command.resolveAll(
         [
           FetchCommits,

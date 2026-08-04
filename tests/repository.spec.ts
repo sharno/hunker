@@ -31,6 +31,19 @@ test("keeps the active repository when an earlier browser request finishes late"
       },
     });
   });
+  await page.route("**/api/repository/file?**", async (route) => {
+    const requestUrl = new URL(route.request().url());
+    const path = requestUrl.searchParams.get("path") ?? "unknown.ts";
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: {
+        path,
+        content: `export const source = "${path}";\n`,
+        truncated: false,
+      },
+    });
+  });
 
   await page.goto("/example/first");
   await page
@@ -71,6 +84,15 @@ test("keeps the active repository when an earlier browser request finishes late"
     formBox.x + formBox.width,
   );
   await expect(page.locator(".repository-file-row")).toContainText("second.ts");
+
+  await page.getByRole("button", { name: "second.ts" }).click();
+  await expect(page).toHaveURL("/example/second/blob/HEAD/second.ts");
+  await expect(page.locator(".repository-file-view")).toContainText(
+    'export const source = "second.ts";',
+  );
+  await page.goBack();
+  await expect(page).toHaveURL("/example/second");
+  await expect(page.locator(".repository-file-view")).toHaveCount(0);
 
   firstGate.resolve();
   await expect(page.locator(".repository-file-row")).toContainText("second.ts");

@@ -476,6 +476,7 @@ const persistReviewSettings = (
 const synchronizeReviewUrl = (
   model: ModelType,
   commands: AppCommands,
+  method: "push" | "replace" = "replace",
 ): UpdateReturn => {
   if (model.phase._tag !== "Ready" || model.prUrl !== model.meta.url) {
     return [model, commands];
@@ -483,7 +484,7 @@ const synchronizeReviewUrl = (
   const href = localReviewUrl(model.meta.url, reviewOptions(model));
   return href === undefined
     ? [model, commands]
-    : [model, [...commands, Navigate({ href, method: "replace" })]];
+    : [model, [...commands, Navigate({ href, method })]];
 };
 
 const changeReviewLocation = (
@@ -1242,7 +1243,7 @@ export const update = (
           reviewScope: () => "file" as const,
         });
         const result = requestSelectedIntelligence(next);
-        return synchronizeReviewUrl(result[0], result[1]);
+        return synchronizeReviewUrl(result[0], result[1], "push");
       },
       SelectedReviewTab: ({ value }) => {
         if (value === "files") {
@@ -1264,7 +1265,7 @@ export const update = (
             }),
           );
           const [loaded, commands] = requestSelectedIntelligence(next);
-          return synchronizeReviewUrl(loaded, commands);
+          return synchronizeReviewUrl(loaded, commands, "push");
         }
         const next = resetDiffAnalysis(
           evo(model, {
@@ -1274,11 +1275,11 @@ export const update = (
           }),
         );
         const [loaded, commands] = requestCommits(next);
-        return synchronizeReviewUrl(loaded, commands);
+        return synchronizeReviewUrl(loaded, commands, "push");
       },
       SelectedCommit: ({ sha }) => {
         const [next, commands] = requestCommitDiff(model, sha);
-        return synchronizeReviewUrl(next, commands);
+        return synchronizeReviewUrl(next, commands, "push");
       },
       ReturnedToCommitList: () =>
         synchronizeReviewUrl(
@@ -1289,6 +1290,7 @@ export const update = (
             }),
           ),
           [],
+          "push",
         ),
       SelectedReviewScope: ({ value }) => {
         const next = evo(model, { reviewScope: () => value });

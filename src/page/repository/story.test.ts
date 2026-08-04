@@ -207,6 +207,7 @@ describe("repository browser update", () => {
         }),
         NavigateRepository({
           href: "/example/hunker-demo?q=gret+person&search=fuzzy",
+          method: "push",
         }),
       ),
       Command.resolveAll(

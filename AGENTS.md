@@ -30,6 +30,10 @@
 - Use Foldkit `restString` for canonical URL resources that own a
   slash-delimited path, and order more-specific routes before their parent route
   in `oneOf`.
+- Use `Navigation.pushUrl` for user-visible location changes such as opening a
+  file, tab, search result, or commit. Reserve `Navigation.replaceUrl` for
+  canonicalization and non-navigational configuration synchronization, and
+  cover Back behavior with a real-browser test.
 - When Submodel `viewInputs` need parent-owned interactive markup, pass a
   top-level slot callback that builds the `Html`. Do not pass already-rendered
   `Html` containing nested event functions; Foldkit can only auto-scope
