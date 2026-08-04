@@ -31,7 +31,7 @@ const utilities: Readonly<Record<string, string>> = {
   "toolbar-loader-panel":
     "absolute top-[calc(100%+8px)] right-0 z-50 w-[540px] rounded-lg border border-[#536075] bg-[#1f2b3e] p-2.5 shadow-[0_12px_35px_rgb(16_27_44/28%)] max-[620px]:fixed max-[620px]:top-[54px] max-[620px]:right-2 max-[620px]:left-2 max-[620px]:w-auto",
   "toolbar-pr-loader":
-    "grid min-h-[38px] grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-[#445066] bg-[#263247] py-1 pr-1 pl-2.5 [&_input]:min-w-0 [&_input]:border-0 [&_input]:bg-transparent [&_input]:text-[11px] [&_input]:text-white [&_input]:outline-none [&_input]:focus-visible:outline-2 [&_input]:focus-visible:outline-offset-2 [&_input]:focus-visible:outline-lime [&_input::placeholder]:text-[#9ea8b7]",
+    "grid min-h-[38px] grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-[#445066] bg-[#263247] py-1 pr-1 pl-2.5 [&.is-error]:border-[#dc8c7f] [&_input]:min-w-0 [&_input]:border-0 [&_input]:bg-transparent [&_input]:text-[11px] [&_input]:text-white [&_input]:outline-none [&_input]:focus-visible:outline-2 [&_input]:focus-visible:outline-offset-2 [&_input]:focus-visible:outline-lime [&_input::placeholder]:text-[#9ea8b7]",
   "toolbar-refresh":
     "flex h-8 cursor-pointer items-center gap-1.5 rounded-[5px] border border-[#4a5669] bg-[#273348] px-2.5 text-[10px] font-[680] text-[#d8dde4] hover:border-[#69768b] disabled:cursor-wait disabled:opacity-65 max-[900px]:px-2 max-[900px]:[&_.toolbar-refresh-label]:hidden",
   "toolbar-refresh-label": "whitespace-nowrap",
@@ -46,11 +46,11 @@ const utilities: Readonly<Record<string, string>> = {
   "brand-tagline":
     "overflow-hidden border-l border-white/20 pl-2.5 text-xs text-[#aeb6be] text-ellipsis whitespace-nowrap max-[1040px]:hidden",
   "pr-loader":
-    "grid min-h-[42px] grid-cols-[auto_1fr_auto] items-center gap-[9px] rounded-lg border border-[#445066] bg-[#263247] py-1 pr-1 pl-[13px] shadow-[inset_0_1px_rgb(255_255_255/5%)] [&_input]:min-w-0 [&_input]:border-0 [&_input]:bg-transparent [&_input]:text-[13px] [&_input]:text-white [&_input]:outline-none [&_input]:focus-visible:outline-2 [&_input]:focus-visible:outline-offset-2 [&_input]:focus-visible:outline-lime [&_input::placeholder]:text-[#9ea8b7]",
-  "github-glyph":
-    "grid size-5 place-items-center rounded-full bg-white text-[11px] font-extrabold text-ink",
-  "load-button":
+    "grid min-h-[42px] grid-cols-[minmax(0,1fr)_auto] items-center gap-[9px] rounded-lg border border-[#445066] bg-[#263247] py-1 pr-1 pl-[13px] shadow-[inset_0_1px_rgb(255_255_255/5%)] [&.is-error]:border-[#dc8c7f] [&_input]:min-w-0 [&_input]:border-0 [&_input]:bg-transparent [&_input]:text-[13px] [&_input]:text-white [&_input]:outline-none [&_input]:focus-visible:outline-2 [&_input]:focus-visible:outline-offset-2 [&_input]:focus-visible:outline-lime [&_input::placeholder]:text-[#9ea8b7]",
+  "github-location-submit":
     "min-h-8 cursor-pointer rounded-[5px] border-0 bg-lime px-[15px] text-xs font-[780] text-ink hover:bg-[#e5ff85] disabled:cursor-wait disabled:opacity-70",
+  "github-location-error":
+    "col-span-full pb-1 text-[9px] leading-4 text-[#ffb4a8]",
   "shortcut-hint":
     "justify-self-end text-[11px] text-[#9da7b4] max-[1040px]:hidden",
   "error-banner":
@@ -141,9 +141,9 @@ const utilities: Readonly<Record<string, string>> = {
   "repository-search":
     "grid h-9 grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-[#4a5669] bg-[#263247] pl-3 [&>span]:text-[#aeb6be] [&_select]:max-w-24 [&_select]:rounded [&_select]:border [&_select]:border-[#566277] [&_select]:bg-[#344057] [&_select]:px-1.5 [&_select]:py-1 [&_select]:text-[9px] [&_select]:font-[700] [&_select]:text-white [&_select]:outline-none [&_input]:min-w-0 [&_input]:border-0 [&_input]:bg-transparent [&_input]:text-[12px] [&_input]:text-white [&_input]:outline-none [&_input]:focus-visible:outline-2 [&_input]:focus-visible:outline-offset-2 [&_input]:focus-visible:outline-lime [&_input::placeholder]:text-[#8f9baa] [&_button]:h-7 [&_button]:cursor-pointer [&_button]:rounded-[4px] [&_button]:border-0 [&_button]:bg-lime [&_button]:px-3 [&_button]:text-[10px] [&_button]:font-[750] [&_button]:text-ink [&.is-hidden]:invisible [&.is-hidden]:pointer-events-none max-[760px]:order-3 max-[760px]:col-span-3",
   "repository-view-tabs":
-    "shrink-0 bg-[#303b50] [&_.segmented-button]:px-2.5 [&_.segmented-button]:py-1.5 [&_.segmented-button]:text-[10px] [&_.segmented-button]:text-[#b9c0cb] [&_.segmented-button.is-active]:bg-[#f7f7f3] [&_.segmented-button.is-active]:text-ink",
+    "shrink-0 bg-[#303b50]! [&_.segmented-button]:px-2.5 [&_.segmented-button]:py-1.5 [&_.segmented-button]:text-[10px] [&_.segmented-button]:text-[#cbd2dc]! [&_.segmented-button.is-active]:bg-[#f7f7f3]! [&_.segmented-button.is-active]:text-ink!",
   "repository-github-loader":
-    "grid h-9 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-[#4a5669] bg-[#263247] pr-1 pl-2.5 [&.is-error]:border-[#dc8c7f] [&_input]:min-w-0 [&_input]:border-0 [&_input]:bg-transparent [&_input]:text-[11px] [&_input]:text-white [&_input]:outline-none [&_input]:focus-visible:outline-2 [&_input]:focus-visible:outline-offset-2 [&_input]:focus-visible:outline-lime [&_input::placeholder]:text-[#8f9baa] [&_.load-button]:min-h-7 [&_.load-button]:px-3 max-[760px]:order-2",
+    "grid h-9 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-[#4a5669] bg-[#263247] pr-1 pl-2.5 [&.is-error]:h-auto [&.is-error]:min-h-9 [&.is-error]:border-[#dc8c7f] [&_input]:min-w-0 [&_input]:border-0 [&_input]:bg-transparent [&_input]:text-[11px] [&_input]:text-white [&_input]:outline-none [&_input]:focus-visible:outline-2 [&_input]:focus-visible:outline-offset-2 [&_input]:focus-visible:outline-lime [&_input::placeholder]:text-[#8f9baa] [&_.github-location-submit]:min-h-7 [&_.github-location-submit]:px-3 max-[760px]:order-2",
   "repository-github-link":
     "rounded-md border border-[#4a5669] px-3 py-2 text-[10px] font-[650] text-[#d8dde4] no-underline hover:border-[#7d899b]",
   "repository-workspace":

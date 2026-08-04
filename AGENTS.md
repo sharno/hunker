@@ -37,6 +37,10 @@
 - Apply project `HtmlBuilder` adapters inside every Foldkit Submodel view.
   Foldkit intentionally supplies its singleton builder at each child boundary,
   so a builder wrapped by the parent does not propagate into the child.
+- Treat a Foldkit Submodel `slotId` as component identity only; it does not
+  become a DOM class. Pass visual variants through typed `viewInputs`, apply the
+  variant class at the child view root, and cover that rendered class contract
+  with a Scene test.
 - Record durable Effect, Foldkit, tooling, and architecture discoveries in this
   file as they are learned. Keep the guidance general and remove or correct it
   when the vendored sources prove it wrong.

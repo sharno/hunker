@@ -43,6 +43,29 @@ test("keeps the active repository when an earlier browser request finishes late"
     "position",
     "sticky",
   );
+  await expect(page.locator(".repository-view-tabs")).toHaveCSS(
+    "background-color",
+    "rgb(48, 59, 80)",
+  );
+  const locationForm = page.locator(".repository-github-loader");
+  const locationInput = locationForm.getByLabel("GitHub URL");
+  const locationSubmit = locationForm.getByRole("button", {
+    name: "Open",
+    exact: true,
+  });
+  await expect(locationForm).toHaveCSS("display", "grid");
+  await expect(locationInput).toBeVisible();
+  await expect(locationSubmit).toBeVisible();
+  const formBox = await locationForm.boundingBox();
+  const inputBox = await locationInput.boundingBox();
+  const submitBox = await locationSubmit.boundingBox();
+  if (formBox === null || inputBox === null || submitBox === null) {
+    throw new Error("The repository toolbar controls must have layout boxes");
+  }
+  expect(inputBox.x + inputBox.width).toBeLessThanOrEqual(submitBox.x);
+  expect(submitBox.x + submitBox.width).toBeLessThanOrEqual(
+    formBox.x + formBox.width,
+  );
   await expect(page.locator(".repository-file-row")).toContainText("second.ts");
 
   firstGate.resolve();

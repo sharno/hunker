@@ -6,12 +6,13 @@ import * as GitHubLocation from "../features/github-location";
 
 export const githubLocationForm = (
   model: Model,
-  slotId: string,
+  layout: GitHubLocation.Layout,
   h: HtmlBuilder<Message>,
 ): Html =>
   h.submodel({
-    slotId,
+    slotId: `github-location-${layout}`,
     view: GitHubLocation.view,
     model: model.githubLocation,
+    viewInputs: { layout },
     toParentMessage: (message) => GotGitHubLocationMessage({ message }),
   });
