@@ -1,8 +1,13 @@
 import { Array as EffectArray, Clock, Effect, Schema as S } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
-import { Command, Http, Navigation } from "foldkit";
+import { Command, Navigation } from "foldkit";
 
-import { requestError, responseError } from "./api";
+import {
+  ApiRequestFailed,
+  provideBrowserHttp,
+  requestError,
+  responseFailure,
+} from "./api";
 import {
   CharacterDiffResult,
   CompletedNavigate,
@@ -55,15 +60,17 @@ export const FetchReview = Command.define("FetchReview", {
       const data: unknown = yield* response.json;
 
       if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(responseError(data, "Could not load that change.")),
-        );
+        return yield* responseFailure(data, "Could not load that change.");
       }
       const { diff, ...meta } = yield* S.decodeUnknownEffect(ApiReview)(data);
       const files = parseGitDiff(diff);
       return yield* EffectArray.match(files, {
         onEmpty: () =>
-          Effect.fail(new Error("This change has no reviewable text diff.")),
+          Effect.fail(
+            new ApiRequestFailed({
+              message: "This change has no reviewable text diff.",
+            }),
+          ),
         onNonEmpty: () =>
           Effect.succeed(
             SucceededFetchReview({ requestedUrl: url, meta, files }),
@@ -78,7 +85,7 @@ export const FetchReview = Command.define("FetchReview", {
           }),
         ),
       ),
-      Effect.provide(Http.layer),
+      provideBrowserHttp,
     ),
 });
 
@@ -123,9 +130,7 @@ export const FetchSemantic = Command.define("FetchSemantic", {
       );
       const data: unknown = yield* response.json;
       if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(responseError(data, "Could not run semantic analysis.")),
-        );
+        return yield* responseFailure(data, "Could not run semantic analysis.");
       }
       const result = yield* S.decodeUnknownEffect(SemanticResult)(data);
       return SucceededFetchSemantic({ requestedUrl: url, path, result });
@@ -139,7 +144,7 @@ export const FetchSemantic = Command.define("FetchSemantic", {
           }),
         ),
       ),
-      Effect.provide(Http.layer),
+      provideBrowserHttp,
     ),
 });
 
@@ -189,10 +194,9 @@ export const FetchCharacterDiff = Command.define("FetchCharacterDiff", {
       );
       const data: unknown = yield* response.json;
       if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(
-            responseError(data, "Could not calculate character changes."),
-          ),
+        return yield* responseFailure(
+          data,
+          "Could not calculate character changes.",
         );
       }
       const result = yield* S.decodeUnknownEffect(CharacterDiffResult)(data);
@@ -212,7 +216,7 @@ export const FetchCharacterDiff = Command.define("FetchCharacterDiff", {
           }),
         ),
       ),
-      Effect.provide(Http.layer),
+      provideBrowserHttp,
     ),
 });
 
@@ -242,8 +246,9 @@ export const FetchFullFile = Command.define("FetchFullFile", {
       );
       const data: unknown = yield* response.json;
       if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(responseError(data, "Could not load the complete file.")),
+        return yield* responseFailure(
+          data,
+          "Could not load the complete file.",
         );
       }
       const pair = yield* S.decodeUnknownEffect(FullFileResponse)(data);
@@ -258,7 +263,7 @@ export const FetchFullFile = Command.define("FetchFullFile", {
           }),
         ),
       ),
-      Effect.provide(Http.layer),
+      provideBrowserHttp,
     ),
 });
 
@@ -273,9 +278,7 @@ export const FetchGitHubReviews = Command.define("FetchGitHubReviews", {
       );
       const data: unknown = yield* response.json;
       if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(responseError(data, "Could not load GitHub reviews.")),
-        );
+        return yield* responseFailure(data, "Could not load GitHub reviews.");
       }
       const decoded = yield* S.decodeUnknownEffect(GitHubReviewsResponse)(data);
       return SucceededFetchGitHubReviews({
@@ -291,7 +294,7 @@ export const FetchGitHubReviews = Command.define("FetchGitHubReviews", {
           }),
         ),
       ),
-      Effect.provide(Http.layer),
+      provideBrowserHttp,
     ),
 });
 
@@ -307,9 +310,7 @@ export const PostReviewReply = Command.define("PostReviewReply", {
       const response = yield* client.execute(request);
       const data: unknown = yield* response.json;
       if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(responseError(data, "Could not post reply.")),
-        );
+        return yield* responseFailure(data, "Could not post reply.");
       }
       const decoded = yield* S.decodeUnknownEffect(GitHubReplyResponse)(data);
       return SucceededPostReviewReply({ comment: decoded.comment });
@@ -322,7 +323,7 @@ export const PostReviewReply = Command.define("PostReviewReply", {
           }),
         ),
       ),
-      Effect.provide(Http.layer),
+      provideBrowserHttp,
     ),
 });
 
@@ -342,8 +343,9 @@ export const PostPullRequestReview = Command.define("PostPullRequestReview", {
       const response = yield* client.execute(request);
       const data: unknown = yield* response.json;
       if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(responseError(data, "Could not submit the GitHub review.")),
+        return yield* responseFailure(
+          data,
+          "Could not submit the GitHub review.",
         );
       }
       return SucceededPostPullRequestReview({ event });
@@ -355,7 +357,7 @@ export const PostPullRequestReview = Command.define("PostPullRequestReview", {
           }),
         ),
       ),
-      Effect.provide(Http.layer),
+      provideBrowserHttp,
     ),
 });
 
@@ -371,10 +373,9 @@ export const FetchMoves = Command.define("FetchMoves", {
       );
       const data: unknown = yield* response.json;
       if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(
-            responseError(data, "Could not scan this review for moved code."),
-          ),
+        return yield* responseFailure(
+          data,
+          "Could not scan this review for moved code.",
         );
       }
       const decoded = yield* S.decodeUnknownEffect(MoveResponse)(data);
@@ -391,6 +392,6 @@ export const FetchMoves = Command.define("FetchMoves", {
           }),
         ),
       ),
-      Effect.provide(Http.layer),
+      provideBrowserHttp,
     ),
 });

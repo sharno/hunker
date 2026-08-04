@@ -14,6 +14,8 @@ const runCharacterDiff = (input: CharacterDiffInput) =>
       const engine = yield* CharacterDiffEngine;
       return yield* engine.analyzeFile(input);
     }).pipe(
+      // This test helper is the application entry point for the test runtime.
+      // oxlint-disable-next-line effecttsgo/strict-effect-provide
       Effect.provide(
         characterDiffLayer.pipe(Layer.provide(NodeServices.layer)),
       ),

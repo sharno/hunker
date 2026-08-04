@@ -1,4 +1,4 @@
-import { Config, Context, Effect, Layer, Option, Stream } from "effect";
+import { Config, Context, Data, Effect, Layer, Option, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 type GitHubAuthSource = "environment" | "gh" | "anonymous";
@@ -12,6 +12,10 @@ export class GitHubAuth extends Context.Service<GitHubAuth, GitHubAuthShape>()(
   "hunker/GitHubAuth",
 ) {}
 
+class GitHubCliFailed extends Data.TaggedError("GitHubCliFailed")<{
+  readonly message: string;
+}> {}
+
 const readGhToken = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const handle = yield* spawner.spawn(
@@ -22,13 +26,15 @@ const readGhToken = Effect.gen(function* () {
     { concurrency: "unbounded" },
   );
   if (exitCode !== ChildProcessSpawner.ExitCode(0)) {
-    return yield* Effect.fail(
-      new Error(`gh exited with status ${Number(exitCode)}`),
-    );
+    return yield* new GitHubCliFailed({
+      message: `gh exited with status ${Number(exitCode)}`,
+    });
   }
   const token = output.trim();
   if (token === "")
-    return yield* Effect.fail(new Error("gh returned an empty token"));
+    return yield* new GitHubCliFailed({
+      message: "gh returned an empty token",
+    });
   return token;
 }).pipe(Effect.scoped, Effect.option);
 

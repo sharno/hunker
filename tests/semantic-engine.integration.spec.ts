@@ -7,21 +7,33 @@ import {
   layer as semanticDiffLayer,
 } from "../backend/semantic-engine";
 
-const runFile = (file: FilePair) =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const engine = yield* SemanticDiffEngine;
-      return yield* engine.analyzeFile(file);
-    }).pipe(Effect.provide(semanticDiffLayer)),
+const runFile = (file: FilePair) => {
+  const analysis = Effect.gen(function* () {
+    const engine = yield* SemanticDiffEngine;
+    return yield* engine.analyzeFile(file);
+  });
+  return Effect.runPromise(
+    analysis.pipe(
+      // This test helper is the application entry point for the test runtime.
+      // oxlint-disable-next-line effecttsgo/strict-effect-provide
+      Effect.provide(semanticDiffLayer),
+    ),
   );
+};
 
-const runReview = (files: ReadonlyArray<FilePair>) =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const engine = yield* SemanticDiffEngine;
-      return yield* engine.analyzeReview(files);
-    }).pipe(Effect.provide(semanticDiffLayer)),
+const runReview = (files: ReadonlyArray<FilePair>) => {
+  const analysis = Effect.gen(function* () {
+    const engine = yield* SemanticDiffEngine;
+    return yield* engine.analyzeReview(files);
+  });
+  return Effect.runPromise(
+    analysis.pipe(
+      // This test helper is the application entry point for the test runtime.
+      // oxlint-disable-next-line effecttsgo/strict-effect-provide
+      Effect.provide(semanticDiffLayer),
+    ),
   );
+};
 
 test("classifies a changed TypeScript declaration", async () => {
   const result = await runFile({

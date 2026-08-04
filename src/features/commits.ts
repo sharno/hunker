@@ -1,8 +1,8 @@
 import { Effect, Schema as S } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
-import { Command, Http } from "foldkit";
+import { Command } from "foldkit";
 
-import { requestError, responseError } from "../api";
+import { provideBrowserHttp, requestError, responseFailure } from "../api";
 import {
   FailedFetchCommitDiff,
   FailedFetchCommits,
@@ -48,10 +48,9 @@ export const FetchCommits = Command.define("FetchCommits", {
       );
       const data: unknown = yield* response.json;
       if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(
-            responseError(data, "Could not load this pull request's commits."),
-          ),
+        return yield* responseFailure(
+          data,
+          "Could not load this pull request's commits.",
         );
       }
       const decoded = yield* S.decodeUnknownEffect(commitsResponse)(data);
@@ -68,7 +67,7 @@ export const FetchCommits = Command.define("FetchCommits", {
           }),
         ),
       ),
-      Effect.provide(Http.layer),
+      provideBrowserHttp,
     ),
 });
 
@@ -84,8 +83,9 @@ export const FetchCommitDiff = Command.define("FetchCommitDiff", {
       );
       const data: unknown = yield* response.json;
       if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(responseError(data, "Could not load this commit's diff.")),
+        return yield* responseFailure(
+          data,
+          "Could not load this commit's diff.",
         );
       }
       const decoded = yield* S.decodeUnknownEffect(reviewResponse)(data);
@@ -100,7 +100,7 @@ export const FetchCommitDiff = Command.define("FetchCommitDiff", {
           }),
         ),
       ),
-      Effect.provide(Http.layer),
+      provideBrowserHttp,
     ),
 });
 

@@ -54,5 +54,10 @@
 - Keep the project on TypeScript 7 and strict typing. Do not introduce `any`.
 - Use Oxfmt for formatting and Oxlint with type-aware linting. Do not add
   Prettier or competing formatter configuration.
+- Keep Effect's Oxlint integration reproducible with `@effect/tsgo`, the
+  `effecttsgo` plugin, and the `effect-tsgo patch --no-typescript --oxlint`
+  prepare hook. The Effect patch validates that the installed `oxlint` and
+  `oxlint-tsgolint` versions are compatible; rerun the hook after dependency
+  installation or tooling upgrades.
 - Run `bun run format:check`, `bun run lint`, `bun run test`, `bun run build`,
   and `bun run test:integration` before pushing.

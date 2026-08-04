@@ -413,7 +413,7 @@ const handleCloneRepository = (request: HttpServerRequest.HttpServerRequest) =>
 
 const handleRepositories = Effect.gen(function* () {
   const local = yield* LocalRepository;
-  return HttpServerResponse.jsonUnsafe(yield* local.listRepositories());
+  return HttpServerResponse.jsonUnsafe(yield* local.listRepositories);
 }).pipe(Effect.catchTag("LocalRepositoryFailed", localRepositoryError));
 
 const settingsError = (error: SettingsFailed) =>

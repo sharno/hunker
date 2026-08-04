@@ -1,8 +1,13 @@
 import { Data, Effect, Schema as S } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
-import { Command, Http, Navigation } from "foldkit";
+import { Command, Navigation } from "foldkit";
 
-import { requestError, responseError } from "../../api";
+import {
+  provideBrowserHttp,
+  requestError,
+  responseError,
+  responseFailure,
+} from "../../api";
 import { RepositorySearchMode } from "../../features/code-search";
 import {
   PullRequestFilter,
@@ -94,7 +99,7 @@ export const FetchRepositoryFiles = Command.define("FetchRepositoryFiles", {
           }),
         ),
       ),
-      Effect.provide(Http.layer),
+      provideBrowserHttp,
     ),
 });
 
@@ -111,9 +116,7 @@ export const FetchRepositoryCommits = Command.define("FetchRepositoryCommits", {
       );
       const data: unknown = yield* response.json;
       if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(responseError(data, "Could not list local commits.")),
-        );
+        return yield* responseFailure(data, "Could not list local commits.");
       }
       const decoded = yield* S.decodeUnknownEffect(commitsResponse)(data);
       return SucceededFetchRepositoryCommits({ repository, ...decoded });
@@ -126,7 +129,7 @@ export const FetchRepositoryCommits = Command.define("FetchRepositoryCommits", {
           }),
         ),
       ),
-      Effect.provide(Http.layer),
+      provideBrowserHttp,
     ),
 });
 
@@ -155,9 +158,7 @@ export const FetchRepositoryPullRequests = Command.define(
         );
         const data: unknown = yield* response.json;
         if (response.status < 200 || response.status >= 300) {
-          return yield* Effect.fail(
-            new Error(responseError(data, "Could not list pull requests.")),
-          );
+          return yield* responseFailure(data, "Could not list pull requests.");
         }
         const decoded = yield* S.decodeUnknownEffect(
           RepositoryPullRequestsPage,
@@ -177,7 +178,7 @@ export const FetchRepositoryPullRequests = Command.define(
             }),
           ),
         ),
-        Effect.provide(Http.layer),
+        provideBrowserHttp,
       ),
   },
 );
@@ -198,9 +199,7 @@ export const CloneRepository = Command.define("CloneRepository", {
       );
       const data: unknown = yield* response.json;
       if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(responseError(data, "Could not clone this repository.")),
-        );
+        return yield* responseFailure(data, "Could not clone this repository.");
       }
       const decoded = yield* S.decodeUnknownEffect(cloneResponse)(data);
       return SucceededCloneRepository({ repository, ...decoded });
@@ -209,14 +208,11 @@ export const CloneRepository = Command.define("CloneRepository", {
         Effect.succeed(
           FailedCloneRepository({
             repository,
-            error:
-              error instanceof Error
-                ? error.message
-                : "Could not clone repository.",
+            error: requestError(error, "Could not clone repository."),
           }),
         ),
       ),
-      Effect.provide(Http.layer),
+      provideBrowserHttp,
     ),
 });
 
@@ -236,10 +232,9 @@ export const SearchRepository = Command.define("SearchRepository", {
       );
       const data: unknown = yield* response.json;
       if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(
-            responseError(data, "Could not search the local repository."),
-          ),
+        return yield* responseFailure(
+          data,
+          "Could not search the local repository.",
         );
       }
       const decoded = yield* S.decodeUnknownEffect(searchResponse)(data);
@@ -256,14 +251,11 @@ export const SearchRepository = Command.define("SearchRepository", {
             repository,
             query,
             mode,
-            error:
-              error instanceof Error
-                ? error.message
-                : "Could not search files.",
+            error: requestError(error, "Could not search files."),
           }),
         ),
       ),
-      Effect.provide(Http.layer),
+      provideBrowserHttp,
     ),
 });
 
@@ -279,9 +271,7 @@ export const FetchRepositoryFile = Command.define("FetchRepositoryFile", {
       );
       const data: unknown = yield* response.json;
       if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(responseError(data, `Could not read ${path}.`)),
-        );
+        return yield* responseFailure(data, `Could not read ${path}.`);
       }
       const decoded = yield* S.decodeUnknownEffect(fileResponse)(data);
       return SucceededFetchRepositoryFile({ repository, ...decoded });
@@ -291,14 +281,11 @@ export const FetchRepositoryFile = Command.define("FetchRepositoryFile", {
           FailedFetchRepositoryFile({
             repository,
             path,
-            error:
-              error instanceof Error
-                ? error.message
-                : `Could not read ${path}.`,
+            error: requestError(error, `Could not read ${path}.`),
           }),
         ),
       ),
-      Effect.provide(Http.layer),
+      provideBrowserHttp,
     ),
 });
 

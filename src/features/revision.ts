@@ -1,8 +1,8 @@
 import { Effect, Option, Schema as S, Stream } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
-import { Command, Http, Subscription } from "foldkit";
+import { Command, Subscription } from "foldkit";
 
-import { requestError, responseError } from "../api";
+import { provideBrowserHttp, requestError, responseFailure } from "../api";
 import {
   SucceededCheckReviewRevision,
   FailedCheckReviewRevision,
@@ -31,10 +31,9 @@ export const CheckReviewRevision = Command.define("CheckReviewRevision", {
       );
       const data: unknown = yield* response.json;
       if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(
-            responseError(data, "Could not check the local PR revision."),
-          ),
+        return yield* responseFailure(
+          data,
+          "Could not check the local PR revision.",
         );
       }
       const revision = yield* S.decodeUnknownEffect(RevisionResponse)(data);
@@ -57,7 +56,7 @@ export const CheckReviewRevision = Command.define("CheckReviewRevision", {
           }),
         ),
       ),
-      Effect.provide(Http.layer),
+      provideBrowserHttp,
     ),
 });
 

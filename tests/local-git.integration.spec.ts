@@ -7,9 +7,14 @@ import { NodeServices } from "@effect/platform-node";
 import { expect, test } from "@playwright/test";
 import { ConfigProvider, Effect, Layer, Option } from "effect";
 
-import { LocalGit, layer as localGitLayer } from "../backend/local-git";
+import {
+  LocalGit,
+  LocalGitFailed,
+  layer as localGitLayer,
+} from "../backend/local-git";
 import {
   LocalRepository,
+  LocalRepositoryFailed,
   cloneArguments,
   layer as localRepositoryLayer,
   parseGitHubRemote,
@@ -27,13 +32,15 @@ const commit = (repository: string, message: string, content: string) => {
 
 const runLocalGit = <A>(
   repositoriesRoot: string,
-  use: (service: LocalGit["Service"]) => Effect.Effect<A, unknown>,
+  use: (service: LocalGit["Service"]) => Effect.Effect<A, LocalGitFailed>,
 ) =>
   Effect.runPromise(
     Effect.gen(function* () {
       const service = yield* LocalGit;
       return yield* use(service);
     }).pipe(
+      // This test helper is the application entry point for the test runtime.
+      // oxlint-disable-next-line effecttsgo/strict-effect-provide
       Effect.provide(localGitLayer.pipe(Layer.provide(NodeServices.layer))),
       Effect.provideService(
         ConfigProvider.ConfigProvider,
@@ -48,13 +55,17 @@ const runLocalGit = <A>(
 const runLocalRepository = <A>(
   repositoriesRoot: string,
   cacheRoot: string,
-  use: (service: LocalRepository["Service"]) => Effect.Effect<A, unknown>,
+  use: (
+    service: LocalRepository["Service"],
+  ) => Effect.Effect<A, LocalRepositoryFailed>,
 ) =>
   Effect.runPromise(
     Effect.gen(function* () {
       const service = yield* LocalRepository;
       return yield* use(service);
     }).pipe(
+      // This test helper is the application entry point for the test runtime.
+      // oxlint-disable-next-line effecttsgo/strict-effect-provide
       Effect.provide(
         localRepositoryLayer.pipe(Layer.provide(NodeServices.layer)),
       ),
@@ -112,7 +123,7 @@ test("discovers configured and temporary repositories and prefers configured clo
     const catalog = await runLocalRepository(
       repositoriesRoot,
       cacheRoot,
-      (service) => service.listRepositories(),
+      (service) => service.listRepositories,
     );
 
     expect(catalog).toEqual({

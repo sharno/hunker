@@ -65,10 +65,7 @@ export type LocalRepositories = Readonly<{
 }>;
 
 type LocalRepositoryShape = Readonly<{
-  listRepositories: () => Effect.Effect<
-    LocalRepositories,
-    LocalRepositoryFailed
-  >;
+  listRepositories: Effect.Effect<LocalRepositories, LocalRepositoryFailed>;
   listFiles: (
     repository: RepositoryId,
   ) => Effect.Effect<ReadonlyArray<RepositoryFile>, LocalRepositoryFailed>;
@@ -359,35 +356,34 @@ export const layer = Layer.effect(
         return groups.flat();
       });
 
-    const listRepositories = () =>
-      Effect.gen(function* () {
-        const { settings } = yield* currentSettings.pipe(
-          Effect.mapError((error) => failure(error.message)),
-        );
-        const configuredRoot = yield* configuredPath(settings.repositoriesRoot);
-        const temporaryRoot = yield* configuredPath(settings.cacheRoot);
-        const [configured, temporary] = yield* Effect.all(
-          [
-            repositoriesUnder(configuredRoot, "configured"),
-            repositoriesUnder(temporaryRoot, "temporary"),
-          ],
-          { concurrency: "unbounded" },
-        );
-        const unique = new Map<string, LocalRepositorySummary>();
-        for (const repository of [...configured, ...temporary]) {
-          const key = `${repository.owner}/${repository.name}`.toLowerCase();
-          if (!unique.has(key)) unique.set(key, repository);
-        }
-        return {
-          configuredRoot,
-          temporaryRoot,
-          repositories: [...unique.values()].toSorted((left, right) =>
-            `${left.owner}/${left.name}`.localeCompare(
-              `${right.owner}/${right.name}`,
-            ),
+    const listRepositories = Effect.gen(function* () {
+      const { settings } = yield* currentSettings.pipe(
+        Effect.mapError((error) => failure(error.message)),
+      );
+      const configuredRoot = yield* configuredPath(settings.repositoriesRoot);
+      const temporaryRoot = yield* configuredPath(settings.cacheRoot);
+      const [configured, temporary] = yield* Effect.all(
+        [
+          repositoriesUnder(configuredRoot, "configured"),
+          repositoriesUnder(temporaryRoot, "temporary"),
+        ],
+        { concurrency: "unbounded" },
+      );
+      const unique = new Map<string, LocalRepositorySummary>();
+      for (const repository of [...configured, ...temporary]) {
+        const key = `${repository.owner}/${repository.name}`.toLowerCase();
+        if (!unique.has(key)) unique.set(key, repository);
+      }
+      return {
+        configuredRoot,
+        temporaryRoot,
+        repositories: [...unique.values()].toSorted((left, right) =>
+          `${left.owner}/${left.name}`.localeCompare(
+            `${right.owner}/${right.name}`,
           ),
-        };
-      });
+        ),
+      };
+    });
 
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {

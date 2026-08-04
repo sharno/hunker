@@ -1,8 +1,8 @@
 import { Effect, Schema as S } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
-import { Command, Http } from "foldkit";
+import { Command } from "foldkit";
 
-import { requestError, responseError } from "../../api";
+import { provideBrowserHttp, requestError, responseFailure } from "../../api";
 import { HunkerSettings, SettingsDocument } from "../../settings";
 import {
   FailedFetchSettings,
@@ -20,9 +20,7 @@ export const FetchSettings = Command.define("FetchSettings", {
     );
     const data: unknown = yield* response.json;
     if (response.status < 200 || response.status >= 300) {
-      return yield* Effect.fail(
-        new Error(responseError(data, "Could not load Hunker settings.")),
-      );
+      return yield* responseFailure(data, "Could not load Hunker settings.");
     }
     return SucceededFetchSettings({
       document: yield* S.decodeUnknownEffect(SettingsDocument)(data),
@@ -35,7 +33,7 @@ export const FetchSettings = Command.define("FetchSettings", {
         }),
       ),
     ),
-    Effect.provide(Http.layer),
+    provideBrowserHttp,
   ),
 });
 
@@ -52,9 +50,7 @@ export const SaveSettings = Command.define("SaveSettings", {
       );
       const data: unknown = yield* response.json;
       if (response.status < 200 || response.status >= 300) {
-        return yield* Effect.fail(
-          new Error(responseError(data, "Could not save Hunker settings.")),
-        );
+        return yield* responseFailure(data, "Could not save Hunker settings.");
       }
       return SucceededSaveSettings({
         document: yield* S.decodeUnknownEffect(SettingsDocument)(data),
@@ -67,6 +63,6 @@ export const SaveSettings = Command.define("SaveSettings", {
           }),
         ),
       ),
-      Effect.provide(Http.layer),
+      provideBrowserHttp,
     ),
 });
