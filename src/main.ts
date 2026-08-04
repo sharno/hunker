@@ -8,15 +8,16 @@ import { init, routing, update } from "./state";
 import { appResources } from "./resources";
 import { view } from "./view/review-view";
 import { withTailwind } from "./view/tailwind";
+import { reviewRouteFromAppRoute } from "./review-route";
 
 const documentTitle = (model: typeof Model.Type): string => {
-  if (model.phase._tag === "Loading" && model.prUrl !== "") {
+  if (reviewRouteFromAppRoute(model.location) === undefined) return "Hunker";
+  if (model.reviewState._tag === "Loading") {
     return "Loading review · Hunker";
   }
   if (
-    model.phase._tag === "Ready" &&
-    model.prUrl !== "" &&
-    model.meta.url === model.prUrl
+    model.reviewState._tag === "Ready" &&
+    model.meta.url === model.reviewState.url
   ) {
     return `${model.meta.repository} #${model.meta.number} · Hunker`;
   }

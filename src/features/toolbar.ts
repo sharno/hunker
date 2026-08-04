@@ -4,6 +4,7 @@ import { Subscription } from "foldkit";
 
 import { UpdatedToolbarCompact } from "../domain";
 import type { Message, Model } from "../domain";
+import { reviewRouteFromAppRoute } from "../review-route";
 
 const TOOLBAR_COMPACT_AFTER = 80;
 
@@ -28,9 +29,8 @@ export const toolbarSubscriptions = Subscription.make<Model, Message>()(
       {
         modelToDependencies: (model) => ({
           maybeActive:
-            model.page === "review" &&
-            model.phase._tag === "Ready" &&
-            model.prUrl !== ""
+            reviewRouteFromAppRoute(model.location) !== undefined &&
+            model.reviewState._tag === "Ready"
               ? Option.some(null)
               : Option.none(),
         }),

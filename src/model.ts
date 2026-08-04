@@ -8,6 +8,7 @@ import { TextSearchMode } from "./features/code-search";
 import * as Repository from "./page/repository";
 import * as Settings from "./page/settings";
 import * as Home from "./page/home";
+import { AppRoute } from "./app-route";
 
 export const FileChange = S.Struct({
   path: S.String,
@@ -260,16 +261,24 @@ export const ReviewEvent = S.Literals([
 ]);
 export const ReviewSubmission = AsyncData.Schema(ReviewEvent, S.String);
 
-export const ReviewReady = ts("Ready");
-export const ReviewLoading = ts("Loading");
-export const ReviewFailed = ts("Failed", { error: S.String });
-export const ReviewPhase = S.Union([ReviewReady, ReviewLoading, ReviewFailed]);
+export const ReviewIdle = ts("Idle");
+export const ReviewReady = ts("Ready", { url: S.NonEmptyString });
+export const ReviewLoading = ts("Loading", { url: S.NonEmptyString });
+export const ReviewFailed = ts("Failed", {
+  url: S.NonEmptyString,
+  error: S.String,
+});
+export const ReviewState = S.Union([
+  ReviewIdle,
+  ReviewReady,
+  ReviewLoading,
+  ReviewFailed,
+]);
 
 export const Model = S.Struct({
-  page: S.Literals(["home", "review", "repository", "settings"]),
-  phase: ReviewPhase,
+  location: AppRoute,
+  reviewState: ReviewState,
   githubLocation: GitHubLocation.Model,
-  prUrl: S.String,
   filter: S.String,
   filterMode: TextSearchMode,
   meta: ReviewMeta,

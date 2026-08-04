@@ -9,7 +9,7 @@ import {
   TickedRevisionPoll,
 } from "../domain";
 import type { Message, Model } from "../domain";
-import { isPullRequestUrl } from "../review-route";
+import { isPullRequestUrl, reviewRouteFromAppRoute } from "../review-route";
 
 const RevisionResponse = S.Struct({
   source: S.Literal("local"),
@@ -73,8 +73,8 @@ export const revisionSubscriptions = Subscription.make<Model, Message>()(
       {
         modelToDependencies: (model) => ({
           maybeRevision:
-            model.page === "review" &&
-            model.phase._tag === "Ready" &&
+            reviewRouteFromAppRoute(model.location) !== undefined &&
+            model.reviewState._tag === "Ready" &&
             model.meta.backing.source === "local" &&
             isPullRequestUrl(model.meta.url)
               ? Option.some({

@@ -1,9 +1,13 @@
 import { Array, Match as M, Option } from "effect";
-import { AsyncData, Command, Runtime, Update, Url } from "foldkit";
+import { AsyncData, Command, Route, Runtime, Update, Url } from "foldkit";
 import { evo } from "foldkit/struct";
 import { Popover } from "@foldkit/ui";
 
-import { reviewRouteToGitHubUrl, urlToAppRoute } from "./app-route";
+import {
+  NotFoundRoute,
+  reviewRouteToGitHubUrl,
+  urlToAppRoute,
+} from "./app-route";
 import type { AppRoute } from "./app-route";
 import {
   FetchCharacterDiff,
@@ -12,9 +16,11 @@ import {
   FetchMoves,
   FetchReview,
   FetchSemantic,
-  Navigate,
+  CanonicalizeLocation,
+  LoadExternalLocation,
   PostPullRequestReview,
   PostReviewReply,
+  VisitLocation,
 } from "./command";
 import {
   ChangedUrl,
@@ -34,6 +40,7 @@ import {
   ReplyFailed,
   ReplyLoading,
   ReviewFailed,
+  ReviewIdle,
   ReviewLoading,
   ReviewMoves,
   ReviewReady,
@@ -104,6 +111,14 @@ const activeDiffUrl = (model: ModelType) =>
     ? commitGitHubUrl(model.meta, model.selectedCommit)
     : model.meta.url;
 
+const isReviewLocation = (model: ModelType) =>
+  reviewRouteFromAppRoute(model.location) !== undefined;
+
+const reviewUrlAtLocation = (model: ModelType): string | undefined => {
+  const route = reviewRouteFromAppRoute(model.location);
+  return route === undefined ? undefined : reviewRouteToGitHubUrl(route);
+};
+
 const activeRevision = (model: ModelType) =>
   model.reviewTab === "commits" && model.selectedCommit !== ""
     ? { baseOid: "", headOid: "" }
@@ -113,15 +128,16 @@ const activeRevision = (model: ModelType) =>
       };
 
 const isCurrentReviewRequest = (model: ModelType, requestedUrl: string) =>
-  model.phase._tag === "Loading" && model.prUrl === requestedUrl;
+  model.reviewState._tag === "Loading" &&
+  model.reviewState.url === requestedUrl;
 
 const isCurrentPullRequest = (model: ModelType, requestedUrl: string) =>
-  model.phase._tag === "Ready" &&
-  model.prUrl === requestedUrl &&
+  model.reviewState._tag === "Ready" &&
+  model.reviewState.url === requestedUrl &&
   model.meta.url === requestedUrl;
 
 const isCurrentDiffRequest = (model: ModelType, requestedUrl: string) =>
-  model.phase._tag === "Ready" && activeDiffUrl(model) === requestedUrl;
+  model.reviewState._tag === "Ready" && activeDiffUrl(model) === requestedUrl;
 
 const requestSemantic = (model: ModelType, file: FileChange): UpdateReturn => {
   const alreadyLoaded = model.semanticResults.some(
@@ -131,9 +147,9 @@ const requestSemantic = (model: ModelType, file: FileChange): UpdateReturn => {
     model.semanticRequest._tag === "Loading" &&
     model.semanticRequest.path === file.path;
   if (
-    model.phase._tag !== "Ready" ||
+    !isReviewLocation(model) ||
+    model.reviewState._tag !== "Ready" ||
     !model.semantic ||
-    model.prUrl.trim() === "" ||
     alreadyLoaded ||
     alreadyLoading
   ) {
@@ -157,10 +173,10 @@ const requestSemantic = (model: ModelType, file: FileChange): UpdateReturn => {
 
 const requestMoves = (model: ModelType): UpdateReturn => {
   if (
-    model.phase._tag !== "Ready" ||
+    !isReviewLocation(model) ||
+    model.reviewState._tag !== "Ready" ||
     !model.semantic ||
     model.reviewScope !== "full" ||
-    model.prUrl.trim() === "" ||
     AsyncData.isPending(model.reviewMoves) ||
     AsyncData.hasData(model.reviewMoves)
   ) {
@@ -174,11 +190,11 @@ const requestMoves = (model: ModelType): UpdateReturn => {
 
 const requestGitHubReviews = (model: ModelType): UpdateReturn => {
   if (
-    model.phase._tag !== "Ready" ||
+    !isReviewLocation(model) ||
+    model.reviewState._tag !== "Ready" ||
     !model.showGitHubReviews ||
     model.reviewTab !== "files" ||
     !isPullRequestUrl(model.meta.url) ||
-    model.prUrl.trim() === "" ||
     AsyncData.isPending(model.githubReviews) ||
     AsyncData.hasData(model.githubReviews)
   ) {
@@ -195,9 +211,9 @@ const requestCharacterDiff = (
   file: FileChange,
 ): UpdateReturn => {
   if (
-    model.phase._tag !== "Ready" ||
-    model.inlineDiffMode === "off" ||
-    model.prUrl.trim() === ""
+    !isReviewLocation(model) ||
+    model.reviewState._tag !== "Ready" ||
+    model.inlineDiffMode === "off"
   ) {
     return [model, []];
   }
@@ -286,7 +302,8 @@ const resetDiffAnalysis = (model: ModelType): ModelType =>
 
 const requestCommits = (model: ModelType): UpdateReturn => {
   if (
-    model.phase._tag !== "Ready" ||
+    !isReviewLocation(model) ||
+    model.reviewState._tag !== "Ready" ||
     !isPullRequestUrl(model.meta.url) ||
     AsyncData.isPending(model.commits) ||
     AsyncData.hasData(model.commits)
@@ -306,7 +323,13 @@ const requestCommits = (model: ModelType): UpdateReturn => {
 };
 
 const requestCommitDiff = (model: ModelType, sha: string): UpdateReturn => {
-  if (sha === "" || !isPullRequestUrl(model.meta.url)) return [model, []];
+  if (
+    !isReviewLocation(model) ||
+    sha === "" ||
+    !isPullRequestUrl(model.meta.url)
+  ) {
+    return [model, []];
+  }
   if (AsyncData.isPending(model.commitDiff)) {
     return [model, []];
   }
@@ -346,7 +369,7 @@ const requestReviewLocation = (model: ModelType): UpdateReturn => {
   }
   const commits = AsyncData.getOrElse(withCommits.commits, () => []);
   if (!commits.some((commit) => commit.sha === model.selectedCommit)) {
-    return synchronizeReviewUrl(
+    return canonicalizeReviewUrl(
       evo(withCommits, {
         selectedCommit: () => "",
         commitDiff: () => CommitDiff.Idle(),
@@ -363,10 +386,8 @@ const requestReviewLocation = (model: ModelType): UpdateReturn => {
 
 const beginReviewLoad = (model: ModelType, url: string): ModelType =>
   evo(model, {
-    page: () => "review" as const,
-    phase: () => ReviewLoading(),
+    reviewState: () => ReviewLoading({ url }),
     githubLocation: () => GitHubLocation.replaceValue(url, true),
-    prUrl: () => url,
     reviewRevision: () => ReviewRevisionIdle(),
     filter: () => "",
     filterMode: (): "literal" => "literal",
@@ -473,18 +494,38 @@ const persistReviewSettings = (
   ];
 };
 
-const synchronizeReviewUrl = (
+const canonicalizeReviewUrl = (
   model: ModelType,
   commands: AppCommands,
-  method: "push" | "replace" = "replace",
 ): UpdateReturn => {
-  if (model.phase._tag !== "Ready" || model.prUrl !== model.meta.url) {
+  if (
+    reviewUrlAtLocation(model) !== model.meta.url ||
+    model.reviewState._tag !== "Ready" ||
+    model.reviewState.url !== model.meta.url
+  ) {
     return [model, commands];
   }
   const href = localReviewUrl(model.meta.url, reviewOptions(model));
   return href === undefined
     ? [model, commands]
-    : [model, [...commands, Navigate({ href, method })]];
+    : [model, [...commands, CanonicalizeLocation({ href })]];
+};
+
+const visitReviewUrl = (
+  model: ModelType,
+  commands: AppCommands,
+): UpdateReturn => {
+  if (
+    reviewUrlAtLocation(model) !== model.meta.url ||
+    model.reviewState._tag !== "Ready" ||
+    model.reviewState.url !== model.meta.url
+  ) {
+    return [model, commands];
+  }
+  const href = localReviewUrl(model.meta.url, reviewOptions(model));
+  return href === undefined
+    ? [model, commands]
+    : [model, [...commands, VisitLocation({ href })]];
 };
 
 const changeReviewLocation = (
@@ -493,7 +534,13 @@ const changeReviewLocation = (
   search: string,
 ): UpdateReturn => {
   const reviewRoute = reviewRouteFromAppRoute(route);
-  if (reviewRoute === undefined) return showNotFound(model);
+  if (reviewRoute === undefined) {
+    return showNotFound(
+      evo(model, {
+        location: () => NotFoundRoute({ path: `Invalid ${route._tag} route` }),
+      }),
+    );
+  }
   const reviewUrl = reviewRouteToGitHubUrl(reviewRoute);
   const options = reviewOptionsFromRoute(
     route,
@@ -503,15 +550,18 @@ const changeReviewLocation = (
   const tabChanged = options.reviewTab !== model.reviewTab;
   const withOptions = applyReviewOptions(model, options);
   const locatedOptions = evo(withOptions, {
-    page: (): "review" => "review",
     legacyReviewSettings: () => hasLegacyReviewSettings(search),
   });
-  if (reviewUrl === model.prUrl && model.phase._tag === "Loading") {
+  if (
+    model.reviewState._tag === "Loading" &&
+    reviewUrl === model.reviewState.url
+  ) {
     return [locatedOptions, []];
   }
   if (
-    reviewUrl === model.prUrl ||
-    (model.prUrl !== "" && reviewUrl === model.meta.url)
+    (model.reviewState._tag !== "Idle" &&
+      reviewUrl === model.reviewState.url) ||
+    (model.reviewState._tag === "Ready" && reviewUrl === model.meta.url)
   ) {
     const located =
       tabChanged && options.reviewTab === "files"
@@ -532,13 +582,7 @@ const changeReviewLocation = (
   ];
 };
 
-const showNotFound = (model: ModelType): UpdateReturn => [
-  evo(model, {
-    phase: () =>
-      ReviewFailed({ error: "That Hunker review URL is not recognized." }),
-  }),
-  [],
-];
+const showNotFound = (model: ModelType): UpdateReturn => [model, []];
 
 const loadRepositoryLocation = (
   model: ModelType,
@@ -552,7 +596,6 @@ const loadRepositoryLocation = (
   );
   return [
     evo(model, {
-      page: () => "repository" as const,
       githubLocation: () =>
         GitHubLocation.replaceValue(
           `https://github.com/${route.owner}/${route.name}`,
@@ -571,7 +614,7 @@ const loadSettingsPage = (model: ModelType): UpdateReturn => {
     AsyncData.isIdle(model.settings.load) ||
     AsyncData.isFailure(model.settings.load);
   return [
-    evo(model, { page: () => "settings" as const }),
+    model,
     shouldLoad
       ? Command.mapMessages([Settings.FetchSettings()], (message) =>
           GotSettingsMessage({ message }),
@@ -583,15 +626,69 @@ const loadSettingsPage = (model: ModelType): UpdateReturn => {
 const loadHomeLocation = (model: ModelType): UpdateReturn => {
   const [home, commands] = Home.load(model.home);
   return [
-    evo(model, { page: () => "home" as const, home: () => home }),
+    evo(model, { home: () => home }),
     Command.mapMessages(commands, (message) => GotHomeMessage({ message })),
   ];
 };
 
+const applyLocationTransition = (
+  model: ModelType,
+  transition: Route.Transition.Transition<AppRoute>,
+  search: string,
+): UpdateReturn => {
+  const route = transition.nextRoute;
+  const located = evo(model, { location: () => route });
+  return M.value(route).pipe(
+    M.withReturnType<UpdateReturn>(),
+    M.tagsExhaustive({
+      Home: () => loadHomeLocation(located),
+      Settings: () => loadSettingsPage(located),
+      Repository: ({ owner, repository }) =>
+        loadRepositoryLocation(
+          located,
+          { owner, name: repository },
+          Repository.repositoryOptionsFromRoute(route, search),
+        ),
+      RepositoryPulls: ({ owner, repository }) =>
+        loadRepositoryLocation(
+          located,
+          { owner, name: repository },
+          Repository.repositoryOptionsFromRoute(route, search),
+        ),
+      RepositoryCommits: ({ owner, repository }) =>
+        loadRepositoryLocation(
+          located,
+          { owner, name: repository },
+          Repository.repositoryOptionsFromRoute(route, search),
+        ),
+      RepositoryCommitsRef: ({ owner, repository }) =>
+        loadRepositoryLocation(
+          located,
+          { owner, name: repository },
+          Repository.repositoryOptionsFromRoute(route, search),
+        ),
+      RepositoryFile: ({ owner, repository }) =>
+        loadRepositoryLocation(
+          located,
+          { owner, name: repository },
+          Repository.repositoryOptionsFromRoute(route, search),
+        ),
+      Pull: () => changeReviewLocation(located, route, search),
+      PullFiles: () => changeReviewLocation(located, route, search),
+      PullFile: () => changeReviewLocation(located, route, search),
+      PullCommits: () => changeReviewLocation(located, route, search),
+      PullCommit: () => changeReviewLocation(located, route, search),
+      Compare: () => changeReviewLocation(located, route, search),
+      Commit: () => changeReviewLocation(located, route, search),
+      NotFound: () => showNotFound(located),
+    }),
+  );
+};
+
 const requestRevisionCheck = (model: ModelType): UpdateReturn => {
   if (
-    model.page !== "review" ||
-    model.phase._tag !== "Ready" ||
+    !isReviewLocation(model) ||
+    model.reviewState._tag !== "Ready" ||
     model.meta.backing.source !== "local" ||
     !isPullRequestUrl(model.meta.url) ||
     model.reviewRevision._tag === "Checking"
@@ -656,7 +753,7 @@ export const update = (
                 ...Command.mapMessages(closeCommands, (mappedMessage) =>
                   GotOpenReviewPopoverMessage({ message: mappedMessage }),
                 ),
-                Navigate({ href, method: "push" }),
+                VisitLocation({ href }),
               ],
             ];
           },
@@ -696,19 +793,20 @@ export const update = (
             : applySettings(withSettings, message.document.settings);
           if (
             wasLoading &&
-            configured.page === "review" &&
-            configured.phase._tag === "Loading" &&
-            configured.prUrl !== ""
+            isReviewLocation(configured) &&
+            configured.reviewState._tag === "Loading"
           ) {
             return [
               configured,
-              [...mappedCommands, FetchReview({ url: configured.prUrl })],
+              [
+                ...mappedCommands,
+                FetchReview({ url: configured.reviewState.url }),
+              ],
             ];
           }
           if (
-            configured.page === "review" &&
-            configured.phase._tag === "Ready" &&
-            configured.prUrl !== ""
+            isReviewLocation(configured) &&
+            configured.reviewState._tag === "Ready"
           ) {
             const [loaded, intelligenceCommands] =
               requestSelectedIntelligence(configured);
@@ -719,9 +817,8 @@ export const update = (
         if (message._tag === "SucceededSaveSettings") {
           const configured = applySettings(withSettings, settings.draft);
           if (
-            configured.page === "review" &&
-            configured.phase._tag === "Ready" &&
-            configured.prUrl !== ""
+            isReviewLocation(configured) &&
+            configured.reviewState._tag === "Ready"
           ) {
             const [loaded, intelligenceCommands] =
               requestSelectedIntelligence(configured);
@@ -732,21 +829,29 @@ export const update = (
         if (
           message._tag === "FailedFetchSettings" &&
           wasLoading &&
-          withSettings.page === "review" &&
-          withSettings.phase._tag === "Loading" &&
-          withSettings.prUrl !== ""
+          isReviewLocation(withSettings) &&
+          withSettings.reviewState._tag === "Loading"
         ) {
           return [
             withSettings,
-            [...mappedCommands, FetchReview({ url: withSettings.prUrl })],
+            [
+              ...mappedCommands,
+              FetchReview({ url: withSettings.reviewState.url }),
+            ],
           ];
         }
         return [withSettings, mappedCommands];
       },
       ClickedRefreshReview: () => {
-        if (model.phase._tag === "Loading" || model.prUrl.trim() === "")
+        if (
+          model.reviewState._tag === "Idle" ||
+          model.reviewState._tag === "Loading"
+        )
           return [model, []];
-        const url = model.meta.url || model.prUrl.trim();
+        const url =
+          model.reviewState._tag === "Ready"
+            ? model.meta.url
+            : model.reviewState.url;
         return [beginReviewLoad(model, url), [FetchReview({ url })]];
       },
       TickedRevisionPoll: () => requestRevisionCheck(model),
@@ -782,50 +887,10 @@ export const update = (
       ChangedUrl: ({ url }) => {
         const search = Option.getOrElse(url.search, () => "");
         const route = urlToAppRoute(url);
-        return M.value(route).pipe(
-          M.withReturnType<UpdateReturn>(),
-          M.tagsExhaustive({
-            Home: () => loadHomeLocation(model),
-            Settings: () => loadSettingsPage(model),
-            Repository: ({ owner, repository }) =>
-              loadRepositoryLocation(
-                model,
-                { owner, name: repository },
-                Repository.repositoryOptionsFromRoute(route, search),
-              ),
-            RepositoryPulls: ({ owner, repository }) =>
-              loadRepositoryLocation(
-                model,
-                { owner, name: repository },
-                Repository.repositoryOptionsFromRoute(route, search),
-              ),
-            RepositoryCommits: ({ owner, repository }) =>
-              loadRepositoryLocation(
-                model,
-                { owner, name: repository },
-                Repository.repositoryOptionsFromRoute(route, search),
-              ),
-            RepositoryCommitsRef: ({ owner, repository }) =>
-              loadRepositoryLocation(
-                model,
-                { owner, name: repository },
-                Repository.repositoryOptionsFromRoute(route, search),
-              ),
-            RepositoryFile: ({ owner, repository }) =>
-              loadRepositoryLocation(
-                model,
-                { owner, name: repository },
-                Repository.repositoryOptionsFromRoute(route, search),
-              ),
-            Pull: () => changeReviewLocation(model, route, search),
-            PullFiles: () => changeReviewLocation(model, route, search),
-            PullFile: () => changeReviewLocation(model, route, search),
-            PullCommits: () => changeReviewLocation(model, route, search),
-            PullCommit: () => changeReviewLocation(model, route, search),
-            Compare: () => changeReviewLocation(model, route, search),
-            Commit: () => changeReviewLocation(model, route, search),
-            NotFound: () => showNotFound(model),
-          }),
+        return applyLocationTransition(
+          model,
+          Route.Transition.make(model.location, route),
+          search,
         );
       },
       ClickedLink: ({ request }) =>
@@ -834,22 +899,17 @@ export const update = (
           M.tagsExhaustive({
             Internal: ({ url }) => [
               model,
-              [Navigate({ href: Url.toString(url), method: "push" })],
+              [VisitLocation({ href: Url.toString(url) })],
             ],
-            External: ({ href }) => [
-              model,
-              [Navigate({ href, method: "load" })],
-            ],
+            External: ({ href }) => [model, [LoadExternalLocation({ href })]],
           }),
         ),
       CompletedNavigate: () => [model, []],
       SucceededFetchReview: ({ requestedUrl, meta, files }) => {
         if (!isCurrentReviewRequest(model, requestedUrl)) return [model, []];
         const next = evo(model, {
-          page: () => "review" as const,
-          phase: () => ReviewReady(),
+          reviewState: () => ReviewReady({ url: meta.url }),
           githubLocation: () => GitHubLocation.replaceValue(meta.url, false),
-          prUrl: () => meta.url,
           meta: () => meta,
           reviewRevision: () => ReviewRevisionIdle(),
           files: () => files,
@@ -875,13 +935,13 @@ export const update = (
           reviewSubmission: () => ReviewSubmission.Idle(),
         });
         const [loaded, commands] = requestReviewLocation(next);
-        return synchronizeReviewUrl(loaded, commands);
+        return canonicalizeReviewUrl(loaded, commands);
       },
       FailedFetchReview: ({ requestedUrl, error }) =>
         isCurrentReviewRequest(model, requestedUrl)
           ? [
               evo(model, {
-                phase: () => ReviewFailed({ error }),
+                reviewState: () => ReviewFailed({ url: requestedUrl, error }),
                 githubLocation: (location) =>
                   GitHubLocation.setLoading(location, false),
               }),
@@ -895,7 +955,7 @@ export const update = (
         checkedAt,
         current,
       }) =>
-        model.phase._tag === "Ready" &&
+        model.reviewState._tag === "Ready" &&
         model.meta.url === requestedUrl &&
         model.meta.backing.source === "local" &&
         model.meta.backing.headOid === pinnedHeadOid
@@ -910,7 +970,7 @@ export const update = (
             ]
           : [model, []],
       FailedCheckReviewRevision: ({ requestedUrl, error }) =>
-        model.phase._tag === "Ready" &&
+        model.reviewState._tag === "Ready" &&
         model.meta.url === requestedUrl &&
         model.meta.backing.source === "local"
           ? [
@@ -929,7 +989,7 @@ export const update = (
           return [loaded, []];
         }
         if (!commits.some((commit) => commit.sha === loaded.selectedCommit)) {
-          return synchronizeReviewUrl(
+          return canonicalizeReviewUrl(
             evo(loaded, {
               selectedCommit: () => "",
               commitDiff: () => CommitDiff.Idle(),
@@ -941,7 +1001,7 @@ export const update = (
           loaded,
           loaded.selectedCommit,
         );
-        return synchronizeReviewUrl(withDiff, commands);
+        return canonicalizeReviewUrl(withDiff, commands);
       },
       FailedFetchCommits: ({ requestedUrl, error }) =>
         isCurrentPullRequest(model, requestedUrl)
@@ -973,7 +1033,7 @@ export const update = (
             revealFileInTree(folders, selectedPath),
         });
         const [loaded, commands] = requestSelectedIntelligence(next);
-        return synchronizeReviewUrl(loaded, commands);
+        return canonicalizeReviewUrl(loaded, commands);
       },
       FailedFetchCommitDiff: ({ sha, error }) =>
         model.reviewTab === "commits" && model.selectedCommit === sha
@@ -1244,7 +1304,7 @@ export const update = (
           reviewScope: () => "file" as const,
         });
         const result = requestSelectedIntelligence(next);
-        return synchronizeReviewUrl(result[0], result[1], "push");
+        return visitReviewUrl(result[0], result[1]);
       },
       SelectedReviewTab: ({ value }) => {
         if (value === "files") {
@@ -1266,7 +1326,7 @@ export const update = (
             }),
           );
           const [loaded, commands] = requestSelectedIntelligence(next);
-          return synchronizeReviewUrl(loaded, commands, "push");
+          return visitReviewUrl(loaded, commands);
         }
         const next = resetDiffAnalysis(
           evo(model, {
@@ -1276,14 +1336,14 @@ export const update = (
           }),
         );
         const [loaded, commands] = requestCommits(next);
-        return synchronizeReviewUrl(loaded, commands, "push");
+        return visitReviewUrl(loaded, commands);
       },
       SelectedCommit: ({ sha }) => {
         const [next, commands] = requestCommitDiff(model, sha);
-        return synchronizeReviewUrl(next, commands, "push");
+        return visitReviewUrl(next, commands);
       },
       ReturnedToCommitList: () =>
-        synchronizeReviewUrl(
+        visitReviewUrl(
           resetDiffAnalysis(
             evo(model, {
               selectedCommit: () => "",
@@ -1291,7 +1351,6 @@ export const update = (
             }),
           ),
           [],
-          "push",
         ),
       SelectedReviewScope: ({ value }) => {
         const next = evo(model, { reviewScope: () => value });
@@ -1423,15 +1482,14 @@ const emptyReviewMeta = ReviewMeta.make({
 });
 
 const initialModel = (
-  prUrl: string,
+  location: AppRoute,
   options: ReviewOptions,
   legacyReviewSettings = false,
 ) =>
   Model.make({
-    page: prUrl === "" ? "home" : "review",
-    phase: prUrl === "" ? ReviewReady() : ReviewLoading(),
-    githubLocation: GitHubLocation.init(prUrl, prUrl !== ""),
-    prUrl,
+    location,
+    reviewState: ReviewIdle(),
+    githubLocation: GitHubLocation.init("", false),
     filter: "",
     filterMode: "literal",
     meta: emptyReviewMeta,
@@ -1483,25 +1541,6 @@ const initialSettingsCommand = () =>
     GotSettingsMessage({ message }),
   );
 
-const initialReviewLocation = (
-  route: AppRoute,
-  search: string,
-): UpdateReturn => {
-  const reviewRoute = reviewRouteFromAppRoute(route);
-  if (reviewRoute === undefined) {
-    return showNotFound(initialModel("", defaultReviewOptions));
-  }
-  const reviewUrl = reviewRouteToGitHubUrl(reviewRoute);
-  return [
-    initialModel(
-      reviewUrl,
-      reviewOptionsFromRoute(route, search, defaultReviewOptions),
-      hasLegacyReviewSettings(search),
-    ),
-    initialSettingsCommand(),
-  ];
-};
-
 export const init: Runtime.RoutingApplicationInit<
   ModelType,
   Message,
@@ -1510,81 +1549,12 @@ export const init: Runtime.RoutingApplicationInit<
 > = (url) => {
   const route = urlToAppRoute(url);
   const search = Option.getOrElse(url.search, () => "");
-  return M.value(route).pipe(
-    M.withReturnType<UpdateReturn>(),
-    M.tagsExhaustive({
-      Home: () => {
-        const [model, commands] = loadHomeLocation(
-          initialModel("", defaultReviewOptions),
-        );
-        return [model, [...initialSettingsCommand(), ...commands]];
-      },
-      Settings: () => [
-        evo(initialModel("", defaultReviewOptions), {
-          page: () => "settings" as const,
-        }),
-        initialSettingsCommand(),
-      ],
-      Repository: ({ owner, repository }) =>
-        (() => {
-          const [model, commands] = loadRepositoryLocation(
-            initialModel("", defaultReviewOptions),
-            { owner, name: repository },
-            Repository.repositoryOptionsFromRoute(route, search),
-          );
-          return [model, [...initialSettingsCommand(), ...commands]];
-        })(),
-      RepositoryPulls: ({ owner, repository }) =>
-        (() => {
-          const [model, commands] = loadRepositoryLocation(
-            initialModel("", defaultReviewOptions),
-            { owner, name: repository },
-            Repository.repositoryOptionsFromRoute(route, search),
-          );
-          return [model, [...initialSettingsCommand(), ...commands]];
-        })(),
-      RepositoryCommits: ({ owner, repository }) =>
-        (() => {
-          const [model, commands] = loadRepositoryLocation(
-            initialModel("", defaultReviewOptions),
-            { owner, name: repository },
-            Repository.repositoryOptionsFromRoute(route, search),
-          );
-          return [model, [...initialSettingsCommand(), ...commands]];
-        })(),
-      RepositoryCommitsRef: ({ owner, repository }) =>
-        (() => {
-          const [model, commands] = loadRepositoryLocation(
-            initialModel("", defaultReviewOptions),
-            { owner, name: repository },
-            Repository.repositoryOptionsFromRoute(route, search),
-          );
-          return [model, [...initialSettingsCommand(), ...commands]];
-        })(),
-      RepositoryFile: ({ owner, repository }) =>
-        (() => {
-          const [model, commands] = loadRepositoryLocation(
-            initialModel("", defaultReviewOptions),
-            { owner, name: repository },
-            Repository.repositoryOptionsFromRoute(route, search),
-          );
-          return [model, [...initialSettingsCommand(), ...commands]];
-        })(),
-      Pull: () => initialReviewLocation(route, search),
-      PullFiles: () => initialReviewLocation(route, search),
-      PullFile: () => initialReviewLocation(route, search),
-      PullCommits: () => initialReviewLocation(route, search),
-      PullCommit: () => initialReviewLocation(route, search),
-      Compare: () => initialReviewLocation(route, search),
-      Commit: () => initialReviewLocation(route, search),
-      NotFound: () => {
-        const [model, commands] = showNotFound(
-          initialModel("", defaultReviewOptions),
-        );
-        return [model, [...initialSettingsCommand(), ...commands]];
-      },
-    }),
+  const [model, commands] = applyLocationTransition(
+    initialModel(route, defaultReviewOptions),
+    Route.Transition.coldLoad(route),
+    search,
   );
+  return [model, [...initialSettingsCommand(), ...commands]];
 };
 
 export const routing: Runtime.RoutingConfig<Message> = {

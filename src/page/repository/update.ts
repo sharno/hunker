@@ -26,7 +26,8 @@ import {
   FetchRepositoryFile,
   FetchRepositoryFiles,
   FetchRepositoryPullRequests,
-  NavigateRepository,
+  CanonicalizeRepositoryLocation,
+  VisitRepositoryLocation,
   SearchRepository,
 } from "./command";
 import {
@@ -184,10 +185,9 @@ type RepositoryCommand = Update.Commands<Message, AppResources>[number];
 
 const repositoryName = (model: Model) => `${model.owner}/${model.name}`;
 
-const synchronizeRepositoryUrl = (
+const canonicalizeRepositoryUrl = (
   model: Model,
   commands: Update.Commands<Message, AppResources>,
-  method: "push" | "replace" = "replace",
 ): RepositoryUpdate => {
   const href = localRepositoryUrl(
     { owner: model.owner, name: model.name },
@@ -199,7 +199,24 @@ const synchronizeRepositoryUrl = (
       pullRequestFilter: model.pullRequestFilter,
     },
   );
-  return [model, [...commands, NavigateRepository({ href, method })]];
+  return [model, [...commands, CanonicalizeRepositoryLocation({ href })]];
+};
+
+const visitRepositoryUrl = (
+  model: Model,
+  commands: Update.Commands<Message, AppResources>,
+): RepositoryUpdate => {
+  const href = localRepositoryUrl(
+    { owner: model.owner, name: model.name },
+    {
+      query: model.query,
+      searchMode: model.searchMode,
+      file: model.selectedPath,
+      tab: model.tab,
+      pullRequestFilter: model.pullRequestFilter,
+    },
+  );
+  return [model, [...commands, VisitRepositoryLocation({ href })]];
 };
 
 export const load = (
@@ -438,7 +455,7 @@ const changeQuery = (model: Model, value: string): RepositoryUpdate => [
 const submitSearch = (model: Model): RepositoryUpdate => {
   const query = model.query.trim();
   if (query === "") {
-    return synchronizeRepositoryUrl(
+    return canonicalizeRepositoryUrl(
       evo(model, {
         query: () => "",
         search: () => Search.Idle(),
@@ -450,17 +467,13 @@ const submitSearch = (model: Model): RepositoryUpdate => {
     query: () => query,
     search: () => Search.Loading(),
   });
-  return synchronizeRepositoryUrl(
-    next,
-    [
-      SearchRepository({
-        repository: repositoryName(next),
-        query,
-        mode: next.searchMode,
-      }),
-    ],
-    "push",
-  );
+  return visitRepositoryUrl(next, [
+    SearchRepository({
+      repository: repositoryName(next),
+      query,
+      mode: next.searchMode,
+    }),
+  ]);
 };
 
 const selectSearchMode = (
@@ -474,7 +487,7 @@ const selectSearchMode = (
     searchMode: () => searchMode,
     search: () => (query === "" ? Search.Idle() : Search.Loading()),
   });
-  return synchronizeRepositoryUrl(
+  return canonicalizeRepositoryUrl(
     next,
     query === ""
       ? []
@@ -536,21 +549,18 @@ const selectFile = (model: Model, path: string): RepositoryUpdate => {
     collapsedFolders: (folders) => revealFileInTree(folders, path),
     file: () => FileContent.Loading(),
   });
-  return synchronizeRepositoryUrl(
-    next,
-    [FetchRepositoryFile({ repository: repositoryName(next), path })],
-    "push",
-  );
+  return visitRepositoryUrl(next, [
+    FetchRepositoryFile({ repository: repositoryName(next), path }),
+  ]);
 };
 
 const closeFile = (model: Model): RepositoryUpdate =>
-  synchronizeRepositoryUrl(
+  visitRepositoryUrl(
     evo(model, {
       selectedPath: () => "",
       file: () => FileContent.Idle(),
     }),
     [],
-    "push",
   );
 
 const fileLoaded = (
@@ -612,7 +622,7 @@ const selectTab = (
     tab === "pulls" &&
     !AsyncData.isPending(model.pullRequests) &&
     !AsyncData.hasData(model.pullRequests);
-  return synchronizeRepositoryUrl(
+  return visitRepositoryUrl(
     evo(model, {
       tab: () => tab,
       files: (state) => (shouldLoadFiles ? Files.Loading() : state),
@@ -637,7 +647,6 @@ const selectTab = (
           ]
         : []),
     ],
-    "push",
   );
 };
 
@@ -656,17 +665,13 @@ const selectPullRequestFilter = (
     pullRequestFilter: () => state,
     pullRequests: () => PullRequests.Loading(),
   });
-  return synchronizeRepositoryUrl(
-    next,
-    [
-      FetchRepositoryPullRequests({
-        repository: repositoryName(next),
-        state,
-        page: 1,
-      }),
-    ],
-    "push",
-  );
+  return visitRepositoryUrl(next, [
+    FetchRepositoryPullRequests({
+      repository: repositoryName(next),
+      state,
+      page: 1,
+    }),
+  ]);
 };
 
 const loadMorePullRequests = (model: Model): RepositoryUpdate => {

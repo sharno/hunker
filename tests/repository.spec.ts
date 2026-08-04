@@ -98,6 +98,11 @@ test("keeps the active repository when an earlier browser request finishes late"
   await page.goBack();
   await expect(page).toHaveURL("/example/second");
   await expect(page.locator(".repository-file-view")).toHaveCount(0);
+  await page.goForward();
+  await expect(page).toHaveURL("/example/second/blob/HEAD/second.ts");
+  await expect(page.locator(".repository-file-view")).toBeVisible();
+  await page.goBack();
+  await expect(page).toHaveURL("/example/second");
 
   firstGate.resolve();
   await expect(page.locator(".repository-file-row")).toContainText("second.ts");
@@ -177,6 +182,7 @@ test("reopens the same cached commit review after browser Back", async ({
 
   await page.goBack();
   await expect(page).toHaveURL("/example/hunker-demo/commits");
+  await expect(page).toHaveTitle("Hunker");
   await expect(commitLink).toBeVisible();
   await commitLink.click();
   await expect(page).toHaveURL(`/example/hunker-demo/commit/${commit.sha}`);

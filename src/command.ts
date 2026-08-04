@@ -83,19 +83,25 @@ export const FetchReview = Command.define("FetchReview", {
     ),
 });
 
-export const Navigate = Command.define("Navigate", {
-  args: {
-    href: S.String,
-    method: S.Literals(["push", "replace", "load"]),
-  },
+export const VisitLocation = Command.define("VisitLocation", {
+  args: { href: S.String },
   messages: [CompletedNavigate],
-  execute: ({ href, method }) =>
-    (method === "load"
-      ? Navigation.load(href)
-      : method === "replace"
-        ? Navigation.replaceUrl(href)
-        : Navigation.pushUrl(href)
-    ).pipe(Effect.as(CompletedNavigate())),
+  execute: ({ href }) =>
+    Navigation.pushUrl(href).pipe(Effect.as(CompletedNavigate())),
+});
+
+export const CanonicalizeLocation = Command.define("CanonicalizeLocation", {
+  args: { href: S.String },
+  messages: [CompletedNavigate],
+  execute: ({ href }) =>
+    Navigation.replaceUrl(href).pipe(Effect.as(CompletedNavigate())),
+});
+
+export const LoadExternalLocation = Command.define("LoadExternalLocation", {
+  args: { href: S.String },
+  messages: [CompletedNavigate],
+  execute: ({ href }) =>
+    Navigation.load(href).pipe(Effect.as(CompletedNavigate())),
 });
 
 export const FetchSemantic = Command.define("FetchSemantic", {

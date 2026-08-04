@@ -32,11 +32,12 @@ import {
 } from "./domain";
 import { sampleFiles, sampleMeta } from "./sample";
 import {
+  CanonicalizeLocation,
   FetchFullFile,
   FetchReview,
-  Navigate,
   PostPullRequestReview,
   PostReviewReply,
+  VisitLocation,
 } from "./command";
 import { hunkKey } from "./diff";
 import { FetchCommitDiff, FetchCommits } from "./features/commits";
@@ -123,6 +124,44 @@ const reviewComments = [
 ];
 
 describe("review update", () => {
+  test("ignores a review response after the route has been left", () => {
+    const leftReview = update(
+      reviewLoading,
+      ChangedUrl({ url: urlOrThrow("http://localhost/") }),
+    )[0];
+    const [afterResponse, commands] = update(
+      leftReview,
+      SucceededFetchReview({
+        requestedUrl: reviewUrl,
+        meta: reviewMeta,
+        files: sampleFiles,
+      }),
+    );
+
+    expect(afterResponse.location._tag).toBe("Home");
+    expect(afterResponse.reviewState._tag).toBe("Ready");
+    expect(afterResponse.meta.url).toBe(reviewUrl);
+    expect(commands).toStrictEqual([]);
+  });
+
+  test("keeps a cached review intact across a not-found route", () => {
+    const notFound = update(
+      review,
+      ChangedUrl({ url: urlOrThrow("http://localhost/not/a/hunker/route") }),
+    )[0];
+    expect(notFound.location._tag).toBe("NotFound");
+    expect(notFound.reviewState._tag).toBe("Ready");
+    expect(notFound.meta).toStrictEqual(reviewMeta);
+
+    const restored = update(
+      notFound,
+      ChangedUrl({ url: urlOrThrow(localReviewUrl) }),
+    )[0];
+    expect(restored.location._tag).toBe("Pull");
+    expect(restored.reviewState._tag).toBe("Ready");
+    expect(restored.meta).toStrictEqual(reviewMeta);
+  });
+
   test("sidebar toggles remain pure local state transitions", () => {
     const collapsed = update(home, ToggledSidebar())[0];
     expect(collapsed.sidebarCollapsed).toBe(true);
@@ -145,11 +184,11 @@ describe("review update", () => {
         }),
       ),
       model((state) => {
-        expect(state.phase._tag).toBe("Ready");
+        expect(state.reviewState._tag).toBe("Ready");
         expect(state.meta.url).toBe(reviewUrl);
         expect(state.files).toStrictEqual(sampleFiles);
       }),
-      Command.resolve(Navigate, CompletedNavigate()),
+      Command.resolve(CanonicalizeLocation, CompletedNavigate()),
     );
   });
 
@@ -166,8 +205,8 @@ describe("review update", () => {
         }),
       ),
       model((state) => {
-        expect(state.phase).toStrictEqual(
-          ReviewFailed({ error: "GitHub was unavailable" }),
+        expect(state.reviewState).toStrictEqual(
+          ReviewFailed({ url: reviewUrl, error: "GitHub was unavailable" }),
         );
       }),
     );
@@ -180,7 +219,7 @@ describe("review update", () => {
       message(ClickedRefreshReview()),
       Command.expectExact(FetchReview({ url: reviewUrl })),
       model((state) => {
-        expect(state.phase._tag).toBe("Loading");
+        expect(state.reviewState._tag).toBe("Loading");
         expect(state.files).toStrictEqual([]);
         expect(state.meta.title).toBe(reviewMeta.title);
       }),
@@ -192,7 +231,7 @@ describe("review update", () => {
           files: sampleFiles,
         }),
       ),
-      Command.resolve(Navigate, CompletedNavigate()),
+      Command.resolve(CanonicalizeLocation, CompletedNavigate()),
     );
   });
 
@@ -264,9 +303,8 @@ describe("review update", () => {
       given(review),
       message(SelectedReviewTab({ value: "commits" })),
       Command.expectHas(
-        Navigate({
+        VisitLocation({
           href: "/example/hunker-demo/pull/42/commits",
-          method: "push",
         }),
       ),
       Command.resolveAll(
@@ -277,7 +315,7 @@ describe("review update", () => {
             commits: [commit],
           }),
         ],
-        [Navigate, CompletedNavigate()],
+        [VisitLocation, CompletedNavigate()],
       ),
       message(SelectedCommit({ sha: commit.sha })),
       Command.expectHas(
@@ -291,8 +329,8 @@ describe("review update", () => {
           FetchCommitDiff,
           SucceededFetchCommitDiff({ sha: commit.sha, files: commitFiles }),
         ],
-        [Navigate, CompletedNavigate()],
-        [Navigate, CompletedNavigate()],
+        [VisitLocation, CompletedNavigate()],
+        [CanonicalizeLocation, CompletedNavigate()],
       ),
       model((state) => {
         expect(state.selectedCommit).toBe(commit.sha);

@@ -1,4 +1,4 @@
-import { Array, Option } from "effect";
+import { Array, Match as M, Option } from "effect";
 import { AsyncData } from "foldkit";
 import { createLazy } from "foldkit/html";
 import type { Html, HtmlBuilder } from "foldkit/html";
@@ -77,9 +77,8 @@ const buttonClass = (active: boolean) =>
   `segmented-button${active ? " is-active" : ""}`;
 
 const hasSucceededFetchReview = (model: Model) =>
-  model.phase._tag === "Ready" &&
-  model.prUrl !== "" &&
-  model.meta.url === model.prUrl;
+  model.reviewState._tag === "Ready" &&
+  model.meta.url === model.reviewState.url;
 
 const reviewTarget = (url: string) => {
   try {
@@ -90,7 +89,7 @@ const reviewTarget = (url: string) => {
   }
 };
 
-const reviewLoadingView = (model: Model, h: HtmlBuilder<Message>) =>
+const reviewLoadingView = (url: string, h: HtmlBuilder<Message>) =>
   h.section(
     [h.Class("review-loading"), h.Role("status")],
     [
@@ -102,7 +101,7 @@ const reviewLoadingView = (model: Model, h: HtmlBuilder<Message>) =>
             [h.Class("review-loading-copy")],
             [
               h.strong([], ["Loading the latest change…"]),
-              h.code([], [reviewTarget(model.prUrl)]),
+              h.code([], [reviewTarget(url)]),
               h.span(
                 [],
                 ["Resolving metadata and an immutable diff revision."],
@@ -313,9 +312,7 @@ const intelligenceControls = (model: Model, h: HtmlBuilder<Message>) => [
     ToggledSyntaxHighlighting(),
     h,
   ),
-  model.prUrl === "" ||
-  !isPullRequestUrl(model.meta.url) ||
-  model.reviewTab !== "files"
+  !isPullRequestUrl(model.meta.url) || model.reviewTab !== "files"
     ? h.empty
     : toggleButton(
         `GitHub reviews ${
@@ -528,17 +525,25 @@ const compactReviewToolbar = (model: Model, h: HtmlBuilder<Message>): Html => {
                   ? "Refresh diff from local Git"
                   : "Refresh diff from GitHub",
               ),
-              h.Disabled(model.phase._tag === "Loading"),
+              h.Disabled(model.reviewState._tag === "Loading"),
               h.OnClick(ClickedRefreshReview()),
             ],
             [
               h.span(
-                [h.Class(model.phase._tag === "Loading" ? "is-spinning" : "")],
+                [
+                  h.Class(
+                    model.reviewState._tag === "Loading" ? "is-spinning" : "",
+                  ),
+                ],
                 ["↻"],
               ),
               h.span(
                 [h.Class("toolbar-refresh-label")],
-                [model.phase._tag === "Loading" ? "Refreshing…" : "Refresh"],
+                [
+                  model.reviewState._tag === "Loading"
+                    ? "Refreshing…"
+                    : "Refresh",
+                ],
               ),
             ],
           ),
@@ -750,12 +755,7 @@ const githubReviewStatusView = (
   model: Model,
   h: HtmlBuilder<Message>,
 ): Html => {
-  if (
-    model.reviewTab !== "files" ||
-    !model.showGitHubReviews ||
-    model.prUrl === ""
-  )
-    return h.empty;
+  if (model.reviewTab !== "files" || !model.showGitHubReviews) return h.empty;
   const loading = () =>
     h.div(
       [h.Class("github-reviews-status")],
@@ -1414,54 +1414,95 @@ const diffPanelView = (
   );
 };
 
-export const view = (model: Model, h: HtmlBuilder<Message>): Html => {
-  if (model.page === "home") {
-    return h.submodel({
-      slotId: "home",
-      model: model.home,
-      view: Home.view,
-      viewInputs: {
-        settingsHref: settingsRouter(),
-        renderLocationForm: () => githubLocationForm(model, "pr-loader", h),
-      },
-      toParentMessage: (message) => GotHomeMessage({ message }),
-    });
-  }
-  if (model.page === "settings") {
-    return h.submodel({
-      slotId: "settings",
-      model: model.settings,
-      view: Settings.view,
-      viewInputs: { homeHref: homeRouter() },
-      toParentMessage: (message) => GotSettingsMessage({ message }),
-    });
-  }
-  if (model.page === "repository") {
-    return h.submodel({
-      slotId: "repository",
-      model: model.repositoryBrowser,
-      view: Repository.view,
-      viewInputs: {
-        homeHref: homeRouter(),
-        settingsHref: settingsRouter(),
-        renderLocationForm: () =>
-          githubLocationForm(model, "repository-github-loader", h),
-      },
-      toParentMessage: (message) => GotRepositoryMessage({ message }),
-    });
-  }
-  if (model.phase._tag === "Loading") {
+const homePageView = (model: Model, h: HtmlBuilder<Message>): Html =>
+  h.submodel({
+    slotId: "home",
+    model: model.home,
+    view: Home.view,
+    viewInputs: {
+      settingsHref: settingsRouter(),
+      renderLocationForm: () => githubLocationForm(model, "pr-loader", h),
+    },
+    toParentMessage: (message) => GotHomeMessage({ message }),
+  });
+
+const settingsPageView = (model: Model, h: HtmlBuilder<Message>): Html =>
+  h.submodel({
+    slotId: "settings",
+    model: model.settings,
+    view: Settings.view,
+    viewInputs: { homeHref: homeRouter() },
+    toParentMessage: (message) => GotSettingsMessage({ message }),
+  });
+
+const repositoryPageView = (model: Model, h: HtmlBuilder<Message>): Html =>
+  h.submodel({
+    slotId: "repository",
+    model: model.repositoryBrowser,
+    view: Repository.view,
+    viewInputs: {
+      homeHref: homeRouter(),
+      settingsHref: settingsRouter(),
+      renderLocationForm: () =>
+        githubLocationForm(model, "repository-github-loader", h),
+    },
+    toParentMessage: (message) => GotRepositoryMessage({ message }),
+  });
+
+const notFoundPageView = (model: Model, h: HtmlBuilder<Message>): Html =>
+  h.main(
+    [h.Class("app-shell")],
+    [
+      h.header(
+        [h.Class("home-toolbar")],
+        [
+          h.a(
+            [h.Class("compact-brand"), h.Href(homeRouter())],
+            [
+              h.span([h.Class("brand-mark")], ["H"]),
+              h.span([h.Class("brand-name")], ["hunker"]),
+            ],
+          ),
+          githubLocationForm(model, "pr-loader", h),
+          h.a(
+            [h.Class("topbar-settings-link"), h.Href(settingsRouter())],
+            ["Settings"],
+          ),
+        ],
+      ),
+      h.section(
+        [h.Class("review-load-error")],
+        [
+          h.strong([], ["That Hunker URL is not recognized"]),
+          h.span(
+            [],
+            [
+              model.location._tag === "NotFound"
+                ? model.location.path
+                : "The requested review location is invalid.",
+            ],
+          ),
+        ],
+      ),
+    ],
+  );
+
+const reviewPageView = (model: Model, h: HtmlBuilder<Message>): Html => {
+  if (model.reviewState._tag === "Loading") {
     return h.main(
       [h.Class("app-shell")],
-      [topBarView(model, h), reviewLoadingView(model, h)],
+      [topBarView(model, h), reviewLoadingView(model.reviewState.url, h)],
     );
   }
-  if (model.phase._tag === "Failed") {
+  if (model.reviewState._tag === "Failed") {
     return h.main(
       [h.Class("app-shell")],
       [
         topBarView(model, h),
-        h.div([h.Class("error-banner"), h.Role("alert")], [model.phase.error]),
+        h.div(
+          [h.Class("error-banner"), h.Role("alert")],
+          [model.reviewState.error],
+        ),
         reviewErrorView(model, h),
       ],
     );
@@ -1550,3 +1591,25 @@ export const view = (model: Model, h: HtmlBuilder<Message>): Html => {
     ],
   );
 };
+
+export const view = (model: Model, h: HtmlBuilder<Message>): Html =>
+  M.value(model.location).pipe(
+    M.withReturnType<Html>(),
+    M.tagsExhaustive({
+      Home: () => homePageView(model, h),
+      Settings: () => settingsPageView(model, h),
+      Repository: () => repositoryPageView(model, h),
+      RepositoryPulls: () => repositoryPageView(model, h),
+      RepositoryCommits: () => repositoryPageView(model, h),
+      RepositoryCommitsRef: () => repositoryPageView(model, h),
+      RepositoryFile: () => repositoryPageView(model, h),
+      Pull: () => reviewPageView(model, h),
+      PullFiles: () => reviewPageView(model, h),
+      PullFile: () => reviewPageView(model, h),
+      PullCommits: () => reviewPageView(model, h),
+      PullCommit: () => reviewPageView(model, h),
+      Compare: () => reviewPageView(model, h),
+      Commit: () => reviewPageView(model, h),
+      NotFound: () => notFoundPageView(model, h),
+    }),
+  );

@@ -19,12 +19,13 @@ import { describe, test } from "vitest";
 
 import {
   CloneRepository,
+  CanonicalizeRepositoryLocation,
   FetchRepositoryCommits,
   FetchRepositoryFile,
   FetchRepositoryFiles,
   FetchRepositoryPullRequests,
-  NavigateRepository,
   SearchRepository,
+  VisitRepositoryLocation,
 } from "./command";
 import {
   CompletedNavigate,
@@ -105,7 +106,7 @@ describe("repository browser", () => {
             matches: [match],
           }),
         ],
-        [NavigateRepository, CompletedNavigate()],
+        [VisitRepositoryLocation, CompletedNavigate()],
       ),
       expect(selector(".repository-search-match")).toContainText(
         "return `hello ${person}`",
@@ -121,12 +122,12 @@ describe("repository browser", () => {
             truncated: false,
           }),
         ],
-        [NavigateRepository, CompletedNavigate()],
+        [VisitRepositoryLocation, CompletedNavigate()],
       ),
       expect(role("button", { name: "← Search results" })).toExist(),
       expect(selector(".repository-file-view")).toContainText("src/greet.ts"),
       click(role("button", { name: "← Search results" })),
-      Command.resolve(NavigateRepository, CompletedNavigate()),
+      Command.resolve(VisitRepositoryLocation, CompletedNavigate()),
       expect(selector(".repository-search-match")).toExist(),
     );
   });
@@ -140,7 +141,7 @@ describe("repository browser", () => {
         role("button", { name: "Literal text search", pressed: true }),
       ).toExist(),
       click(role("button", { name: "Regular expression search" })),
-      Command.resolve(NavigateRepository, CompletedNavigate()),
+      Command.resolve(CanonicalizeRepositoryLocation, CompletedNavigate()),
       expect(
         role("button", { name: "Regular expression search", pressed: true }),
       ).toExist(),
@@ -149,7 +150,7 @@ describe("repository browser", () => {
         "Search with a regular expression",
       ),
       click(role("button", { name: "Fuzzy FFF search" })),
-      Command.resolve(NavigateRepository, CompletedNavigate()),
+      Command.resolve(CanonicalizeRepositoryLocation, CompletedNavigate()),
       expect(
         role("button", { name: "Fuzzy FFF search", pressed: true }),
       ).toExist(),
@@ -221,7 +222,7 @@ describe("repository browser", () => {
             pullRequests: [firstPull],
           }),
         ],
-        [NavigateRepository, CompletedNavigate()],
+        [VisitRepositoryLocation, CompletedNavigate()],
       ),
       expect(role("link", { name: /Refine the diff viewer/ })).toHaveAttr(
         "href",
@@ -267,7 +268,7 @@ describe("repository browser", () => {
             ],
           }),
         ],
-        [NavigateRepository, CompletedNavigate()],
+        [VisitRepositoryLocation, CompletedNavigate()],
       ),
       expect(
         role("link", { name: /Add repository commit history/ }),

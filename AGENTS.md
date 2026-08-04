@@ -30,10 +30,19 @@
 - Use Foldkit `restString` for canonical URL resources that own a
   slash-delimited path, and order more-specific routes before their parent route
   in `oneOf`.
+- Keep `AppRoute` as the sole authority for the rendered location. Do not add a
+  second page discriminator or let cached resource state choose which page is
+  visible. Cold loads and `ChangedUrl` must enter the same exhaustive
+  `Route.Transition` function.
+- Put a resource request's identity inside its state ADT. Model review state as
+  `Idle | Loading(url) | Failed(url, error) | Ready(url)` rather than a phase
+  plus a parallel target string, and never represent absence as `Ready` with an
+  empty sentinel value.
 - Use `Navigation.pushUrl` for user-visible location changes such as opening a
   file, tab, search result, or commit. Reserve `Navigation.replaceUrl` for
-  canonicalization and non-navigational configuration synchronization, and
-  cover Back behavior with a real-browser test.
+  canonicalization and non-navigational configuration synchronization. Encode
+  those intents as separate Commands rather than a boolean or string method, and
+  cover Back and Forward behavior with a real-browser test.
 - When Submodel `viewInputs` need parent-owned interactive markup, pass a
   top-level slot callback that builds the `Html`. Do not pass already-rendered
   `Html` containing nested event functions; Foldkit can only auto-scope

@@ -3,11 +3,12 @@ import { describe, expect, test } from "vitest";
 
 import {
   CloneRepository,
+  CanonicalizeRepositoryLocation,
   FetchRepositoryFile,
   FetchRepositoryFiles,
   FetchRepositoryPullRequests,
-  NavigateRepository,
   SearchRepository,
+  VisitRepositoryLocation,
 } from "./command";
 import {
   ClickedCloneRepository,
@@ -196,7 +197,7 @@ describe("repository browser update", () => {
       update,
       given(loaded),
       message(SelectedRepositorySearchMode({ mode: "fuzzy" })),
-      Command.resolve(NavigateRepository, CompletedNavigate()),
+      Command.resolve(CanonicalizeRepositoryLocation, CompletedNavigate()),
       message(UpdatedRepositoryQuery({ value: "gret person" })),
       message(SubmittedRepositorySearch()),
       Command.expectExact(
@@ -205,9 +206,8 @@ describe("repository browser update", () => {
           query: "gret person",
           mode: "fuzzy",
         }),
-        NavigateRepository({
+        VisitRepositoryLocation({
           href: "/example/hunker-demo?q=gret+person&search=fuzzy",
-          method: "push",
         }),
       ),
       Command.resolveAll(
@@ -221,7 +221,7 @@ describe("repository browser update", () => {
             matches: [match],
           }),
         ],
-        [NavigateRepository, CompletedNavigate()],
+        [VisitRepositoryLocation, CompletedNavigate()],
       ),
       message(SelectedRepositoryFile({ path: "src/greet.ts" })),
       Command.resolveAll(
@@ -234,7 +234,7 @@ describe("repository browser update", () => {
             truncated: false,
           }),
         ],
-        [NavigateRepository, CompletedNavigate()],
+        [VisitRepositoryLocation, CompletedNavigate()],
       ),
       model((state) => {
         expect(state.selectedPath).toBe("src/greet.ts");

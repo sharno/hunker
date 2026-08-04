@@ -278,15 +278,22 @@ export const FetchRepositoryFile = Command.define("FetchRepositoryFile", {
     ),
 });
 
-export const NavigateRepository = Command.define("NavigateRepository", {
-  args: {
-    href: S.String,
-    method: S.Literals(["push", "replace"]),
+export const VisitRepositoryLocation = Command.define(
+  "VisitRepositoryLocation",
+  {
+    args: { href: S.String },
+    messages: [CompletedNavigate],
+    execute: ({ href }) =>
+      Navigation.pushUrl(href).pipe(Effect.as(CompletedNavigate())),
   },
-  messages: [CompletedNavigate],
-  execute: ({ href, method }) =>
-    (method === "push"
-      ? Navigation.pushUrl(href)
-      : Navigation.replaceUrl(href)
-    ).pipe(Effect.as(CompletedNavigate())),
-});
+);
+
+export const CanonicalizeRepositoryLocation = Command.define(
+  "CanonicalizeRepositoryLocation",
+  {
+    args: { href: S.String },
+    messages: [CompletedNavigate],
+    execute: ({ href }) =>
+      Navigation.replaceUrl(href).pipe(Effect.as(CompletedNavigate())),
+  },
+);

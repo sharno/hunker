@@ -172,6 +172,14 @@ test("canonicalizes copied review URLs and preserves browser layout across reloa
   await expect(page.locator(".file-row.is-selected")).toContainText(
     "message.ts",
   );
+  await page.goForward();
+  await expect(page).toHaveURL(
+    "/example/hunker-demo/pull/42/files/src/greet.ts",
+  );
+  await page.goBack();
+  await expect(page).toHaveURL(
+    "/example/hunker-demo/pull/42/files/src/message.ts",
+  );
 
   await page.getByRole("button", { name: "Refresh diff from GitHub" }).click();
   await expect(

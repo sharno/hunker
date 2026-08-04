@@ -257,7 +257,7 @@ export const reviewComposerView = (
   model: Model,
   h: HtmlBuilder<Message>,
 ): Html => {
-  if (model.prUrl === "" || !isPullRequestUrl(model.meta.url)) return h.empty;
+  if (!isPullRequestUrl(model.meta.url)) return h.empty;
   const loading = AsyncData.isPending(model.reviewSubmission);
   const hasBody = model.reviewBody.trim() !== "";
   const status = AsyncData.match(model.reviewSubmission, {
