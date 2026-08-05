@@ -5,11 +5,13 @@ import { HunkerSettings } from "../src/settings";
 import {
   characterDiffResponse,
   commitDiffResponse,
+  movesResponse,
   reviewResponse,
   reviewUrl,
   semanticResponse,
   settingsResponse,
 } from "./fixtures";
+import { semanticMoveAnchor } from "../src/features/semantic-move";
 
 const classToken = (token: string) => new RegExp(`(?:^|\\s)${token}(?:\\s|$)`);
 const settingsWrite = S.Struct({ settings: HunkerSettings });
@@ -50,6 +52,13 @@ test.beforeEach(async ({ page }) => {
       status: 200,
       contentType: "application/json",
       json: { comments: [] },
+    }),
+  );
+  await page.route("**/api/moves?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: { moves: [] },
     }),
   );
 });
@@ -363,4 +372,61 @@ test("posts an inline diff comment through the GitHub transport", async ({
   await expect(page.locator(".inline-review-threads")).toContainText(
     "Could we preserve the original parameter name?",
   );
+});
+
+test("jumps between semantic move blocks in split diff view", async ({
+  page,
+}) => {
+  const move = movesResponse.moves[0];
+  if (move === undefined) throw new Error("The fixture needs a semantic move");
+  const targetAnchor = semanticMoveAnchor(move, "destination");
+  await page.route("**/api/diff?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: reviewResponse,
+    }),
+  );
+  await page.route("**/api/semantic?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: semanticResponse,
+    }),
+  );
+  await page.route("**/api/moves?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: movesResponse,
+    }),
+  );
+
+  await page.goto("/example/hunker-demo/pull/42/files/src/greet.ts");
+  const jump = page.getByRole("button", {
+    name: "Show where greetingPrefix moved to src/message.ts line 1",
+  });
+  await expect(jump).toBeVisible();
+  await expect(
+    jump.locator("xpath=ancestor::*[contains(@class, 'line-move')][1]"),
+  ).toHaveClass(/move-tone-[0-2]/);
+  await jump.click();
+
+  await expect(page).toHaveURL(
+    `/example/hunker-demo/pull/42/files/src/message.ts#${targetAnchor}`,
+  );
+  const target = page.locator(`#${targetAnchor}`);
+  await expect(target).toBeVisible();
+  await expect(target).toHaveClass(/line-move/);
+  await expect(
+    page.getByRole("button", {
+      name: "Show where greetingPrefix moved from src/greet.ts line 1",
+    }),
+  ).toBeVisible();
+
+  await page.goBack();
+  await expect(page).toHaveURL(
+    "/example/hunker-demo/pull/42/files/src/greet.ts",
+  );
+  await expect(jump).toBeVisible();
 });

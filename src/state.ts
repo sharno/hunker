@@ -20,6 +20,7 @@ import {
   LoadExternalLocation,
   PostPullRequestReview,
   PostReviewReply,
+  VisitSemanticMove,
   VisitLocation,
 } from "./command";
 import {
@@ -178,7 +179,7 @@ const requestMoves = (model: ModelType): UpdateReturn => {
     !isReviewLocation(model) ||
     model.reviewState._tag !== "Ready" ||
     !model.semantic ||
-    model.reviewScope !== "full" ||
+    model.reviewTab !== "files" ||
     AsyncData.isPending(model.reviewMoves) ||
     AsyncData.hasData(model.reviewMoves)
   ) {
@@ -1343,6 +1344,29 @@ export const update = (
         });
         const result = requestSelectedIntelligence(next);
         return visitReviewUrl(result[0], result[1]);
+      },
+      SelectedSemanticMoveTarget: ({ path, anchor }) => {
+        const next = evo(model, {
+          filter: () => "",
+          selectedPath: () => path,
+          collapsedFileTreeFolders: (folders) =>
+            revealFileInTree(folders, path),
+          collapsedPaths: (paths) =>
+            paths.filter((candidate) => candidate !== path),
+          collapsedHunks: (hunks) =>
+            hunks.filter((key) => !key.startsWith(`${path}\u0000`)),
+        });
+        const [loaded, commands] = requestSelectedIntelligence(next);
+        const href = localReviewUrl(loaded.meta.url, reviewOptions(loaded));
+        return href === undefined
+          ? [loaded, commands]
+          : [
+              loaded,
+              [
+                ...commands,
+                VisitSemanticMove({ href: `${href}#${anchor}`, anchor }),
+              ],
+            ];
       },
       SelectedReviewTab: ({ value }) => {
         if (value === "files") {

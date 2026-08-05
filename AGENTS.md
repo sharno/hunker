@@ -110,6 +110,13 @@
   line as one request identity. Offer comment controls only for lines that came
   from a real patch hunk; synthesized full-file context cannot be anchored by
   GitHub's review-comment API.
+- Model cross-file semantic annotations with one stable identity plus distinct
+  source and destination ranges. Use that identity for matching colors and DOM
+  anchors; a single shared line count is inaccurate when moved code was edited.
+- For diff-to-diff navigation, update the selected/expanded state first, push a
+  canonical URL with an anchor, then focus the rendered anchor from a Command
+  after the next frame. Keep DOM timing out of the state transition and cover
+  Back navigation in a real browser.
 - Scope test `ManagedRuntime`s to the Layer fixture. Reuse one suite runtime for
   a stable Layer and dispose it in `afterAll`; construct per-fixture runtimes
   when a Layer captures test-specific configuration such as temporary paths.

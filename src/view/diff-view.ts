@@ -1,7 +1,11 @@
 import type { Html, HtmlBuilder } from "foldkit/html";
 
 import { button } from "./control";
-import { GotInlineCommentMessage, ToggledHunkCollapse } from "../domain";
+import {
+  GotInlineCommentMessage,
+  SelectedSemanticMoveTarget,
+  ToggledHunkCollapse,
+} from "../domain";
 import type { CharacterDiffRow, CharacterRange, Message } from "../domain";
 import { hunkKey } from "../diff";
 import type { DiffLine, HunkDiffLine } from "../diff";
@@ -11,10 +15,22 @@ import type { GitHubReviewInteraction } from "./github-review-view";
 import { syntaxHighlightedContent } from "./syntax-highlight";
 
 export type MovedRanges = Readonly<{
-  old: ReadonlyArray<Readonly<{ start: number; count: number }>>;
-  new: ReadonlyArray<Readonly<{ start: number; count: number }>>;
+  moves: ReadonlyArray<SemanticMoveDecoration>;
   semanticOld: ReadonlyArray<Readonly<{ start: number; count: number }>>;
   semanticNew: ReadonlyArray<Readonly<{ start: number; count: number }>>;
+}>;
+
+export type SemanticMoveDecoration = Readonly<{
+  anchor: string;
+  targetAnchor: string;
+  targetPath: string;
+  targetLine: number;
+  side: "old" | "new";
+  start: number;
+  count: number;
+  label: string;
+  changed: boolean;
+  tone: number;
 }>;
 
 export type DiffInteraction = Readonly<{
@@ -80,6 +96,66 @@ const isInMovedRange = (
   ranges.some(
     (range) => line >= range.start && line < range.start + range.count,
   );
+
+const semanticMoveFor = (
+  line: number | null,
+  side: "old" | "new",
+  moved: MovedRanges,
+) =>
+  line === null
+    ? undefined
+    : moved.moves.find(
+        (move) =>
+          move.side === side &&
+          line >= move.start &&
+          line < move.start + move.count,
+      );
+
+const semanticMoveClasses = (
+  move: SemanticMoveDecoration | undefined,
+  line: number | null,
+) => {
+  if (move === undefined || line === null) return "";
+  const start = line === move.start ? " move-start" : "";
+  const end = line === move.start + move.count - 1 ? " move-end" : "";
+  return ` line-move move-tone-${move.tone}${start}${end}`;
+};
+
+const semanticMoveBadge = (
+  move: SemanticMoveDecoration | undefined,
+  line: number | null,
+  h: HtmlBuilder<Message>,
+): Html => {
+  if (move === undefined || line !== move.start) return h.empty;
+  const direction = move.side === "old" ? "to" : "from";
+  const name = `Show where ${move.label} moved ${direction} ${move.targetPath} line ${move.targetLine}`;
+  return button(
+    h,
+    [
+      h.Type("button"),
+      h.Class("semantic-move-jump"),
+      h.AriaLabel(name),
+      h.Title(name),
+      h.OnClick(
+        SelectedSemanticMoveTarget({
+          path: move.targetPath,
+          anchor: move.targetAnchor,
+        }),
+      ),
+    ],
+    [
+      h.span(
+        [h.Class("semantic-move-icon")],
+        [move.side === "old" ? "↗" : "↙"],
+      ),
+      h.strong([], [`Moved ${direction}`]),
+      h.span([], [`${move.targetPath}:${move.targetLine}`]),
+      move.changed
+        ? h.span([h.Class("semantic-move-edited")], ["edited"])
+        : h.empty,
+    ],
+  );
+};
 
 const characterRangesFor = (
   line: DiffLine,
@@ -193,18 +269,17 @@ export const unifiedDiffView = (
         line.kind === "remove" ? "LEFT" : "RIGHT",
         interaction,
       );
+      const moveSide = line.kind === "add" ? "new" : "old";
+      const moveLine = moveSide === "new" ? line.newNumber : line.oldNumber;
+      const semanticMove = semanticMoveFor(moveLine, moveSide, moved);
       const diffLine = h.div(
         [
           h.Key(`${index}-${line.kind}`),
+          ...(semanticMove !== undefined && moveLine === semanticMove.start
+            ? [h.Id(semanticMove.anchor)]
+            : []),
           h.Class(
-            `diff-line line-${line.kind}${
-              isInMovedRange(
-                line.kind === "add" ? line.newNumber : line.oldNumber,
-                line.kind === "add" ? moved.new : moved.old,
-              )
-                ? " line-move"
-                : ""
-            }${
+            `diff-line line-${line.kind}${semanticMoveClasses(semanticMove, moveLine)}${
               isInMovedRange(
                 line.kind === "add" ? line.newNumber : line.oldNumber,
                 line.kind === "add" ? moved.semanticNew : moved.semanticOld,
@@ -234,7 +309,10 @@ export const unifiedDiffView = (
           ),
           h.code(
             [h.Class("line-code")],
-            codeContent(line, characterDiff, interaction, h),
+            [
+              semanticMoveBadge(semanticMove, moveLine, h),
+              ...codeContent(line, characterDiff, interaction, h),
+            ],
           ),
         ],
       );
@@ -348,17 +426,16 @@ const splitCell = (
     side === "left" ? "LEFT" : "RIGHT",
     interaction,
   );
+  const moveSide = side === "left" ? "old" : "new";
+  const moveLine = moveSide === "old" ? line.oldNumber : line.newNumber;
+  const semanticMove = semanticMoveFor(moveLine, moveSide, moved);
   return h.div(
     [
+      ...(semanticMove !== undefined && moveLine === semanticMove.start
+        ? [h.Id(semanticMove.anchor)]
+        : []),
       h.Class(
-        `split-cell ${side} line-${line.kind}${
-          isInMovedRange(
-            side === "left" ? line.oldNumber : line.newNumber,
-            side === "left" ? moved.old : moved.new,
-          )
-            ? " line-move"
-            : ""
-        }${
+        `split-cell ${side} line-${line.kind}${semanticMoveClasses(semanticMove, moveLine)}${
           isInMovedRange(
             side === "left" ? line.oldNumber : line.newNumber,
             side === "left" ? moved.semanticOld : moved.semanticNew,
@@ -384,7 +461,10 @@ const splitCell = (
       ),
       h.code(
         [h.Class("line-code")],
-        codeContent(line, characterDiff, interaction, h),
+        [
+          semanticMoveBadge(semanticMove, moveLine, h),
+          ...codeContent(line, characterDiff, interaction, h),
+        ],
       ),
     ],
   );

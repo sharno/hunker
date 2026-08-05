@@ -48,8 +48,12 @@ import {
   compileTextSearch,
   type TextSearchMode,
 } from "../features/code-search";
+import {
+  semanticMoveAnchor,
+  semanticMoveTone,
+} from "../features/semantic-move";
 import { splitDiffView, unifiedDiffView } from "./diff-view";
-import type { MovedRanges } from "./diff-view";
+import type { MovedRanges, SemanticMoveDecoration } from "./diff-view";
 import {
   commitDetailHeader,
   commitDiffStateView,
@@ -1037,7 +1041,7 @@ const movementSummaryView = (model: Model, h: HtmlBuilder<Message>): Html => {
                   h.span(
                     [h.Class("movement-count")],
                     [
-                      `${move.lineCount} lines${move.changed ? " · edited" : ""}`,
+                      `${move.fromLineCount === move.toLineCount ? `${move.fromLineCount} lines` : `${move.fromLineCount} → ${move.toLineCount} lines`}${move.changed ? " · edited" : ""}`,
                     ],
                   ),
                   h.code([], [`${move.fromPath}:${move.fromLine}`]),
@@ -1070,6 +1074,53 @@ const semanticChangeKey = (change: SemanticChange) => {
   }
   const label = change._tag === "Renamed" ? change.newLabel : change.label;
   return `${change._tag}:${change.newRange.startLine}:${change.newRange.startColumn}:${label}`;
+};
+
+const semanticMoveDecorations = (
+  file: FileChange,
+  moves: ReadonlyArray<MovedBlock>,
+): ReadonlyArray<SemanticMoveDecoration> => {
+  const oldPath =
+    file.status === "renamed" && file.previousPath !== ""
+      ? file.previousPath
+      : file.path;
+  return moves.flatMap((move) => {
+    const tone = semanticMoveTone(move);
+    return [
+      ...(move.fromPath === oldPath
+        ? [
+            {
+              anchor: semanticMoveAnchor(move, "source"),
+              targetAnchor: semanticMoveAnchor(move, "destination"),
+              targetPath: move.toPath,
+              targetLine: move.toLine,
+              side: "old" as const,
+              start: move.fromLine,
+              count: move.fromLineCount,
+              label: move.label,
+              changed: move.changed,
+              tone,
+            },
+          ]
+        : []),
+      ...(move.toPath === file.path
+        ? [
+            {
+              anchor: semanticMoveAnchor(move, "destination"),
+              targetAnchor: semanticMoveAnchor(move, "source"),
+              targetPath: move.fromPath,
+              targetLine: move.fromLine,
+              side: "new" as const,
+              start: move.toLine,
+              count: move.toLineCount,
+              label: move.label,
+              changed: move.changed,
+              tone,
+            },
+          ]
+        : []),
+    ];
+  });
 };
 
 const diffPanelView = (
@@ -1131,12 +1182,7 @@ const diffPanelView = (
       ];
     }) ?? [];
   const movedRanges: MovedRanges = {
-    old: moves
-      .filter((move) => move.fromPath === file.path)
-      .map((move) => ({ start: move.fromLine, count: move.lineCount })),
-    new: moves
-      .filter((move) => move.toPath === file.path)
-      .map((move) => ({ start: move.toLine, count: move.lineCount })),
+    moves: semanticMoveDecorations(file, moves),
     semanticOld: rangeFor("old"),
     semanticNew: rangeFor("new"),
   };
@@ -1289,25 +1335,6 @@ const diffPanelView = (
         : h.div(
             [h.Class("file-body")],
             [
-              Array.match(moves, {
-                onEmpty: () => h.empty,
-                onNonEmpty: (items) =>
-                  h.div(
-                    [h.Class("file-movements")],
-                    Array.map(items, (move) =>
-                      h.span(
-                        [
-                          h.Key(
-                            `file-move-${move.fromPath}:${move.fromLine}-${move.toPath}:${move.toLine}`,
-                          ),
-                        ],
-                        [
-                          `${move.lineCount} lines moved ${move.fromPath}:${move.fromLine} → ${move.toPath}:${move.toLine}`,
-                        ],
-                      ),
-                    ),
-                  ),
-              }),
               hasFullFileError && fullFileEntry !== undefined
                 ? h.div(
                     [h.Class("file-context-error"), h.Role("alert")],
@@ -1527,7 +1554,10 @@ const reviewPageView = (model: Model, h: HtmlBuilder<Message>): Html => {
   const moves = AsyncData.getOrElse(model.reviewMoves, () => []);
   const movesFor = (file: FileChange) =>
     moves.filter(
-      (move) => move.fromPath === file.path || move.toPath === file.path,
+      (move) =>
+        move.fromPath === file.path ||
+        move.fromPath === file.previousPath ||
+        move.toPath === file.path,
     );
 
   return h.main(

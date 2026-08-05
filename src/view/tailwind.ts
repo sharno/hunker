@@ -288,7 +288,8 @@ const utilities: Readonly<Record<string, string>> = {
     "flex items-center gap-[13px] text-[9px] tracking-[0.05em] text-[#898d87] uppercase max-[1040px]:hidden [&_span]:flex [&_span]:items-center [&_span]:gap-1.5 [&_i]:size-[9px] [&_i]:rounded-sm",
   "legend-add": "bg-[#74cba1]",
   "legend-remove": "bg-[#ef9382]",
-  "legend-move": "bg-[#a18bd8]",
+  "legend-move":
+    "[background:linear-gradient(90deg,#8d72d3_0_33%,#3d88aa_33%_66%,#bb7b35_66%)]",
   workspace:
     "grid min-h-[calc(100vh-235px)] grid-cols-[278px_minmax(0,1fr)] transition-[grid-template-columns] duration-160 [&.with-expanded-toolbar]:min-h-[calc(100vh-68px)] [&.with-compact-toolbar]:min-h-[calc(100vh-48px)] [&.sidebar-collapsed]:grid-cols-[48px_minmax(0,1fr)] [&.sidebar-collapsed_.file-sidebar]:overflow-hidden [&.sidebar-collapsed_.sidebar-heading]:justify-center [&.sidebar-collapsed_.sidebar-heading]:px-0 [&.sidebar-collapsed_.sidebar-heading]:py-3 [&.sidebar-collapsed_.sidebar-heading>strong]:hidden [&.sidebar-collapsed_.sidebar-heading>span]:hidden [&.sidebar-collapsed_.file-search]:hidden [&.sidebar-collapsed_.file-list]:hidden [&.sidebar-collapsed_.sidebar-tip]:hidden max-[760px]:block max-[760px]:[&.sidebar-collapsed_.file-sidebar]:h-[50px]",
   "review-content": "min-w-0",
@@ -378,8 +379,6 @@ const utilities: Readonly<Record<string, string>> = {
   "movement-arrow": "text-sm text-[#7a69a6]",
   "movement-preview":
     "overflow-hidden text-ellipsis whitespace-nowrap font-mono",
-  "file-movements":
-    "flex flex-wrap gap-1.5 border-b border-[#ded5f1] bg-[#f3effc] px-[13px] py-2 text-[9px] text-[#584b78] [&_span]:rounded-sm [&_span]:bg-[#e7dff8] [&_span]:px-1.5 [&_span]:py-[3px]",
   "diff-lines": "overflow-x-auto bg-paper font-mono text-[11px] leading-[1.7]",
   "diff-line":
     "grid min-h-[22px] grid-cols-[46px_46px_20px_minmax(0,1fr)] items-stretch",
@@ -402,7 +401,18 @@ const utilities: Readonly<Record<string, string>> = {
     "bg-remove [&_.line-number]:bg-remove-strong [&_.line-number]:text-[#b84f42] [&_.line-marker]:bg-remove-strong [&_.line-marker]:text-[#b84f42]",
   "line-semantic": "shadow-[inset_3px_0_#9b82cf]",
   "line-move":
-    "bg-[#eee8fb] shadow-[inset_3px_0_#8067bd] [&_.line-number]:bg-[#dfd5f5] [&_.line-number]:text-[#65518f] [&_.line-marker]:bg-[#dfd5f5] [&_.line-marker]:text-[#65518f] [&_.char-change]:bg-[rgb(113_84_174/20%)] [&_.char-change]:shadow-[inset_0_-1px_rgb(82_57_133/20%)]",
+    "scroll-mt-32 [&.move-start]:border-t [&.move-end]:border-b target:relative target:z-[2] target:outline-2 target:-outline-offset-2 target:outline-[#315f9d] target:shadow-[0_0_0_4px_rgb(49_95_157/18%)]",
+  "move-tone-0":
+    "border-[#9b82cf]/45 bg-[#eee8fb]! shadow-[inset_4px_0_#8067bd] [&_.line-number]:bg-[#dfd5f5]! [&_.line-number]:text-[#65518f]! [&_.line-marker]:bg-[#dfd5f5]! [&_.line-marker]:text-[#65518f]! [&_.char-change]:bg-[rgb(113_84_174/20%)]",
+  "move-tone-1":
+    "border-[#548fa9]/45 bg-[#e5f1f5]! shadow-[inset_4px_0_#3d88aa] [&_.line-number]:bg-[#d1e7ee]! [&_.line-number]:text-[#356f88]! [&_.line-marker]:bg-[#d1e7ee]! [&_.line-marker]:text-[#356f88]! [&_.char-change]:bg-[rgb(46_125_159/18%)]",
+  "move-tone-2":
+    "border-[#c18b4d]/45 bg-[#f7eddc]! shadow-[inset_4px_0_#bb7b35] [&_.line-number]:bg-[#ecddc4]! [&_.line-number]:text-[#8d5c24]! [&_.line-marker]:bg-[#ecddc4]! [&_.line-marker]:text-[#8d5c24]! [&_.char-change]:bg-[rgb(175_111_42/17%)]",
+  "semantic-move-jump":
+    "mr-2 inline-flex max-w-[min(330px,70%)] cursor-pointer items-center gap-1.5 rounded-sm border border-[currentColor]/25 bg-white/72 px-1.5 py-px align-middle font-sans text-[8px] leading-[1.4] font-[680] text-[#4f4669] shadow-[0_1px_2px_rgb(16_27_44/8%)] hover:bg-white focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[#315f9d] [.move-tone-1_&]:text-[#315f73] [.move-tone-2_&]:text-[#7b511f] [&>span:not(.semantic-move-icon):not(.semantic-move-edited)]:overflow-hidden [&>span:not(.semantic-move-icon):not(.semantic-move-edited)]:text-ellipsis [&>span:not(.semantic-move-icon):not(.semantic-move-edited)]:whitespace-nowrap",
+  "semantic-move-icon": "text-[10px] font-black",
+  "semantic-move-edited":
+    "shrink-0 rounded-full bg-[#fff2cf] px-1 py-px text-[7px] tracking-[0.04em] text-[#7b541b] uppercase",
   "line-hunk":
     "border-y border-[#ddd7ec] bg-[#f0edf8] text-[#726a8e] [&_.line-number]:bg-[#e6e0f4] [&_.line-number]:text-transparent",
   "hunk-toggle":

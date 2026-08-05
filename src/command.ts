@@ -90,6 +90,30 @@ export const VisitLocation = Command.define("VisitLocation", {
     Navigation.pushUrl(href).pipe(Effect.as(CompletedNavigate())),
 });
 
+export const VisitSemanticMove = Command.define("VisitSemanticMove", {
+  args: { href: S.NonEmptyString, anchor: S.NonEmptyString },
+  messages: [CompletedNavigate],
+  execute: ({ href, anchor }) =>
+    Navigation.pushUrl(href).pipe(
+      Effect.andThen(
+        Effect.promise(
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                  document
+                    .getElementById(anchor)
+                    ?.scrollIntoView({ block: "center" });
+                  resolve();
+                });
+              });
+            }),
+        ),
+      ),
+      Effect.as(CompletedNavigate()),
+    ),
+});
+
 export const CanonicalizeLocation = Command.define("CanonicalizeLocation", {
   args: { href: S.String },
   messages: [CompletedNavigate],

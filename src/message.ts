@@ -124,6 +124,10 @@ export const SelectedReviewSearchMode = m("SelectedReviewSearchMode", {
   value: TextSearchMode,
 });
 export const SelectedFile = m("SelectedFile", { path: S.String });
+export const SelectedSemanticMoveTarget = m("SelectedSemanticMoveTarget", {
+  path: S.NonEmptyString,
+  anchor: S.NonEmptyString,
+});
 export const SelectedReviewTab = m("SelectedReviewTab", {
   value: S.Literals(["files", "commits"]),
 });
@@ -233,6 +237,7 @@ export const Message = S.Union([
   UpdatedFilter,
   SelectedReviewSearchMode,
   SelectedFile,
+  SelectedSemanticMoveTarget,
   SelectedReviewTab,
   SelectedCommit,
   ReturnedToCommitList,

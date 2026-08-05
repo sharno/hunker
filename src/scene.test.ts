@@ -20,17 +20,28 @@ import { Popover } from "@foldkit/ui";
 
 import {
   ChangedUrl,
+  CompletedNavigate,
   FailedFetchSemantic,
+  MovedBlock,
   ReviewMeta,
+  SelectedInlineDiffMode,
+  SelectedViewMode,
   SucceededFetchFullFile,
   SucceededFetchGitHubReviews,
+  SucceededFetchMoves,
   SucceededFetchReview,
+  SucceededFetchSemantic,
 } from "./domain";
-import { FetchFullFile, FetchGitHubReviews } from "./command";
+import {
+  FetchFullFile,
+  FetchGitHubReviews,
+  VisitSemanticMove,
+} from "./command";
 import {
   PostInlineComment,
   SucceededPostInlineComment,
 } from "./features/inline-comment";
+import { semanticMoveAnchor } from "./features/semantic-move";
 import { sampleFiles, sampleMeta } from "./sample";
 import { init, update } from "./state";
 import { view } from "./view/review-view";
@@ -93,6 +104,48 @@ const comments = [
     resolved: true,
   },
 ];
+const semanticMove = MovedBlock.make({
+  fromPath: "src/agent/retry.ts",
+  toPath: "src/agent/run.ts",
+  fromLine: 8,
+  toLine: 20,
+  fromLineCount: 2,
+  toLineCount: 2,
+  preview: "export const withRetry",
+  kind: "lexical_declaration",
+  label: "withRetry",
+  confidence: 1,
+  changed: false,
+});
+
+const reviewWithSemanticMove = () => {
+  const withMove = update(
+    review,
+    SucceededFetchMoves({ requestedUrl: reviewUrl, moves: [semanticMove] }),
+  )[0];
+  const withReviews = update(
+    withMove,
+    SucceededFetchGitHubReviews({ requestedUrl: reviewUrl, comments: [] }),
+  )[0];
+  const withTargetSemantic = update(
+    withReviews,
+    SucceededFetchSemantic({
+      requestedUrl: reviewUrl,
+      path: semanticMove.toPath,
+      result: {
+        _tag: "Parsed",
+        path: semanticMove.toPath,
+        language: "TypeScript",
+        semanticEqual: false,
+        changes: [],
+      },
+    }),
+  )[0];
+  return update(
+    withTargetSemantic,
+    SelectedInlineDiffMode({ value: "off" }),
+  )[0];
+};
 
 describe("review view", () => {
   test("the sample review exposes its primary review controls", () => {
@@ -286,6 +339,44 @@ describe("review view", () => {
           comments: [postedComment],
         }),
       ),
+    );
+  });
+
+  test("makes semantic moves visible and jumps to their counterpart", () => {
+    const targetAnchor = semanticMoveAnchor(semanticMove, "destination");
+    scene(
+      { update, view },
+      given(reviewWithSemanticMove()),
+      expect(selector(".split-cell.line-move.move-start")).toExist(),
+      click(
+        role("button", {
+          name: "Show where withRetry moved to src/agent/run.ts line 20",
+        }),
+      ),
+      Command.resolve(VisitSemanticMove, CompletedNavigate()),
+      expect(selector(`#${targetAnchor}`)).toExist(),
+      expect(
+        role("button", {
+          name: "Show where withRetry moved from src/agent/retry.ts line 8",
+        }),
+      ).toExist(),
+    );
+  });
+
+  test("shows the same semantic move annotation in unified view", () => {
+    const unified = update(
+      reviewWithSemanticMove(),
+      SelectedViewMode({ value: "unified" }),
+    )[0];
+    scene(
+      { update, view },
+      given(unified),
+      expect(selector(".unified-lines .diff-line.line-move")).toExist(),
+      expect(
+        role("button", {
+          name: "Show where withRetry moved to src/agent/run.ts line 20",
+        }),
+      ).toExist(),
     );
   });
 

@@ -182,9 +182,9 @@ const isContainedMove = (
   move.fromPath === oldUnit.path &&
   move.toPath === newUnit.path &&
   oldUnit.range.startLine >= move.fromLine &&
-  oldUnit.range.endLine < move.fromLine + move.lineCount &&
+  oldUnit.range.endLine < move.fromLine + move.fromLineCount &&
   newUnit.range.startLine >= move.toLine &&
-  newUnit.range.endLine < move.toLine + move.lineCount;
+  newUnit.range.endLine < move.toLine + move.toLineCount;
 
 const longestIncreasingIndexes = (values: ReadonlyArray<number>) => {
   const tails: Array<number> = [];
@@ -274,9 +274,13 @@ const detectReviewMoves = (files: ReadonlyArray<FilePair>) => {
           toPath: newUnit.path,
           fromLine: oldUnit.range.startLine,
           toLine: newUnit.range.startLine,
-          lineCount: Math.max(
+          fromLineCount: Math.max(
             1,
             oldUnit.range.endLine - oldUnit.range.startLine + 1,
+          ),
+          toLineCount: Math.max(
+            1,
+            newUnit.range.endLine - newUnit.range.startLine + 1,
           ),
           preview: oldUnit.preview,
           kind: oldUnit.kind,
