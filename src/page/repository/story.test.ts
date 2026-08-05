@@ -27,6 +27,10 @@ import {
 } from "./message";
 import { Files, Model, PullRequests, SearchMatch, empty } from "./model";
 import { update } from "./update";
+import {
+  FailedFetch as FailedFetchSourceControl,
+  Fetch as FetchSourceControl,
+} from "./source-control";
 
 const repository = "example/hunker-demo";
 const files = [
@@ -90,10 +94,22 @@ describe("repository browser update", () => {
         CloneRepository,
         SucceededCloneRepository({ repository, path: "/tmp/hunker-demo" }),
       ),
-      Command.expectExact(FetchRepositoryFiles({ repository })),
-      Command.resolve(
-        FetchRepositoryFiles,
-        SucceededFetchRepositoryFiles({ repository, files }),
+      Command.expectExact(
+        FetchRepositoryFiles({ repository }),
+        FetchSourceControl({ repository }),
+      ),
+      Command.resolveAll(
+        [
+          FetchRepositoryFiles,
+          SucceededFetchRepositoryFiles({ repository, files }),
+        ],
+        [
+          FetchSourceControl,
+          FailedFetchSourceControl({
+            repository,
+            error: "Source control unavailable in this fixture.",
+          }),
+        ],
       ),
       model((state) => {
         expect(state.files).toStrictEqual(Files.Success({ data: files }));

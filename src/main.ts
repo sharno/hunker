@@ -4,6 +4,7 @@ import { Model } from "./domain";
 import type { Message } from "./domain";
 import { toolbarSubscriptions } from "./features/toolbar";
 import { revisionSubscriptions } from "./features/revision";
+import { sourceControlSubscriptions } from "./page/repository/source-control/subscription";
 import { init, routing, update } from "./state";
 import { appResources } from "./resources";
 import { view } from "./view/review-view";
@@ -33,6 +34,7 @@ export const makeReviewApplication = (container: HTMLElement) =>
     subscriptions: Subscription.aggregate<Model, Message>()(
       toolbarSubscriptions,
       revisionSubscriptions,
+      sourceControlSubscriptions,
     ),
     resources: appResources,
     container,

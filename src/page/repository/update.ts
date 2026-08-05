@@ -1,5 +1,5 @@
 import { Array, Match as M, Option, Schema as S } from "effect";
-import { AsyncData, Update } from "foldkit";
+import { AsyncData, Command, Update } from "foldkit";
 import { evo } from "foldkit/struct";
 
 import {
@@ -45,6 +45,8 @@ import {
 } from "./model";
 import { directoryPaths, revealFileInTree } from "../../file-tree";
 import type { AppResources } from "../../resources";
+import * as SourceControl from "./source-control";
+import { GotSourceControlMessage } from "./message";
 
 export type RepositoryRoute = Readonly<{ owner: string; name: string }>;
 export type RepositoryOptions = Readonly<{
@@ -268,6 +270,7 @@ export const load = (
           options.tab === "pulls"
             ? PullRequests.Loading()
             : PullRequests.Idle(),
+        sourceControl: SourceControl.empty(),
       });
   const maybeFilesCommand: Option.Option<RepositoryCommand> =
     options.tab === "pulls" ||
@@ -337,6 +340,10 @@ export const load = (
             repository: `${route.owner}/${route.name}`,
           }),
         );
+  const [sourceControl, sourceControlCommands] = SourceControl.load(
+    current.sourceControl,
+    `${route.owner}/${route.name}`,
+  );
   return [
     evo(current, {
       search: (state) =>
@@ -349,6 +356,7 @@ export const load = (
         Option.isSome(maybePullRequestsCommand)
           ? PullRequests.Loading()
           : state,
+      sourceControl: () => sourceControl,
     }),
     [
       ...Array.fromOption(maybeFilesCommand),
@@ -356,6 +364,9 @@ export const load = (
       ...Array.fromOption(maybeFileCommand),
       ...Array.fromOption(maybeCommitsCommand),
       ...Array.fromOption(maybePullRequestsCommand),
+      ...Command.mapMessages(sourceControlCommands, (message) =>
+        GotSourceControlMessage({ message }),
+      ),
     ],
   ];
 };
@@ -421,11 +432,16 @@ const cloned = (
   ) {
     return [model, []];
   }
+  const [sourceControl, sourceControlCommands] = SourceControl.load(
+    SourceControl.empty(),
+    repository,
+  );
   const next = evo(model, {
     files: () => Files.Loading(),
     clone: () => CloneState.Success({ data: { path } }),
     commits: () =>
       model.tab === "commits" ? Commits.Loading() : model.commits,
+    sourceControl: () => sourceControl,
   });
   return [
     next,
@@ -434,6 +450,9 @@ const cloned = (
       ...(model.tab === "commits"
         ? [FetchRepositoryCommits({ repository: repositoryName(next) })]
         : []),
+      ...Command.mapMessages(sourceControlCommands, (message) =>
+        GotSourceControlMessage({ message }),
+      ),
     ],
   ];
 };
@@ -816,6 +835,62 @@ export const update = (model: Model, message: Message): RepositoryUpdate =>
     M.withReturnType<RepositoryUpdate>(),
     M.tagsExhaustive({
       CompletedNavigate: () => [model, []],
+      GotSourceControlMessage: ({ message: sourceControlMessage }) => {
+        const [sourceControl, sourceControlCommands] = SourceControl.update(
+          model.sourceControl,
+          sourceControlMessage,
+        );
+        const checkoutChanged =
+          sourceControlMessage._tag === "SucceededSwitch" ||
+          sourceControlMessage._tag === "SucceededPull";
+        const repository = repositoryName(model);
+        return [
+          evo(model, {
+            sourceControl: () => sourceControl,
+            files: (files) => (checkoutChanged ? Files.Loading() : files),
+            search: (search) =>
+              checkoutChanged && model.query !== "" ? Search.Loading() : search,
+            file: (file) =>
+              checkoutChanged && model.selectedPath !== ""
+                ? FileContent.Loading()
+                : file,
+            commits: (commits) =>
+              checkoutChanged && model.tab === "commits"
+                ? Commits.Loading()
+                : commits,
+          }),
+          [
+            ...Command.mapMessages(sourceControlCommands, (childMessage) =>
+              GotSourceControlMessage({ message: childMessage }),
+            ),
+            ...(checkoutChanged
+              ? [
+                  FetchRepositoryFiles({ repository }),
+                  ...(model.query === ""
+                    ? []
+                    : [
+                        SearchRepository({
+                          repository,
+                          query: model.query,
+                          mode: model.searchMode,
+                        }),
+                      ]),
+                  ...(model.selectedPath === ""
+                    ? []
+                    : [
+                        FetchRepositoryFile({
+                          repository,
+                          path: model.selectedPath,
+                        }),
+                      ]),
+                  ...(model.tab === "commits"
+                    ? [FetchRepositoryCommits({ repository })]
+                    : []),
+                ]
+              : []),
+          ],
+        ];
+      },
       SucceededFetchRepositoryFiles: ({ repository, files }) =>
         filesLoaded(model, repository, files),
       FailedFetchRepositoryFiles: ({ repository, error, missing }) =>

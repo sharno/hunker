@@ -31,6 +31,8 @@ import {
   searchModePicker,
   type SearchModeChoice,
 } from "../../view/search-mode-view";
+import * as SourceControl from "./source-control";
+import { GotSourceControlMessage } from "./message";
 
 export type ViewInputs = Readonly<{
   homeHref: string;
@@ -551,6 +553,15 @@ export const view = Submodel.defineView<Model, Message, ViewInputs>(
             ),
           ],
         ),
+        filesError?.missing === true
+          ? h.empty
+          : h.submodel({
+              slotId: "repository-source-control",
+              model: model.sourceControl,
+              view: SourceControl.view,
+              toParentMessage: (message) =>
+                GotSourceControlMessage({ message }),
+            }),
         model.tab !== "pulls" && filesError !== undefined && !filesError.missing
           ? h.div(
               [h.Class("error-banner"), h.Role("alert")],

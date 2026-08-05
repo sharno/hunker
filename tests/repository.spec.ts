@@ -7,6 +7,38 @@ import {
   settingsResponse,
 } from "./fixtures";
 
+const sourceControlStatus = (branch: string, behind: number) => ({
+  path: "/tmp/hunker-demo",
+  checkout: {
+    _tag: "TrackingBranch",
+    name: branch,
+    oid: "2222222222222222222222222222222222222222",
+    upstream: `origin/${branch}`,
+    ahead: 0,
+    behind,
+  },
+  branches: [
+    { name: "main", local: true, remote: true },
+    {
+      name: "feature/source-control",
+      local: branch === "feature/source-control",
+      remote: true,
+    },
+  ],
+  changes: { staged: 1, unstaged: 2, untracked: 3 },
+  remote: { _tag: "RemoteCurrent", checkedAt: 1 },
+});
+
+test.beforeEach(async ({ page }) => {
+  await page.route("**/api/repository/source-control?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: { status: sourceControlStatus("main", 0) },
+    }),
+  );
+});
+
 test("keeps the active repository when an earlier browser request finishes late", async ({
   page,
 }) => {
@@ -189,4 +221,69 @@ test("reopens the same cached commit review after browser Back", async ({
   await expect(
     page.getByRole("heading", { name: commitDiffResponse.title }),
   ).toBeVisible();
+});
+
+test("switches the working folder branch and shows a blocked pull", async ({
+  page,
+}) => {
+  await page.route("**/api/settings", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: settingsResponse,
+    }),
+  );
+  await page.route("**/api/repository/files?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: {
+        files: [{ path: "src/greet.ts", size: 143, gitStatus: "modified" }],
+      },
+    }),
+  );
+  await page.route("**/api/repository/source-control?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: { status: sourceControlStatus("main", 2) },
+    }),
+  );
+  await page.route("**/api/repository/branch", async (route) => {
+    expect(route.request().postDataJSON()).toEqual({
+      repository: "example/hunker-demo",
+      branch: "feature/source-control",
+    });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: {
+        status: sourceControlStatus("feature/source-control", 1),
+      },
+    });
+  });
+  await page.route("**/api/repository/pull", (route) =>
+    route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      json: {
+        error: "Your staged changes would be overwritten by merge.",
+      },
+    }),
+  );
+
+  await page.goto("/example/hunker-demo");
+  const branch = page.getByLabel("Checked-out repository branch");
+  await expect(branch).toHaveValue("main");
+  await expect(page.getByRole("button", { name: "Pull 2 ↓" })).toBeVisible();
+  await expect(page.locator(".source-control-changes")).toContainText(
+    "1 staged · 2 changed · 3 untracked",
+  );
+
+  await branch.selectOption("feature/source-control");
+  await expect(branch).toHaveValue("feature/source-control");
+  await page.getByRole("button", { name: "Pull 1 ↓" }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "Your staged changes would be overwritten by merge.",
+  );
 });

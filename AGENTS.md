@@ -64,6 +64,14 @@
 - Keep independent repository-page data sources independent in state and view
   logic. A GitHub-backed tab must not be blocked by a missing local clone, and a
   local Git failure should only replace views that actually depend on it.
+- Let Git decide whether checkout mutations are safe: serialize mutations per
+  local repository, use `git switch` and fast-forward-only pulls, surface Git's
+  refusal without modifying the cached read model, and refresh files, search,
+  open-file content, and commits only after a successful checkout change.
+- A shallow `--single-branch` clone does not treat an explicitly fetched branch
+  as tracking-capable unless its refspec is also added to `remote.origin.fetch`.
+  Expand that refspec only for branches the user opens, preserving the clone's
+  incremental-history behavior.
 - For paginated Foldkit data, keep accumulated rows visible with `Refreshing`
   while the next page loads and use `Stale` for a later-page failure. Correlate
   responses with the repository, filter, and page before appending them.

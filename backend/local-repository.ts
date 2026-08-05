@@ -17,6 +17,8 @@ import {
   compileTextSearch,
   type RepositorySearchMode,
 } from "../src/features/code-search";
+import type { Status as RepositorySourceControlStatus } from "../src/page/repository/source-control/model";
+import { makeRepositorySourceControl } from "./repository-source-control";
 import { loadSettings, resolveConfiguredPath } from "./settings";
 
 export type RepositoryFile = Readonly<{
@@ -51,7 +53,7 @@ export type RepositoryCommits = Readonly<{
   commits: ReadonlyArray<RepositoryCommit>;
 }>;
 
-type RepositoryId = Readonly<{ owner: string; name: string }>;
+export type RepositoryId = Readonly<{ owner: string; name: string }>;
 export type RepositoryCloneDestination = "temporary" | "configured";
 export type LocalRepositorySummary = Readonly<{
   owner: string;
@@ -91,6 +93,20 @@ type LocalRepositoryShape = Readonly<{
   listCommits: (
     repository: RepositoryId,
   ) => Effect.Effect<RepositoryCommits, LocalRepositoryFailed>;
+  sourceControl: (
+    repository: RepositoryId,
+  ) => Effect.Effect<RepositorySourceControlStatus, LocalRepositoryFailed>;
+  switchBranch: (
+    repository: RepositoryId,
+    branch: string,
+  ) => Effect.Effect<RepositorySourceControlStatus, LocalRepositoryFailed>;
+  pull: (repository: RepositoryId) => Effect.Effect<
+    Readonly<{
+      status: RepositorySourceControlStatus;
+      pulledCommits: number;
+    }>,
+    LocalRepositoryFailed
+  >;
   clone: (
     repository: RepositoryId,
     destination: RepositoryCloneDestination,
@@ -195,7 +211,7 @@ export const layer = Layer.effect(
         Effect.provideService(Path.Path, paths),
       );
 
-    const runGit = (
+    const runGitResult = (
       repositoryPath: string,
       arguments_: ReadonlyArray<string>,
     ) =>
@@ -208,20 +224,33 @@ export const layer = Layer.effect(
             [Stream.mkString(Stream.decodeText(handle.all)), handle.exitCode],
             { concurrency: "unbounded" },
           );
-          if (exitCode !== ChildProcessSpawner.ExitCode(0)) {
-            return yield* failure(
-              output.trim() ||
-                `Git ${arguments_[0] ?? "command"} exited with status ${exitCode}.`,
-              502,
-            );
-          }
-          return output;
+          return {
+            output,
+            succeeded: exitCode === ChildProcessSpawner.ExitCode(0),
+            exitCode: Number(exitCode),
+          };
         }),
       ).pipe(
         Effect.mapError((error) =>
-          error instanceof LocalRepositoryFailed
-            ? error
-            : failure(`Could not run Git: ${String(error)}`, 502),
+          failure(`Could not run Git: ${String(error)}`, 502),
+        ),
+      );
+
+    const runGit = (
+      repositoryPath: string,
+      arguments_: ReadonlyArray<string>,
+    ) =>
+      runGitResult(repositoryPath, arguments_).pipe(
+        Effect.flatMap((result) =>
+          result.succeeded
+            ? Effect.succeed(result.output)
+            : Effect.fail(
+                failure(
+                  result.output.trim() ||
+                    `Git ${arguments_[0] ?? "command"} exited with status ${result.exitCode}.`,
+                  502,
+                ),
+              ),
         ),
       );
 
@@ -824,12 +853,30 @@ export const layer = Layer.effect(
         };
       });
 
+    const invalidateFiles = (root: string) =>
+      Effect.sync(() => {
+        const finder = finders.get(root);
+        if (finder !== undefined) finder.destroy();
+        finders.delete(root);
+      });
+
+    const { pull, sourceControl, switchBranch } =
+      yield* makeRepositorySourceControl({
+        repositoryPath,
+        runGit,
+        runGitResult,
+        invalidateFiles,
+        failure,
+      });
     return LocalRepository.of({
       listRepositories,
       listFiles,
       search,
       readFile,
       listCommits,
+      sourceControl,
+      switchBranch,
+      pull,
       clone,
     });
   }),

@@ -144,6 +144,149 @@ test("discovers configured and temporary repositories and prefers configured clo
   }
 });
 
+test("reports remote branches and pulls incoming commits with a fast-forward", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunker-source-control-"));
+  const repositoriesRoot = join(root, "repos");
+  const cacheRoot = join(root, "cache");
+  const source = join(root, "source");
+  const remote = join(root, "remote.git");
+  const repository = join(repositoriesRoot, "demo");
+  mkdirSync(source, { recursive: true });
+  mkdirSync(repositoriesRoot, { recursive: true });
+  try {
+    git(source, "init", "-b", "main");
+    git(source, "config", "user.email", "hunker@example.com");
+    git(source, "config", "user.name", "Hunker Test");
+    commit(source, "base", "base\n");
+    execFileSync("git", ["init", "--bare", "--initial-branch=main", remote]);
+    git(source, "remote", "add", "origin", remote);
+    git(source, "push", "-u", "origin", "main");
+    git(source, "switch", "-c", "feature/source-control");
+    commit(source, "feature", "feature\n");
+    git(source, "push", "-u", "origin", "feature/source-control");
+    git(source, "switch", "main");
+    execFileSync("git", ["clone", remote, repository]);
+    const incomingOid = commit(source, "incoming", "incoming\n");
+    git(source, "push", "origin", "main");
+
+    const result = await runLocalRepository(
+      repositoriesRoot,
+      cacheRoot,
+      (service) =>
+        Effect.gen(function* () {
+          const status = yield* service.sourceControl({
+            owner: "acme",
+            name: "demo",
+          });
+          const pulled = yield* service.pull({ owner: "acme", name: "demo" });
+          return { status, pulled };
+        }),
+    );
+
+    expect(result.status.checkout).toMatchObject({
+      _tag: "TrackingBranch",
+      name: "main",
+      ahead: 0,
+      behind: 1,
+    });
+    expect(result.status.branches).toContainEqual({
+      name: "feature/source-control",
+      local: false,
+      remote: true,
+    });
+    expect(result.pulled.pulledCommits).toBe(1);
+    expect(result.pulled.status.checkout).toMatchObject({
+      _tag: "TrackingBranch",
+      behind: 0,
+    });
+    expect(git(repository, "rev-parse", "HEAD")).toBe(incomingOid);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("materializes a selected remote branch in the working folder", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunker-switch-branch-"));
+  const repositoriesRoot = join(root, "repos");
+  const cacheRoot = join(root, "cache");
+  const source = join(root, "source");
+  const remote = join(root, "remote.git");
+  const repository = join(repositoriesRoot, "demo");
+  mkdirSync(source, { recursive: true });
+  mkdirSync(repositoriesRoot, { recursive: true });
+  try {
+    git(source, "init", "-b", "main");
+    git(source, "config", "user.email", "hunker@example.com");
+    git(source, "config", "user.name", "Hunker Test");
+    commit(source, "base", "base\n");
+    execFileSync("git", ["init", "--bare", "--initial-branch=main", remote]);
+    git(source, "remote", "add", "origin", remote);
+    git(source, "push", "-u", "origin", "main");
+    git(source, "switch", "-c", "feature/source-control");
+    const featureOid = commit(source, "feature", "feature\n");
+    git(source, "push", "-u", "origin", "feature/source-control");
+    execFileSync("git", ["clone", "--single-branch", remote, repository]);
+
+    const status = await runLocalRepository(
+      repositoriesRoot,
+      cacheRoot,
+      (service) =>
+        service.switchBranch(
+          { owner: "acme", name: "demo" },
+          "feature/source-control",
+        ),
+    );
+
+    expect(status.checkout).toMatchObject({
+      _tag: "TrackingBranch",
+      name: "feature/source-control",
+      oid: featureOid,
+    });
+    expect(git(repository, "branch", "--show-current")).toBe(
+      "feature/source-control",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("keeps staged changes intact when Git refuses a pull", async () => {
+  const root = mkdtempSync(join(tmpdir(), "hunker-blocked-pull-"));
+  const repositoriesRoot = join(root, "repos");
+  const cacheRoot = join(root, "cache");
+  const source = join(root, "source");
+  const remote = join(root, "remote.git");
+  const repository = join(repositoriesRoot, "demo");
+  mkdirSync(source, { recursive: true });
+  mkdirSync(repositoriesRoot, { recursive: true });
+  try {
+    git(source, "init", "-b", "main");
+    git(source, "config", "user.email", "hunker@example.com");
+    git(source, "config", "user.name", "Hunker Test");
+    const baseOid = commit(source, "base", "base\n");
+    execFileSync("git", ["init", "--bare", "--initial-branch=main", remote]);
+    git(source, "remote", "add", "origin", remote);
+    git(source, "push", "-u", "origin", "main");
+    execFileSync("git", ["clone", remote, repository]);
+    writeFileSync(join(repository, "message.txt"), "local staged\n");
+    git(repository, "add", "message.txt");
+    commit(source, "incoming conflict", "remote incoming\n");
+    git(source, "push", "origin", "main");
+
+    await expect(
+      runLocalRepository(repositoriesRoot, cacheRoot, (service) =>
+        service.pull({ owner: "acme", name: "demo" }),
+      ),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(git(repository, "rev-parse", "HEAD")).toBe(baseOid);
+    expect(git(repository, "diff", "--cached", "--name-only")).toBe(
+      "message.txt",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("reads pinned diffs, blobs, and commits without switching the checkout", async () => {
   const root = mkdtempSync(join(tmpdir(), "hunker-local-git-"));
   const repository = join(root, "acme", "demo");

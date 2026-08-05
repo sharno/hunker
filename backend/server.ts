@@ -145,6 +145,11 @@ const CloneRepositoryBody = S.Struct({
   repository: S.String,
   destination: S.Literals(["temporary", "configured"]),
 });
+const SwitchRepositoryBranchBody = S.Struct({
+  repository: S.String,
+  branch: S.NonEmptyString,
+});
+const PullRepositoryBody = S.Struct({ repository: S.String });
 
 const SaveSettingsBody = S.Struct({ settings: HunkerSettings });
 
@@ -161,6 +166,23 @@ const decodeBody = <A, I>(
         }),
     ),
   );
+
+const repositoryInput = (value: string) =>
+  Effect.gen(function* () {
+    const [owner, name, ...remaining] = value.split("/");
+    if (
+      remaining.length > 0 ||
+      owner === undefined ||
+      owner === "" ||
+      name === undefined ||
+      name === ""
+    ) {
+      return yield* new InvalidReviewRequest({
+        message: "Choose a repository in owner/name format.",
+      });
+    }
+    return { owner, name };
+  });
 
 const handleDiff = (request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
@@ -288,6 +310,70 @@ const handleRepositoryCommits = (
     }),
   );
 
+const handleRepositorySourceControl = (
+  request: HttpServerRequest.HttpServerRequest,
+) =>
+  Effect.gen(function* () {
+    const { repository } = yield* localRepositoryRequest(request);
+    const local = yield* LocalRepository;
+    return HttpServerResponse.jsonUnsafe({
+      status: yield* local.sourceControl(repository),
+    });
+  }).pipe(
+    Effect.catchTags({
+      InvalidReviewRequest: (error) =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
+        ),
+      LocalRepositoryFailed: localRepositoryError,
+    }),
+  );
+
+const handleSwitchRepositoryBranch = (
+  request: HttpServerRequest.HttpServerRequest,
+) =>
+  Effect.gen(function* () {
+    const input = yield* decodeBody(request, SwitchRepositoryBranchBody);
+    const repository = yield* repositoryInput(input.repository);
+    const local = yield* LocalRepository;
+    return HttpServerResponse.jsonUnsafe({
+      status: yield* local.switchBranch(repository, input.branch),
+    });
+  }).pipe(
+    Effect.catchTags({
+      InvalidReviewRequest: (error) =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
+        ),
+      LocalRepositoryFailed: localRepositoryError,
+    }),
+  );
+
+const handlePullRepository = (request: HttpServerRequest.HttpServerRequest) =>
+  Effect.gen(function* () {
+    const input = yield* decodeBody(request, PullRepositoryBody);
+    const repository = yield* repositoryInput(input.repository);
+    const local = yield* LocalRepository;
+    return HttpServerResponse.jsonUnsafe(yield* local.pull(repository));
+  }).pipe(
+    Effect.catchTags({
+      InvalidReviewRequest: (error) =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
+        ),
+      LocalRepositoryFailed: localRepositoryError,
+    }),
+  );
+
 const handleRepositoryPullRequests = (
   request: HttpServerRequest.HttpServerRequest,
 ) =>
@@ -383,20 +469,9 @@ const handleRepositoryFile = (request: HttpServerRequest.HttpServerRequest) =>
 const handleCloneRepository = (request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
     const input = yield* decodeBody(request, CloneRepositoryBody);
-    const [owner, name, ...remaining] = input.repository.split("/");
-    if (
-      remaining.length > 0 ||
-      owner === undefined ||
-      owner === "" ||
-      name === undefined ||
-      name === ""
-    ) {
-      return yield* new InvalidReviewRequest({
-        message: "Choose a repository in owner/name format.",
-      });
-    }
+    const repository = yield* repositoryInput(input.repository);
     const local = yield* LocalRepository;
-    const cloned = yield* local.clone({ owner, name }, input.destination);
+    const cloned = yield* local.clone(repository, input.destination);
     return HttpServerResponse.jsonUnsafe(cloned);
   }).pipe(
     Effect.catchTags({
@@ -814,10 +889,21 @@ const routesLayer = Layer.mergeAll(
   HttpRouter.add("GET", "/api/repositories", handleRepositories),
   HttpRouter.add("GET", "/api/repository/files", handleRepositoryFiles),
   HttpRouter.add("GET", "/api/repository/commits", handleRepositoryCommits),
+  HttpRouter.add(
+    "GET",
+    "/api/repository/source-control",
+    handleRepositorySourceControl,
+  ),
   HttpRouter.add("GET", "/api/repository/pulls", handleRepositoryPullRequests),
   HttpRouter.add("GET", "/api/repository/search", handleRepositorySearch),
   HttpRouter.add("GET", "/api/repository/file", handleRepositoryFile),
   HttpRouter.add("POST", "/api/repository/clone", handleCloneRepository),
+  HttpRouter.add(
+    "POST",
+    "/api/repository/branch",
+    handleSwitchRepositoryBranch,
+  ),
+  HttpRouter.add("POST", "/api/repository/pull", handlePullRepository),
   HttpRouter.add("GET", "/api/file", handleFile),
   HttpRouter.add("GET", "/api/characters", handleCharacters),
   HttpRouter.add("GET", "/api/semantic", handleSemantic),

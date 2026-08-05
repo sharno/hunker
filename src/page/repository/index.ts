@@ -12,3 +12,4 @@ export type { Message as MessageType } from "./message";
 export { Model, empty } from "./model";
 export type { Commit, File, Model as ModelType, SearchMatch } from "./model";
 export { view } from "./view";
+export * as SourceControl from "./source-control";

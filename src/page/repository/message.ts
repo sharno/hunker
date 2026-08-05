@@ -7,8 +7,12 @@ import {
   RepositoryPullRequest,
 } from "../../features/repository-pulls";
 import { Commit, File, SearchMatch } from "./model";
+import * as SourceControl from "./source-control";
 
 export const CompletedNavigate = m("CompletedNavigate");
+export const GotSourceControlMessage = m("GotSourceControlMessage", {
+  message: SourceControl.Message,
+});
 export const SucceededFetchRepositoryFiles = m(
   "SucceededFetchRepositoryFiles",
   {
@@ -112,6 +116,7 @@ export const FailedFetchRepositoryCommits = m("FailedFetchRepositoryCommits", {
 
 export const Message = S.Union([
   CompletedNavigate,
+  GotSourceControlMessage,
   SucceededFetchRepositoryFiles,
   FailedFetchRepositoryFiles,
   ClickedCloneRepository,

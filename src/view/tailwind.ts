@@ -150,8 +150,26 @@ const utilities: Readonly<Record<string, string>> = {
     "grid h-9 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-[#4a5669] bg-[#263247] pr-1 pl-2.5 [&.is-error]:h-auto [&.is-error]:min-h-9 [&.is-error]:border-[#dc8c7f] [&_input]:min-w-0 [&_input]:border-0 [&_input]:bg-transparent [&_input]:text-[11px] [&_input]:text-white [&_input]:outline-none [&_input]:focus-visible:outline-2 [&_input]:focus-visible:outline-offset-2 [&_input]:focus-visible:outline-lime [&_input::placeholder]:text-[#8f9baa] [&_.github-location-submit]:min-h-7 [&_.github-location-submit]:px-3 max-[760px]:order-2",
   "repository-github-link":
     "rounded-md border border-[#4a5669] px-3 py-2 text-[10px] font-[650] text-[#d8dde4] no-underline hover:border-[#7d899b]",
+  "repository-source-control":
+    "sticky top-14 z-20 flex min-h-9 items-center gap-2 border-b border-[#cfd0ca] bg-[#f7f6f1]/95 px-4 py-1.5 text-[10px] text-[#4f5853] shadow-[0_3px_10px_rgb(16_27_44/5%)] backdrop-blur max-[760px]:overflow-x-auto max-[760px]:px-2.5 [&>button]:h-7 [&>button]:shrink-0 [&>button]:cursor-pointer [&>button]:rounded-[5px] [&>button]:border [&>button]:border-[#c3c7bc] [&>button]:bg-white [&>button]:px-2.5 [&>button]:text-[9px] [&>button]:font-[700] [&>button:disabled]:cursor-default [&>button:disabled]:opacity-55",
+  "source-control-loading": "font-mono text-[9px] text-muted",
+  "source-control-branch":
+    "flex shrink-0 items-center gap-1.5 [&>span]:text-[8px] [&>span]:font-[750] [&>span]:tracking-[0.06em] [&>span]:text-[#7c8379] [&>span]:uppercase [&>select]:h-7 [&>select]:max-w-[240px] [&>select]:rounded-[5px] [&>select]:border [&>select]:border-[#bdc2b5] [&>select]:bg-white [&>select]:px-2 [&>select]:font-mono [&>select]:text-[9px] [&>select]:font-[650] [&>select]:text-ink [&>select]:outline-none [&>select]:focus-visible:border-lime-dark [&>select]:focus-visible:ring-2 [&>select]:focus-visible:ring-lime-dark/20",
+  "source-control-count":
+    "shrink-0 rounded-full border px-1.5 py-0.5 font-mono text-[8px] font-[750] [&.is-ahead]:border-[#b9c99a] [&.is-ahead]:bg-[#eef4df] [&.is-ahead]:text-[#53652e] [&.is-behind]:border-[#aac5d5] [&.is-behind]:bg-[#e8f2f7] [&.is-behind]:text-[#365f76]",
+  "source-control-changes":
+    "shrink-0 border-l border-[#d1d2cb] pl-2 text-[9px] text-[#697069]",
+  "source-control-path":
+    "min-w-0 flex-1 overflow-hidden font-mono text-[8px] text-[#969b94] text-ellipsis whitespace-nowrap",
+  "source-control-feedback":
+    "min-w-0 flex-1 overflow-hidden rounded-sm px-2 py-1 text-[9px] text-ellipsis whitespace-nowrap [&.is-error]:bg-[#ffebe7] [&.is-error]:text-[#8c3328] [&.is-success]:bg-[#e8f4eb] [&.is-success]:text-[#267043]",
+  "source-control-remote-error":
+    "shrink-0 rounded-sm bg-[#fff0d9] px-2 py-1 text-[8px] font-[700] text-[#80551d]",
+  "source-control-refresh": "min-w-7 px-2! text-[12px]!",
+  "source-control-pull":
+    "border-[#a9b978]! bg-[#eff7d8]! text-[#4b6124]! enabled:hover:border-lime-dark!",
   "repository-workspace":
-    "grid min-h-[calc(100vh-56px)] grid-cols-[330px_minmax(0,1fr)] [&.is-commits]:grid-cols-1 max-[760px]:grid-cols-1",
+    "grid min-h-[calc(100vh-92px)] grid-cols-[330px_minmax(0,1fr)] [&.is-commits]:grid-cols-1 max-[760px]:grid-cols-1",
   "repository-commit-row": "text-ink no-underline",
   "repository-commits-browser": "my-8",
   "repository-pulls-browser":
@@ -178,7 +196,7 @@ const utilities: Readonly<Record<string, string>> = {
   "repository-pull-page-error":
     "m-4 rounded-md border border-[#e3aaa0] bg-[#fff0ed] px-3 py-2 text-[10px] text-[#8a3228]",
   "repository-tree":
-    "sticky top-14 flex h-[calc(100vh-56px)] flex-col overflow-hidden border-r border-line bg-[#ecebe5] max-[760px]:static max-[760px]:h-[300px] max-[760px]:border-r-0 max-[760px]:border-b [&>nav]:overflow-auto [&>nav]:px-2 [&>nav]:pb-3",
+    "sticky top-[92px] flex h-[calc(100vh-92px)] flex-col overflow-hidden border-r border-line bg-[#ecebe5] max-[760px]:static max-[760px]:h-[300px] max-[760px]:border-r-0 max-[760px]:border-b [&>nav]:overflow-auto [&>nav]:px-2 [&>nav]:pb-3",
   "repository-tree-heading":
     "flex items-center justify-between border-b border-line px-4 py-3 text-xs [&>span]:rounded-full [&>span]:bg-[#d8d8d2] [&>span]:px-2 [&>span]:py-1 [&>span]:font-mono [&>span]:text-[9px] [&>span]:text-muted",
   "repository-file-row":

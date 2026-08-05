@@ -6,6 +6,7 @@ import {
   PullRequestFilter,
   RepositoryPullRequestsPage,
 } from "../../features/repository-pulls";
+import * as SourceControl from "./source-control";
 
 export const File = S.Struct({
   path: S.String,
@@ -86,6 +87,7 @@ export const Model = S.Struct({
   clone: Clone.schema,
   commits: Commits.schema,
   pullRequests: PullRequests.schema,
+  sourceControl: SourceControl.Model,
 });
 export type Model = typeof Model.Type;
 
@@ -105,4 +107,5 @@ export const empty = (): Model =>
     clone: Clone.Idle(),
     commits: Commits.Idle(),
     pullRequests: PullRequests.Idle(),
+    sourceControl: SourceControl.empty(),
   });
