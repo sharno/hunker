@@ -36,6 +36,7 @@ import {
   layer as localRepositoryLayer,
 } from "./local-repository";
 import {
+  createReviewComment,
   loadReviewComments,
   replyToReviewComment,
   submitPullRequestReview,
@@ -133,6 +134,15 @@ const ReplyBody = S.Struct({
   url: S.String,
   commentId: S.Number,
   body: S.String,
+});
+
+const InlineCommentBody = S.Struct({
+  pullUrl: S.NonEmptyString,
+  commitId: S.NonEmptyString,
+  path: S.NonEmptyString,
+  line: S.Int.check(S.isGreaterThan(0)),
+  side: S.Literals(["LEFT", "RIGHT"]),
+  body: S.NonEmptyString,
 });
 
 const SubmitReviewBody = S.Struct({
@@ -732,6 +742,51 @@ const handleReviewReply = (request: HttpServerRequest.HttpServerRequest) =>
     }),
   );
 
+const handleInlineReviewComment = (
+  request: HttpServerRequest.HttpServerRequest,
+) =>
+  Effect.gen(function* () {
+    const input = yield* decodeBody(request, InlineCommentBody);
+    const body = input.body.trim();
+    if (body === "") {
+      return yield* new InvalidReviewRequest({
+        message: "Write a comment before posting.",
+      });
+    }
+    const target = yield* pullTarget(input.pullUrl);
+    const comment = yield* createReviewComment(target, { ...input, body });
+    if (comment === undefined) {
+      return yield* new InvalidReviewRequest({
+        message: "GitHub returned an unexpected review comment response.",
+      });
+    }
+    return HttpServerResponse.jsonUnsafe({ comment });
+  }).pipe(
+    Effect.catchTags({
+      InvalidGitHubUrl: (error) =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
+        ),
+      InvalidReviewRequest: (error) =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: 400 },
+          ),
+        ),
+      GitHubFetchFailed: (error) =>
+        Effect.succeed(
+          HttpServerResponse.jsonUnsafe(
+            { error: error.message },
+            { status: error.status },
+          ),
+        ),
+    }),
+  );
+
 const handleSubmitReview = (request: HttpServerRequest.HttpServerRequest) =>
   Effect.gen(function* () {
     const input = yield* decodeBody(request, SubmitReviewBody);
@@ -909,6 +964,7 @@ const routesLayer = Layer.mergeAll(
   HttpRouter.add("GET", "/api/semantic", handleSemantic),
   HttpRouter.add("GET", "/api/moves", handleMoves),
   HttpRouter.add("GET", "/api/reviews", handleReviews),
+  HttpRouter.add("POST", "/api/reviews/comment", handleInlineReviewComment),
   HttpRouter.add("POST", "/api/reviews/reply", handleReviewReply),
   HttpRouter.add("POST", "/api/reviews/submit", handleSubmitReview),
 ).pipe(HttpRouter.provideRequest(runtimeLayer));

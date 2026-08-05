@@ -30,6 +30,7 @@ import {
   GitHubReviews,
   GotDiffOptionsPopoverMessage,
   GotGitHubLocationMessage,
+  GotInlineCommentMessage,
   GotHomeMessage,
   GotOpenReviewPopoverMessage,
   GotRepositoryMessage,
@@ -81,6 +82,7 @@ import {
   type ReviewOptions,
 } from "./review-route";
 import * as GitHubLocation from "./features/github-location";
+import * as InlineComment from "./features/inline-comment";
 
 type UpdateReturn = Update.Return<ModelType, Message, AppResources>;
 type AppCommands = Update.Commands<Message, AppResources>;
@@ -406,6 +408,7 @@ const beginReviewLoad = (model: ModelType, url: string): ModelType =>
     collapsedReviewThreads: () => [],
     replyDrafts: () => [],
     replyStates: () => [],
+    inlineComment: () => InlineComment.empty(),
     reviewBody: () => "",
     reviewSubmission: () => ReviewSubmission.Idle(),
     commits: () => PullCommits.Idle(),
@@ -931,6 +934,7 @@ export const update = (
           collapsedReviewThreads: () => [],
           replyDrafts: () => [],
           replyStates: () => [],
+          inlineComment: () => InlineComment.empty(),
           reviewBody: () => "",
           reviewSubmission: () => ReviewSubmission.Idle(),
         });
@@ -1255,6 +1259,40 @@ export const update = (
         }),
         [],
       ],
+      GotInlineCommentMessage: ({ message: inlineMessage }) => {
+        const [inlineComment, commands] = InlineComment.update(
+          model.inlineComment,
+          inlineMessage,
+        );
+        const posted =
+          inlineMessage._tag === "SucceededPostInlineComment" &&
+          inlineMessage.target.pullUrl === model.meta.url;
+        const shouldLoadAllComments =
+          posted && !AsyncData.hasData(model.githubReviews);
+        return [
+          evo(model, {
+            inlineComment: () => inlineComment,
+            githubReviews: (reviews) =>
+              posted
+                ? GitHubReviews.Success({
+                    data: [
+                      ...AsyncData.getOrElse(reviews, () => []),
+                      inlineMessage.comment,
+                    ],
+                  })
+                : reviews,
+            showGitHubReviews: (visible) => (posted ? true : visible),
+          }),
+          [
+            ...Command.mapMessages(commands, (message) =>
+              GotInlineCommentMessage({ message }),
+            ),
+            ...(shouldLoadAllComments
+              ? [FetchGitHubReviews({ url: model.meta.url })]
+              : []),
+          ],
+        ];
+      },
       UpdatedReviewBody: ({ body }) => [
         evo(model, {
           reviewBody: () => body,
@@ -1532,6 +1570,7 @@ const initialModel = (
     collapsedReviewThreads: [],
     replyDrafts: [],
     replyStates: [],
+    inlineComment: InlineComment.empty(),
     reviewBody: "",
     reviewSubmission: ReviewSubmission.Idle(),
   });

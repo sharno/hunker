@@ -26,7 +26,11 @@ import {
   SucceededFetchGitHubReviews,
   SucceededFetchReview,
 } from "./domain";
-import { FetchFullFile } from "./command";
+import { FetchFullFile, FetchGitHubReviews } from "./command";
+import {
+  PostInlineComment,
+  SucceededPostInlineComment,
+} from "./features/inline-comment";
 import { sampleFiles, sampleMeta } from "./sample";
 import { init, update } from "./state";
 import { view } from "./view/review-view";
@@ -46,6 +50,10 @@ const reviewMeta = ReviewMeta.make({
   repository: "example/hunker-demo",
   number: "42",
   url: reviewUrl,
+  backing: {
+    ...sampleMeta.backing,
+    headOid: "2222222222222222222222222222222222222222",
+  },
 });
 const reviewLoading = update(home, ChangedUrl({ url: reviewLocation }))[0];
 const review = update(
@@ -228,6 +236,56 @@ describe("review view", () => {
         "original parameter name",
       ),
       expectAll(all.selector(".github-comment-markdown li")).toHaveCount(2),
+    );
+  });
+
+  test("posts a GitHub comment from a diff line", () => {
+    const target = {
+      pullUrl: reviewUrl,
+      commitId: reviewMeta.backing.headOid,
+      path: primaryFile.path,
+      line: 8,
+      side: "LEFT" as const,
+    };
+    const postedComment = {
+      id: 301,
+      rootId: 301,
+      path: primaryFile.path,
+      body: "Could we preserve this API name?",
+      author: "local-reviewer",
+      htmlUrl: `${reviewUrl}#discussion_r301`,
+      createdAt: "2026-08-05T14:00:00Z",
+      line: 8,
+      side: "LEFT" as const,
+      resolved: false,
+    };
+    scene(
+      { update, view },
+      given(review),
+      click(
+        role("button", {
+          name: `Add comment on ${primaryFile.path} base line 8`,
+        }),
+      ),
+      typeText(
+        label(`Review comment for ${primaryFile.path} base line 8`),
+        postedComment.body,
+      ),
+      click(role("button", { name: "Comment" })),
+      Command.resolve(
+        PostInlineComment,
+        SucceededPostInlineComment({ target, comment: postedComment }),
+      ),
+      expect(selector(".inline-review-threads")).toContainText(
+        postedComment.body,
+      ),
+      Command.resolve(
+        FetchGitHubReviews,
+        SucceededFetchGitHubReviews({
+          requestedUrl: reviewUrl,
+          comments: [postedComment],
+        }),
+      ),
     );
   });
 

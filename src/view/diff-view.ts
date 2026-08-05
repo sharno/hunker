@@ -1,10 +1,11 @@
 import type { Html, HtmlBuilder } from "foldkit/html";
 
 import { button } from "./control";
-import { ToggledHunkCollapse } from "../domain";
+import { GotInlineCommentMessage, ToggledHunkCollapse } from "../domain";
 import type { CharacterDiffRow, CharacterRange, Message } from "../domain";
 import { hunkKey } from "../diff";
 import type { DiffLine, HunkDiffLine } from "../diff";
+import * as InlineComment from "../features/inline-comment";
 import { inlineReviewThreads } from "./github-review-view";
 import type { GitHubReviewInteraction } from "./github-review-view";
 import { syntaxHighlightedContent } from "./syntax-highlight";
@@ -22,7 +23,54 @@ export type DiffInteraction = Readonly<{
   syntaxHighlighting: boolean;
   characterRows: ReadonlyArray<CharacterDiffRow>;
   reviews: GitHubReviewInteraction;
+  inlineComment: Readonly<{
+    model: InlineComment.ModelType;
+    pullUrl: string;
+    commitId: string;
+    enabled: boolean;
+  }>;
 }>;
+
+const inlineTarget = (
+  line: DiffLine | undefined,
+  side: "LEFT" | "RIGHT",
+  interaction: DiffInteraction,
+): InlineComment.TargetType | undefined => {
+  if (
+    !interaction.inlineComment.enabled ||
+    interaction.inlineComment.pullUrl === "" ||
+    interaction.inlineComment.commitId === "" ||
+    line === undefined ||
+    line.kind === "hunk" ||
+    line.hunkId === null
+  ) {
+    return undefined;
+  }
+  const number = side === "LEFT" ? line.oldNumber : line.newNumber;
+  return number === null
+    ? undefined
+    : {
+        pullUrl: interaction.inlineComment.pullUrl,
+        commitId: interaction.inlineComment.commitId,
+        path: interaction.path,
+        line: number,
+        side,
+      };
+};
+
+const inlineCommentView = (
+  target: InlineComment.TargetType,
+  mode: "trigger" | "composer",
+  interaction: DiffInteraction,
+  h: HtmlBuilder<Message>,
+) =>
+  h.submodel({
+    slotId: `inline-comment-${mode}-${target.path}-${target.side}-${target.line}`,
+    model: interaction.inlineComment.model,
+    view: InlineComment.view,
+    viewInputs: { target, mode },
+    toParentMessage: (message) => GotInlineCommentMessage({ message }),
+  });
 
 const isInMovedRange = (
   line: number | null,
@@ -140,6 +188,11 @@ export const unifiedDiffView = (
     [h.Class("diff-lines unified-lines")],
     visibleLines(lines, interaction).flatMap((line, index) => {
       if (line.kind === "hunk") return [hunkHeader(line, interaction, h)];
+      const target = inlineTarget(
+        line,
+        line.kind === "remove" ? "LEFT" : "RIGHT",
+        interaction,
+      );
       const diffLine = h.div(
         [
           h.Key(`${index}-${line.kind}`),
@@ -172,7 +225,12 @@ export const unifiedDiffView = (
           ),
           h.span(
             [h.Class("line-marker")],
-            [line.kind === "add" ? "+" : line.kind === "remove" ? "−" : ""],
+            [
+              line.kind === "add" ? "+" : line.kind === "remove" ? "−" : "",
+              target === undefined
+                ? h.empty
+                : inlineCommentView(target, "trigger", interaction, h),
+            ],
           ),
           h.code(
             [h.Class("line-code")],
@@ -180,7 +238,12 @@ export const unifiedDiffView = (
           ),
         ],
       );
-      return [diffLine].concat(
+      return [
+        diffLine,
+        ...(target === undefined
+          ? []
+          : [inlineCommentView(target, "composer", interaction, h)]),
+      ].concat(
         inlineReviewThreads(
           interaction.path,
           line.oldNumber,
@@ -280,6 +343,11 @@ const splitCell = (
   if (line === undefined) {
     return h.div([h.Class(`split-cell ${side} empty-cell`)], [""]);
   }
+  const target = inlineTarget(
+    line,
+    side === "left" ? "LEFT" : "RIGHT",
+    interaction,
+  );
   return h.div(
     [
       h.Class(
@@ -307,7 +375,12 @@ const splitCell = (
       ),
       h.span(
         [h.Class("line-marker")],
-        [line.kind === "add" ? "+" : line.kind === "remove" ? "−" : ""],
+        [
+          line.kind === "add" ? "+" : line.kind === "remove" ? "−" : "",
+          target === undefined
+            ? h.empty
+            : inlineCommentView(target, "trigger", interaction, h),
+        ],
       ),
       h.code(
         [h.Class("line-code")],
@@ -340,7 +413,17 @@ export const splitDiffView = (
           splitCell(row.right, "right", characterDiff, moved, interaction, h),
         ],
       );
-      return [splitRow].concat(
+      const leftTarget = inlineTarget(row.left, "LEFT", interaction);
+      const rightTarget = inlineTarget(row.right, "RIGHT", interaction);
+      return [
+        splitRow,
+        ...(leftTarget === undefined
+          ? []
+          : [inlineCommentView(leftTarget, "composer", interaction, h)]),
+        ...(rightTarget === undefined
+          ? []
+          : [inlineCommentView(rightTarget, "composer", interaction, h)]),
+      ].concat(
         inlineReviewThreads(
           interaction.path,
           row.left?.oldNumber ?? null,

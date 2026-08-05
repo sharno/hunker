@@ -4,6 +4,8 @@ import { ts } from "foldkit/schema";
 import { Popover } from "@foldkit/ui";
 
 import * as GitHubLocation from "./features/github-location";
+import { GitHubReviewComment } from "./features/github-review-comment";
+import * as InlineComment from "./features/inline-comment";
 import { TextSearchMode } from "./features/code-search";
 import * as Repository from "./page/repository";
 import * as Settings from "./page/settings";
@@ -223,19 +225,7 @@ export const FullFileEntry = S.Struct({
 });
 export type FullFileEntry = typeof FullFileEntry.Type;
 
-export const GitHubReviewComment = S.Struct({
-  id: S.Number,
-  rootId: S.Number,
-  path: S.String,
-  body: S.String,
-  author: S.String,
-  htmlUrl: S.String,
-  createdAt: S.String,
-  line: S.NullOr(S.Number),
-  side: S.Literals(["LEFT", "RIGHT"]),
-  resolved: S.Boolean,
-});
-export type GitHubReviewComment = typeof GitHubReviewComment.Type;
+export { GitHubReviewComment };
 
 export const GitHubReviews = AsyncData.Schema(
   S.Array(GitHubReviewComment),
@@ -318,6 +308,7 @@ export const Model = S.Struct({
   collapsedReviewThreads: S.Array(S.Number),
   replyDrafts: S.Array(ReplyDraft),
   replyStates: S.Array(ReplyState),
+  inlineComment: InlineComment.Model,
   reviewBody: S.String,
   reviewSubmission: ReviewSubmission.schema,
 });

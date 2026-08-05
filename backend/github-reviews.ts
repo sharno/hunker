@@ -223,6 +223,39 @@ export const replyToReviewComment = (
     ).pipe(Option.getOrUndefined);
   });
 
+export const createReviewComment = (
+  target: PullTarget,
+  input: Readonly<{
+    commitId: string;
+    path: string;
+    line: number;
+    side: "LEFT" | "RIGHT";
+    body: string;
+  }>,
+) =>
+  Effect.gen(function* () {
+    const request = HttpClientRequest.post(
+      `${repositoryApiUrl(target)}/pulls/${target.number}/comments`,
+    ).pipe(
+      HttpClientRequest.bodyJsonUnsafe({
+        body: input.body,
+        commit_id: input.commitId,
+        path: input.path,
+        line: input.line,
+        side: input.side,
+      }),
+    );
+    const response = yield* executeGitHubRequest(
+      request,
+      "application/vnd.github+json",
+    );
+    const value: unknown = yield* response.json;
+    return Option.map(
+      S.decodeUnknownOption(GitHubReviewCommentResponse)(value),
+      reviewComment,
+    ).pipe(Option.getOrUndefined);
+  });
+
 export const submitPullRequestReview = (
   target: PullTarget,
   body: string,

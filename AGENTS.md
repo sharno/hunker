@@ -50,6 +50,9 @@
 - Apply project `HtmlBuilder` adapters inside every Foldkit Submodel view.
   Foldkit intentionally supplies its singleton builder at each child boundary,
   so a builder wrapped by the parent does not propagate into the child.
+- Put schemas shared by the root Model and a nested feature's messages in a leaf
+  domain module. Importing the root model back into that feature creates an ESM
+  initialization cycle before Effect Schema can construct the message ADT.
 - Treat a Foldkit Submodel `slotId` as component identity only; it does not
   become a DOM class. Pass visual variants through typed `viewInputs`, apply the
   variant class at the child view root, and cover that rendered class contract
@@ -103,6 +106,10 @@
   items `min-width: 0`. Preserve indentation with `white-space: break-spaces`
   and allow long tokens to wrap; a `max-content` code track can paint one side
   of a split diff through the other instead of participating in row sizing.
+- Bind GitHub inline comments to the loaded PR head OID, file path, side, and
+  line as one request identity. Offer comment controls only for lines that came
+  from a real patch hunk; synthesized full-file context cannot be anchored by
+  GitHub's review-comment API.
 - Scope test `ManagedRuntime`s to the Layer fixture. Reuse one suite runtime for
   a stable Layer and dispose it in `afterAll`; construct per-fixture runtimes
   when a Layer captures test-specific configuration such as temporary paths.

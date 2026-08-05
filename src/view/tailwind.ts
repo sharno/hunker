@@ -355,8 +355,6 @@ const utilities: Readonly<Record<string, string>> = {
     "min-h-[30px] cursor-pointer rounded-[5px] border border-[#cfd0ca] bg-white px-2.5 text-[11px] font-[650] text-[#4f5c55] disabled:cursor-wait disabled:opacity-60",
   "reviewed-button":
     "min-h-[30px] cursor-pointer rounded-[5px] border border-[#cfd0ca] bg-white px-[11px] text-[11px] font-[650] [&.is-reviewed]:border-lime-dark [&.is-reviewed]:bg-lime [&.is-reviewed]:text-[#233700]",
-  "comment-button":
-    "cursor-pointer rounded-[5px] border border-[#cfd0ca] bg-white px-2.5 py-[7px] text-[11px] font-[650] text-[#334659]",
   "semantic-banner":
     "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-[11px] border-b border-[#ddd4f5] bg-[#f1edff] px-3.5 py-2.5 text-[10px] text-[#453d67] [&_div]:flex [&_div]:flex-col [&_div]:gap-0.5 [&_div_span]:text-[#736b8a] [&_strong]:text-[11px] [&.is-error]:border-b-[#edcbc5] [&.is-error]:bg-[#fff0ed] [&.is-error]:text-[#6e3027] [&.is-error_.semantic-icon]:bg-[#f4cdc6] [&.is-error_div_span]:text-[#8d5e57] max-[760px]:grid-cols-[auto_minmax(0,1fr)]",
   "semantic-icon":
@@ -387,7 +385,15 @@ const utilities: Readonly<Record<string, string>> = {
     "grid min-h-[22px] grid-cols-[46px_46px_20px_minmax(0,1fr)] items-stretch",
   "line-number":
     "select-none border-r border-[rgb(216_215_208/72%)] bg-[rgb(241_240_234/72%)] py-px pr-[9px] pl-1 text-right text-[9px] text-[#9ca09a]",
-  "line-marker": "select-none pl-[7px] font-extrabold text-[#7f847e]",
+  "line-marker": "relative select-none pl-[7px] font-extrabold text-[#7f847e]",
+  "inline-comment-trigger":
+    "absolute inset-0 z-[1] grid cursor-pointer place-items-center border-0 bg-[#3068a8] p-0 text-[13px] font-bold text-white opacity-0 transition-opacity [.diff-line:hover_&]:opacity-100 [.split-cell:hover_&]:opacity-100 [&.is-active]:opacity-100 focus-visible:opacity-100 disabled:cursor-wait disabled:opacity-50",
+  "inline-comment-composer":
+    "grid min-w-[620px] gap-2 border-y border-[#cad5e5] bg-[#f3f7fc] py-2.5 pr-3.5 pl-28 font-sans whitespace-normal [&>textarea]:box-border [&>textarea]:w-full [&>textarea]:resize-y [&>textarea]:rounded-md [&>textarea]:border [&>textarea]:border-[#b9c7d8] [&>textarea]:bg-white [&>textarea]:px-2.5 [&>textarea]:py-2 [&>textarea]:text-[11px] [&>textarea]:leading-[1.5] [&>textarea]:text-ink [&>textarea]:outline-none [&>textarea]:focus-visible:outline-2 [&>textarea]:focus-visible:outline-offset-2 [&>textarea]:focus-visible:outline-lime [.split-lines_&]:min-w-[850px]",
+  "inline-comment-heading":
+    "flex items-center gap-2 text-[10px] text-[#31465f] [&>span]:rounded-full [&>span]:bg-[#dce8f5] [&>span]:px-1.5 [&>span]:py-0.5 [&>span]:text-[8px] [&>span]:font-[700] [&>span]:tracking-[0.04em] [&>span]:uppercase",
+  "inline-comment-actions":
+    "flex min-w-0 items-center justify-between gap-3 text-[9px] text-[#697789] [&>span]:min-w-0 [&>div]:flex [&>div]:shrink-0 [&>div]:gap-2 [&_button]:min-h-[28px] [&_button]:cursor-pointer [&_button]:rounded-[5px] [&_button]:border [&_button]:border-[#bdc7d3] [&_button]:bg-white [&_button]:px-2.5 [&_button]:text-[9px] [&_button]:font-[680] [&_button:disabled]:cursor-not-allowed [&_button:disabled]:opacity-50 [&_.inline-comment-submit]:border-[#2d6098] [&_.inline-comment-submit]:bg-[#3068a8] [&_.inline-comment-submit]:text-white",
   "line-code":
     "block min-w-0 py-px pr-3.5 pl-0.5 whitespace-break-spaces [overflow-wrap:anywhere]",
   "line-add":

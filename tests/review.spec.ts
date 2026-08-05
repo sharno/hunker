@@ -297,3 +297,70 @@ test("routes a direct commit through Fetch without PR-only browser controls", as
   await expect(page.locator(".github-review-composer")).toHaveCount(0);
   expect(reviewRequests).toBe(0);
 });
+
+test("posts an inline diff comment through the GitHub transport", async ({
+  page,
+}) => {
+  await page.route("**/api/diff?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: reviewResponse,
+    }),
+  );
+  await page.route("**/api/semantic?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: semanticResponse,
+    }),
+  );
+  await page.route("**/api/reviews/comment", async (route) => {
+    expect(route.request().postDataJSON()).toEqual({
+      pullUrl: reviewUrl,
+      commitId: reviewResponse.backing.headOid,
+      path: "src/greet.ts",
+      line: 1,
+      side: "RIGHT",
+      body: "Could we preserve the original parameter name?",
+    });
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: {
+        comment: {
+          id: 301,
+          rootId: 301,
+          path: "src/greet.ts",
+          body: "Could we preserve the original parameter name?",
+          author: "local-reviewer",
+          htmlUrl: `${reviewUrl}#discussion_r301`,
+          createdAt: "2026-08-05T14:00:00Z",
+          line: 1,
+          side: "RIGHT",
+          resolved: false,
+        },
+      },
+    });
+  });
+
+  await page.goto("/example/hunker-demo/pull/42/files/src/greet.ts");
+  await page
+    .getByRole("button", {
+      name: "Add comment on src/greet.ts changed line 1",
+    })
+    .click();
+  await page
+    .getByRole("textbox", {
+      name: "Review comment for src/greet.ts changed line 1",
+    })
+    .fill("Could we preserve the original parameter name?");
+  await page
+    .locator(".inline-comment-composer")
+    .getByRole("button", { name: "Comment", exact: true })
+    .click();
+
+  await expect(page.locator(".inline-review-threads")).toContainText(
+    "Could we preserve the original parameter name?",
+  );
+});

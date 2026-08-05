@@ -5,6 +5,7 @@ import { UrlRequest } from "foldkit/navigation";
 import { Popover } from "@foldkit/ui";
 
 import * as GitHubLocation from "./features/github-location";
+import * as InlineComment from "./features/inline-comment";
 import { TextSearchMode } from "./features/code-search";
 import * as Repository from "./page/repository";
 import * as Settings from "./page/settings";
@@ -23,6 +24,9 @@ import {
 
 export const GotGitHubLocationMessage = m("GotGitHubLocationMessage", {
   message: GitHubLocation.Message,
+});
+export const GotInlineCommentMessage = m("GotInlineCommentMessage", {
+  message: InlineComment.Message,
 });
 export const GotRepositoryMessage = m("GotRepositoryMessage", {
   message: Repository.Message,
@@ -199,6 +203,7 @@ export const FailedPostPullRequestReview = m("FailedPostPullRequestReview", {
 
 export const Message = S.Union([
   GotGitHubLocationMessage,
+  GotInlineCommentMessage,
   GotHomeMessage,
   GotRepositoryMessage,
   GotSettingsMessage,

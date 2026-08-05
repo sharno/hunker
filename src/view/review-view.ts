@@ -1155,6 +1155,12 @@ const diffPanelView = (
       replyStates: model.replyStates,
       collapsedThreads: model.collapsedReviewThreads,
     },
+    inlineComment: {
+      model: model.inlineComment,
+      pullUrl: model.meta.url,
+      commitId: model.meta.backing.headOid,
+      enabled: model.reviewTab === "files" && isPullRequestUrl(model.meta.url),
+    },
   };
   const semanticOnly =
     model.semantic &&
@@ -1399,13 +1405,7 @@ const diffPanelView = (
                         : "End of patch",
                     ],
                   ),
-                  model.reviewTab === "files"
-                    ? button(
-                        h,
-                        [h.Type("button"), h.Class("comment-button")],
-                        ["＋ Add a review comment"],
-                      )
-                    : h.empty,
+                  h.empty,
                 ],
               ),
             ],
