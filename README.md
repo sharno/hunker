@@ -5,12 +5,13 @@ agent-written changes. It reduces visual noise with whitespace filtering, token-
 or character-level highlighting, syntax highlighting, and syntax-aware
 structural diffs powered by ast-grep and tree-sitter.
 
-The stack is Effect end to end:
+The browser is Effect-first and the local backend is native Rust:
 
 - Foldkit owns the browser model, messages, update function, commands, and view.
 - Tailwind CSS v4 provides utility-first styling through its Vite plugin.
-- Effect HTTP powers the browser client and the local GitHub proxy.
-- Effect Platform Node serves the backend API.
+- Effect HTTP powers the browser client.
+- Axum and Tokio serve the typed local API; Serde decodes every external JSON
+  boundary.
 
 ## Project structure
 
@@ -36,25 +37,16 @@ The stack is Effect end to end:
   definitions
 - `src/view/review-view.ts` — review workspace composition
 - `src/sample.ts` — local demonstration fixture
-- `backend/github-auth.ts` — environment and `gh` credential discovery
-- `backend/github.ts` — GitHub URL parsing, API calls, and base/head content
-  loading
-- `backend/github-reviews.ts` — review-thread reads, replies, and review
-  submission
-- `backend/local-git.ts` — OID-pinned Git diffs, blobs, commits, and PR-ref
-  freshness
-- `backend/review-backing.ts` — local-object selection and pinned GitHub
-  fallback
-- `backend/local-repository.ts` — scoped local clone discovery, ripgrep and FFF
-  search, and safe file reads
-- `backend/settings.ts` — Effect-validated, atomically persisted local settings
-- `backend/ast-grep-analysis.ts` — parser selection, AST units, and structural
-  fingerprints
-- `backend/semantic-engine.ts` — Effect service, semantic matching, and
-  review-wide move detection
-- `backend/character-diff-engine.ts` — native Git whole-file alignment and
-  inline token/character ranges
-- `backend/server.ts` — Effect HTTP route composition
+- `server/src/github.rs` — GitHub URL parsing, private authentication, API
+  decoding, review threads, comments, replies, and review submission
+- `server/src/local.rs` — OID-pinned Git backing, repository discovery, native
+  FFF/ripgrep search, safe file reads, clone, branch, and pull operations
+- `server/src/semantic.rs` — native ast-grep parsers, structural fingerprints,
+  semantic changes, and review-wide move detection
+- `server/src/character_diff.rs` — native Git whole-file alignment and inline
+  token/character ranges
+- `server/src/settings.rs` — Serde-validated, atomically persisted settings
+- `server/src/main.rs` — Axum route composition for the frontend API contract
 
 The review workflow remains the application-level Foldkit Model because it
 coordinates routing and cross-cutting review state. Page-sized features become
@@ -63,10 +55,10 @@ Markdown, and syntax renderers remain ordinary shared modules.
 
 ## Run locally
 
-Requires Bun, Node.js 22 or newer, Git, and ripgrep. ast-grep runs in the server
-process through its native TypeScript package. Inline diffs and repository
-search invoke the locally installed Git and ripgrep binaries through Effect
-services.
+Requires Bun, Node.js 22 or newer, Rust 1.97 or newer, Git, GitHub CLI, and
+ripgrep. ast-grep and FFF run through their native Rust crates. Inline diffs and
+exact/regex repository search invoke the locally installed Git and ripgrep
+binaries.
 
 ```bash
 bun install
@@ -105,7 +97,7 @@ Repository files, PR files, and commit files use the same nested folder tree;
 folders sort before files, show descendant counts, and can be collapsed
 independently. Selecting a hidden file reopens its ancestors. Diff files and
 individual hunks can also be collapsed independently. The Full file action loads
-the base and head versions through the authenticated Effect backend and fills in
+the base and head versions through the authenticated Rust backend and fills in
 context omitted by GitHub's patch; Patch only returns to the compact review
 without another network request.
 
@@ -142,11 +134,11 @@ Hunker’s `/:owner/:repository/pulls` repository PR list. The repository name
 links to a local repository browser at `/:owner/:repository`. By default Hunker
 resolves clones below `~/src`, including both `~/src/repository` and
 `~/src/owner/repository` layouts. Open `/settings` to change that root, the
-temporary clone root, and all review defaults. Settings are validated with
-Effect Schema and saved atomically to `~/.config/hunker/settings.json`, so they
-follow the local Hunker server across browsers. Set `HUNKER_CONFIG_FILE` to use
-another settings document. `HUNKER_REPOS_ROOT` and `HUNKER_CACHE_ROOT` supply
-defaults when no settings file exists:
+temporary clone root, and all review defaults. Settings are validated with Serde
+and saved atomically to `~/.config/hunker/settings.json`, so they follow the
+local Hunker server across browsers. Set `HUNKER_CONFIG_FILE` to use another
+settings document. `HUNKER_REPOS_ROOT` and `HUNKER_CACHE_ROOT` supply defaults
+when no settings file exists:
 
 ```bash
 HUNKER_REPOS_ROOT=/path/to/clones bun run dev
@@ -191,9 +183,9 @@ design and remaining repository-status/worktree work are documented in
 ```bash
 bun run build       # strict typecheck and production frontend build
 bun run typecheck   # TypeScript only
-bun run test:integration # Playwright UI and ast-grep engine tests
+bun run test:integration # thin real-browser transport/history/layout suite
 bun run dev:web     # Foldkit frontend only
-bun run dev:api     # Effect backend only
+bun run dev:api     # Rust backend only
 ```
 
 Hunker resolves GitHub credentials on the backend in this order:
@@ -209,7 +201,7 @@ are not available to your current GitHub account.
 ## Semantic diffs
 
 Semantic analysis is lazy and cached per file in the browser model. When you
-open a file with the Semantic toggle enabled, the Effect backend:
+open a file with the Semantic toggle enabled, the Rust backend:
 
 1. Reads that file at the pinned PR base and head OIDs from local Git when
    available, otherwise through the server-side GitHub credential.

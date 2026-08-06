@@ -1,0 +1,41 @@
+[package]
+name = "hunker-server"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+ast-grep-core = "0.45.0"
+ast-grep-language = { version = "0.45.0", default-features = false, features = [
+  "tree-sitter-hcl",
+  "tree-sitter-javascript",
+  "tree-sitter-python",
+  "tree-sitter-rust",
+  "tree-sitter-typescript",
+] }
+axum = { version = "0.8.9", features = ["json"] }
+dirs = "6.0.0"
+futures = "0.3.31"
+fff-search = "0.10.2-nightly.fde8c52"
+percent-encoding = "2.3.2"
+regex = "1.12.2"
+reqwest = { version = "0.13.1", default-features = false, features = [
+  "json",
+  "rustls",
+] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+tempfile = "3.23.0"
+thiserror = "2.0.18"
+tokio = { version = "1.49.0", features = ["full"] }
+tower-http = { version = "0.6.8", features = ["cors", "trace"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+url = "2.5.8"
+walkdir = "2.5.0"
+
+[dev-dependencies]
+pretty_assertions = "1.4.1"
+
+[lints]
+workspace = true

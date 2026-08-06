@@ -1,6 +1,8 @@
 # Hunker agent guidance
 
-- Use Effect v4 for application effects, services, errors, and data validation.
+- Use Effect v4 for frontend application effects, services, errors, and data
+  validation. The local HTTP backend is Rust; keep its boundaries typed with
+  Serde domain structs and `AppError` rather than recreating Effect conventions.
 - Decode external data at its boundary with Effect Schema and keep the decoded
   type through the rest of the program. Do not add `isRecord`, `asRecord`,
   `Record<string, unknown>` shape shims, ad hoc object/property probing, or
@@ -61,9 +63,10 @@
   file as they are learned. Keep the guidance general and remove or correct it
   when the vendored sources prove it wrong.
 - Treat structured subprocess output as an external boundary: decode each record
-  with Effect Schema, model command-specific exit statuses (for example, a
-  search command's no-match status), and normalize tool paths to the app's
-  canonical repository-relative form before they enter domain state.
+  with Effect Schema in the frontend or a typed parser/domain constructor in
+  Rust, model command-specific exit statuses (for example, a search command's
+  no-match status), and normalize tool paths to the app's canonical
+  repository-relative form before they enter domain state.
 - Keep independent repository-page data sources independent in state and view
   logic. A GitHub-backed tab must not be blocked by a missing local clone, and a
   local Git failure should only replace views that actually depend on it.
@@ -79,6 +82,13 @@
   while the next page loads and use `Stale` for a later-page failure. Correlate
   responses with the repository, filter, and page before appending them.
 - Use Bun for dependency management and scripts.
+- Keep the Rust backend in `server/`, use Tokio/Axum for HTTP, and keep GitHub,
+  subprocess, and JSON decoding at module boundaries. Run Cargo formatting,
+  Clippy with warnings denied, tests, and a release build alongside frontend
+  validation.
+- Retain one watched FFF `SharedFilePicker` per local repository in server
+  state. Starting a fresh picker for every query turns fuzzy search into an
+  indexing operation and discards FFF's latency advantage.
 - Keep the project on TypeScript 7 and strict typing. Do not introduce `any`.
 - Use Oxfmt for formatting and Oxlint with type-aware linting. Do not add
   Prettier or competing formatter configuration.
