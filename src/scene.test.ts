@@ -26,6 +26,7 @@ import {
   ReviewMeta,
   SelectedInlineDiffMode,
   SelectedViewMode,
+  SucceededFetchCharacterDiff,
   SucceededFetchFullFile,
   SucceededFetchGitHubReviews,
   SucceededFetchMoves,
@@ -339,6 +340,48 @@ describe("review view", () => {
           comments: [postedComment],
         }),
       ),
+    );
+  });
+
+  test("renders each split comment slot once when alignment repeats a line", () => {
+    const withRepeatedAlignment = update(
+      review,
+      SucceededFetchCharacterDiff({
+        requestedUrl: reviewUrl,
+        result: {
+          path: primaryFile.path,
+          ignoreWhitespace: true,
+          mode: "token",
+          rows: [
+            {
+              oldLine: 8,
+              newLine: 8,
+              oldRanges: [],
+              newRanges: [],
+            },
+            {
+              oldLine: 9,
+              newLine: 8,
+              oldRanges: [],
+              newRanges: [],
+            },
+          ],
+        },
+      }),
+    )[0];
+    scene(
+      { update, view },
+      given(withRepeatedAlignment),
+      expectAll(
+        all.role("button", {
+          name: `Add comment on ${primaryFile.path} changed line 8`,
+        }),
+      ).toHaveCount(1),
+      expect(
+        role("button", {
+          name: `Add comment on ${primaryFile.path} base line 9`,
+        }),
+      ).toExist(),
     );
   });
 

@@ -110,6 +110,10 @@
   line as one request identity. Offer comment controls only for lines that came
   from a real patch hunk; synthesized full-file context cannot be anchored by
   GitHub's review-comment API.
+- Treat a Foldkit Submodel `slotId` as rendered-location identity, separate from
+  the child model or domain target. For repeated diff rows, derive it from the
+  layout, file, side, hunk, and line position, and ensure alignment consumes
+  every source and destination line at most once.
 - Model cross-file semantic annotations with one stable identity plus distinct
   source and destination ranges. Use that identity for matching colors and DOM
   anchors; a single shared line count is inaccurate when moved code was edited.

@@ -77,16 +77,24 @@ const inlineTarget = (
 const inlineCommentView = (
   target: InlineComment.TargetType,
   mode: "trigger" | "composer",
+  slot: string,
   interaction: DiffInteraction,
   h: HtmlBuilder<Message>,
 ) =>
   h.submodel({
-    slotId: `inline-comment-${mode}-${target.path}-${target.side}-${target.line}`,
+    slotId: `inline-comment-${slot}-${mode}`,
     model: interaction.inlineComment.model,
     view: InlineComment.view,
     viewInputs: { target, mode },
     toParentMessage: (message) => GotInlineCommentMessage({ message }),
   });
+
+const diffLineSlot = (
+  layout: "unified" | "split-left" | "split-right",
+  path: string,
+  line: DiffLine,
+) =>
+  `${layout}-${encodeURIComponent(path)}-${line.hunkId ?? "full"}-${line.kind}-${line.oldNumber ?? "none"}-${line.newNumber ?? "none"}`;
 
 const isInMovedRange = (
   line: number | null,
@@ -272,6 +280,7 @@ export const unifiedDiffView = (
       const moveSide = line.kind === "add" ? "new" : "old";
       const moveLine = moveSide === "new" ? line.newNumber : line.oldNumber;
       const semanticMove = semanticMoveFor(moveLine, moveSide, moved);
+      const slot = diffLineSlot("unified", interaction.path, line);
       const diffLine = h.div(
         [
           h.Key(`${index}-${line.kind}`),
@@ -304,7 +313,7 @@ export const unifiedDiffView = (
               line.kind === "add" ? "+" : line.kind === "remove" ? "−" : "",
               target === undefined
                 ? h.empty
-                : inlineCommentView(target, "trigger", interaction, h),
+                : inlineCommentView(target, "trigger", slot, interaction, h),
             ],
           ),
           h.code(
@@ -320,7 +329,7 @@ export const unifiedDiffView = (
         diffLine,
         ...(target === undefined
           ? []
-          : [inlineCommentView(target, "composer", interaction, h)]),
+          : [inlineCommentView(target, "composer", slot, interaction, h)]),
       ].concat(
         inlineReviewThreads(
           interaction.path,
@@ -376,13 +385,21 @@ const splitRows = (
     const consumedNew = new Set<number>();
     for (const pairing of characterRows) {
       const left =
-        pairing.oldLine === null ? undefined : oldLines.get(pairing.oldLine);
+        pairing.oldLine === null || consumedOld.has(pairing.oldLine)
+          ? undefined
+          : oldLines.get(pairing.oldLine);
       const right =
-        pairing.newLine === null ? undefined : newLines.get(pairing.newLine);
+        pairing.newLine === null || consumedNew.has(pairing.newLine)
+          ? undefined
+          : newLines.get(pairing.newLine);
       if (left === undefined && right === undefined) continue;
       rows.push({ left, right });
-      if (pairing.oldLine !== null) consumedOld.add(pairing.oldLine);
-      if (pairing.newLine !== null) consumedNew.add(pairing.newLine);
+      if (left !== undefined && pairing.oldLine !== null) {
+        consumedOld.add(pairing.oldLine);
+      }
+      if (right !== undefined && pairing.newLine !== null) {
+        consumedNew.add(pairing.newLine);
+      }
     }
     const remainingOld = block.filter(
       (candidate) =>
@@ -429,6 +446,11 @@ const splitCell = (
   const moveSide = side === "left" ? "old" : "new";
   const moveLine = moveSide === "old" ? line.oldNumber : line.newNumber;
   const semanticMove = semanticMoveFor(moveLine, moveSide, moved);
+  const slot = diffLineSlot(
+    side === "left" ? "split-left" : "split-right",
+    interaction.path,
+    line,
+  );
   return h.div(
     [
       ...(semanticMove !== undefined && moveLine === semanticMove.start
@@ -456,7 +478,7 @@ const splitCell = (
           line.kind === "add" ? "+" : line.kind === "remove" ? "−" : "",
           target === undefined
             ? h.empty
-            : inlineCommentView(target, "trigger", interaction, h),
+            : inlineCommentView(target, "trigger", slot, interaction, h),
         ],
       ),
       h.code(
@@ -495,14 +517,38 @@ export const splitDiffView = (
       );
       const leftTarget = inlineTarget(row.left, "LEFT", interaction);
       const rightTarget = inlineTarget(row.right, "RIGHT", interaction);
+      const leftSlot =
+        row.left === undefined
+          ? undefined
+          : diffLineSlot("split-left", interaction.path, row.left);
+      const rightSlot =
+        row.right === undefined
+          ? undefined
+          : diffLineSlot("split-right", interaction.path, row.right);
       return [
         splitRow,
-        ...(leftTarget === undefined
+        ...(leftTarget === undefined || leftSlot === undefined
           ? []
-          : [inlineCommentView(leftTarget, "composer", interaction, h)]),
-        ...(rightTarget === undefined
+          : [
+              inlineCommentView(
+                leftTarget,
+                "composer",
+                leftSlot,
+                interaction,
+                h,
+              ),
+            ]),
+        ...(rightTarget === undefined || rightSlot === undefined
           ? []
-          : [inlineCommentView(rightTarget, "composer", interaction, h)]),
+          : [
+              inlineCommentView(
+                rightTarget,
+                "composer",
+                rightSlot,
+                interaction,
+                h,
+              ),
+            ]),
       ].concat(
         inlineReviewThreads(
           interaction.path,
