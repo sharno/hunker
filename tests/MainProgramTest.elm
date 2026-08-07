@@ -2,6 +2,7 @@ module MainProgramTest exposing (suite)
 
 import Http
 import Hunker.Effect as AppEffect
+import Hunker.Page.Repository as Repository
 import Json.Decode as Decode
 import Json.Encode as Encode
 import Main
@@ -12,7 +13,8 @@ import SimulatedEffect.Navigation as SimulatedNavigation
 import SimulatedEffect.Process as SimulatedProcess
 import SimulatedEffect.Task as SimulatedTask
 import Test exposing (Test, describe, test)
-import Test.Html.Selector exposing (text)
+import Test.Html.Selector exposing (containing, disabled, tag, text)
+import Time
 
 
 suite : Test
@@ -60,6 +62,33 @@ suite =
                     |> ProgramTest.simulateHttpOk "GET" reviewRequest reviewJson
                     |> ProgramTest.simulateHttpOk "GET" "/api/reviews?url=https%3A%2F%2Fgithub.com%2Fexample%2Fhunker%2Fpull%2F42" resolvedCommentsJson
                     |> ProgramTest.expectViewHas [ text "Resolved", text "reviewer" ]
+        , test "keeps pull disabled until a separate Git status refresh replaces the stale count" <|
+            \() ->
+                startedAt "/mohamed-rdr/hunker"
+                    |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
+                    |> ProgramTest.simulateHttpOk "GET" "/api/repository/files?repository=mohamed-rdr%2Fhunker" repositoryFilesJson
+                    |> ProgramTest.simulateHttpOk "GET" sourceControlRequest (sourceControlJson 2)
+                    |> ProgramTest.clickButton "Pull 2 ↓"
+                    |> ProgramTest.update (Main.RepositoryMsg (Repository.PollSourceControl (Time.millisToPosix 120000)))
+                    |> ProgramTest.ensureViewHas
+                        [ tag "button"
+                        , containing [ text "Pulling…" ]
+                        , disabled True
+                        ]
+                    |> ProgramTest.simulateHttpOk "POST" "/api/repository/pull" "{\"pulledCommits\":2}"
+                    |> ProgramTest.ensureViewHas
+                        [ tag "button"
+                        , containing [ text "Pulled 2 commits. Refreshing status…" ]
+                        , disabled True
+                        ]
+                    |> ProgramTest.ensureHttpRequestWasMade "GET" sourceControlRequest
+                    |> ProgramTest.simulateHttpOk "GET" sourceControlRequest (sourceControlJson 1)
+                    |> ProgramTest.expectViewHas
+                        [ text "Pulled 2 commits."
+                        , tag "button"
+                        , containing [ text "Pull 1 ↓" ]
+                        , disabled False
+                        ]
         ]
 
 
@@ -156,6 +185,60 @@ settingsJson =
 repositoriesJson : String
 repositoriesJson =
     """{"configuredRoot":"/Users/mohamed/src","temporaryRoot":"/tmp/hunker/repositories","repositories":[{"owner":"mohamed-rdr","name":"hunker","path":"/Users/mohamed/src/hunker","source":"configured"}]}"""
+
+
+repositoryFilesJson : String
+repositoryFilesJson =
+    """{"files":[{"path":"README.md","size":10,"gitStatus":"clean"}]}"""
+
+
+sourceControlRequest : String
+sourceControlRequest =
+    "/api/repository/source-control?repository=mohamed-rdr%2Fhunker"
+
+
+sourceControlJson : Int -> String
+sourceControlJson behind =
+    Encode.encode 0 <|
+        Encode.object
+            [ ( "status"
+              , Encode.object
+                    [ ( "path", Encode.string "/Users/mohamed/src/hunker" )
+                    , ( "checkout"
+                      , Encode.object
+                            [ ( "_tag", Encode.string "TrackingBranch" )
+                            , ( "name", Encode.string "main" )
+                            , ( "oid", Encode.string "2222222222222222222222222222222222222222" )
+                            , ( "upstream", Encode.string "origin/main" )
+                            , ( "ahead", Encode.int 0 )
+                            , ( "behind", Encode.int behind )
+                            ]
+                      )
+                    , ( "branches"
+                      , Encode.list identity
+                            [ Encode.object
+                                [ ( "name", Encode.string "main" )
+                                , ( "local", Encode.bool True )
+                                , ( "remote", Encode.bool True )
+                                ]
+                            ]
+                      )
+                    , ( "changes"
+                      , Encode.object
+                            [ ( "staged", Encode.int 0 )
+                            , ( "unstaged", Encode.int 0 )
+                            , ( "untracked", Encode.int 0 )
+                            ]
+                      )
+                    , ( "remote"
+                      , Encode.object
+                            [ ( "_tag", Encode.string "RemoteCurrent" )
+                            , ( "checkedAt", Encode.int 1 )
+                            ]
+                      )
+                    ]
+              )
+            ]
 
 
 reviewRequest : String

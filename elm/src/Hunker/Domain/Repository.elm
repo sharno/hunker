@@ -279,11 +279,9 @@ switchedDecoder =
     sourceControlDecoder
 
 
-pulledDecoder : Decoder ( SourceControlStatus, Int )
+pulledDecoder : Decoder Int
 pulledDecoder =
-    Decode.map2 Tuple.pair
-        (Decode.field "status" sourceControlStatusDecoder)
-        (Decode.field "pulledCommits" Decode.int)
+    Decode.field "pulledCommits" Decode.int
 
 
 cloneDecoder : Decoder String

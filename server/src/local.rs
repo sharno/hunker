@@ -402,10 +402,7 @@ impl Local {
             Checkout::TrackingBranch { behind, oid, .. } => (*behind, oid.clone()),
         };
         if behind == 0 {
-            return Ok(PullResult {
-                status: current,
-                pulled_commits: 0,
-            });
+            return Ok(PullResult { pulled_commits: 0 });
         }
         git_action(&root, &["pull", "--ff-only"]).await?;
         let after = command::git(&root, &["rev-parse", "HEAD"])
@@ -421,7 +418,6 @@ impl Local {
         .parse()
         .unwrap_or(0);
         Ok(PullResult {
-            status: inspect_source_control(&root, false).await?,
             pulled_commits: pulled,
         })
     }
@@ -1258,7 +1254,6 @@ pub struct SourceControlStatus {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PullResult {
-    pub status: SourceControlStatus,
     pub pulled_commits: usize,
 }
 pub struct PullRevision {

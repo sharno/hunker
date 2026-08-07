@@ -162,7 +162,7 @@ switchBranch repository branch succeeded failed =
         failed
 
 
-pullRepository : String -> (( Repository.SourceControlStatus, Int ) -> msg) -> (String -> msg) -> Effect msg
+pullRepository : String -> (Int -> msg) -> (String -> msg) -> Effect msg
 pullRepository repository succeeded failed =
     Effect.send "POST"
         "/api/repository/pull"

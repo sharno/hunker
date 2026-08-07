@@ -33,8 +33,7 @@ type alias Model =
     , pulls : Remote ( String, String, Int ) String PullRequestsPage
     , pullRows : List PullRequest
     , pullHasMore : Bool
-    , sourceControl : Remote String String SourceControlStatus
-    , sourceAction : SourceAction
+    , sourceControl : SourceControl
     , clone : Remote ( String, String ) String String
     , collapsedFolders : Set String
     , searchDraft : String
@@ -42,13 +41,26 @@ type alias Model =
     }
 
 
-type SourceAction
-    = Resting
-    | Refreshing
-    | Switching String
-    | Pulling
+type SourceControl
+    = SourceLoading String
+    | SourceUnavailable String String
+    | SourceReady SourceSnapshot
+
+
+type alias SourceSnapshot =
+    { repository : String
+    , status : SourceControlStatus
+    , activity : SourceActivity
+    }
+
+
+type SourceActivity
+    = SourceIdle
+    | SourceRefreshing
+    | BranchSwitching String
+    | PullInFlight
+    | PullSynchronizing Int
     | SourceSucceeded String
-    | SourceBlocked String
 
 
 type Msg
@@ -63,7 +75,9 @@ type Msg
     | PullsLoaded ( String, String, Int ) PullRequestsPage
     | PullsFailed ( String, String, Int ) String
     | SourceLoaded String SourceControlStatus
-    | PullLoaded String Int SourceControlStatus
+    | PullCompleted String Int
+    | PullStatusLoaded String Int SourceControlStatus
+    | PullStatusFailed String String
     | SourceFailed String String
     | CloneLoaded ( String, String ) String
     | CloneFailed ( String, String ) String
@@ -120,8 +134,7 @@ init location =
                     NotAsked
             , pullRows = []
             , pullHasMore = False
-            , sourceControl = Loading name
-            , sourceAction = Resting
+            , sourceControl = SourceLoading name
             , clone = NotAsked
             , collapsedFolders = Set.empty
             , searchDraft = location.query
@@ -282,23 +295,54 @@ update msg model =
 
         SourceLoaded requested status ->
             if requested == repositoryName model then
-                ( { model | sourceControl = Success requested status, sourceAction = Resting }, Effect.none )
+                ( { model
+                    | sourceControl =
+                        SourceReady
+                            { repository = requested
+                            , status = status
+                            , activity = SourceIdle
+                            }
+                  }
+                , Effect.none
+                )
 
             else
                 unchanged model
 
-        PullLoaded requested count status ->
+        PullCompleted requested count ->
+            updateReadySource requested model <|
+                \source ->
+                    ( { model
+                        | sourceControl =
+                            SourceReady { source | activity = PullSynchronizing count }
+                      }
+                    , Api.refreshSourceControl requested
+                        (PullStatusLoaded requested count)
+                        (PullStatusFailed requested)
+                    )
+
+        PullStatusLoaded requested count status ->
             if requested == repositoryName model then
                 ( { model
-                    | sourceControl = Success requested status
-                    , sourceAction =
-                        SourceSucceeded
-                            (if count == 1 then
-                                "Pulled 1 commit."
+                    | sourceControl =
+                        SourceReady
+                            { repository = requested
+                            , status = status
+                            , activity = SourceSucceeded (pulledMessage count)
+                            }
+                  }
+                , Effect.none
+                )
 
-                             else
-                                "Pulled " ++ String.fromInt count ++ " commits."
-                            )
+            else
+                unchanged model
+
+        PullStatusFailed requested error ->
+            if requested == repositoryName model then
+                ( { model
+                    | sourceControl =
+                        SourceUnavailable requested
+                            ("The pull completed, but Git status could not be refreshed. " ++ error)
                   }
                 , Effect.none
                 )
@@ -308,7 +352,7 @@ update msg model =
 
         SourceFailed requested error ->
             if requested == repositoryName model then
-                ( { model | sourceControl = Failure requested error, sourceAction = SourceBlocked error }, Effect.none )
+                ( { model | sourceControl = SourceUnavailable requested error }, Effect.none )
 
             else
                 unchanged model
@@ -325,7 +369,7 @@ update msg model =
                 ( { model
                     | clone = Success request path
                     , files = Loading name
-                    , sourceControl = Loading name
+                    , sourceControl = SourceLoading name
                   }
                 , Effect.batch
                     [ Api.fetchRepositoryFiles name (FilesLoaded name) (FilesFailed name)
@@ -402,9 +446,15 @@ update msg model =
                 name =
                     repositoryName model
             in
-            ( { model | sourceAction = Switching branch }
-            , Api.switchBranch name branch (SourceLoaded name) (SourceFailed name)
-            )
+            updateReadySource name model <|
+                \source ->
+                    if sourceBusy source.activity then
+                        unchanged model
+
+                    else
+                        ( { model | sourceControl = SourceReady { source | activity = BranchSwitching branch } }
+                        , Api.switchBranch name branch (SourceLoaded name) (SourceFailed name)
+                        )
 
         RequestedSourceRefresh ->
             refreshSource model
@@ -414,11 +464,15 @@ update msg model =
                 name =
                     repositoryName model
             in
-            ( { model | sourceAction = Pulling }
-            , Api.pullRepository name
-                (\( status, count ) -> PullLoaded name count status)
-                (SourceFailed name)
-            )
+            updateReadySource name model <|
+                \source ->
+                    if sourceBusy source.activity || not (sourceCanPull source.status) then
+                        unchanged model
+
+                    else
+                        ( { model | sourceControl = SourceReady { source | activity = PullInFlight } }
+                        , Api.pullRepository name (PullCompleted name) (SourceFailed name)
+                        )
 
         RequestedClone destination ->
             let
@@ -451,9 +505,81 @@ refreshSource model =
         name =
             repositoryName model
     in
-    ( { model | sourceAction = Refreshing }
-    , Api.refreshSourceControl name (SourceLoaded name) (SourceFailed name)
-    )
+    case model.sourceControl of
+        SourceReady source ->
+            if sourceBusy source.activity then
+                unchanged model
+
+            else
+                ( { model | sourceControl = SourceReady { source | activity = SourceRefreshing } }
+                , Api.refreshSourceControl name (SourceLoaded name) (SourceFailed name)
+                )
+
+        SourceUnavailable requested _ ->
+            ( { model | sourceControl = SourceLoading requested }
+            , Api.refreshSourceControl name (SourceLoaded name) (SourceFailed name)
+            )
+
+        SourceLoading _ ->
+            unchanged model
+
+
+updateReadySource : String -> Model -> (SourceSnapshot -> ( Model, Effect Msg )) -> ( Model, Effect Msg )
+updateReadySource requested model updateSource =
+    case model.sourceControl of
+        SourceReady source ->
+            if source.repository == requested then
+                updateSource source
+
+            else
+                unchanged model
+
+        _ ->
+            unchanged model
+
+
+sourceBusy : SourceActivity -> Bool
+sourceBusy activity =
+    case activity of
+        SourceRefreshing ->
+            True
+
+        BranchSwitching _ ->
+            True
+
+        PullInFlight ->
+            True
+
+        PullSynchronizing _ ->
+            True
+
+        SourceIdle ->
+            False
+
+        SourceSucceeded _ ->
+            False
+
+
+sourceCanPull : SourceControlStatus -> Bool
+sourceCanPull status =
+    case status.checkout of
+        TrackingBranch checkout ->
+            checkout.behind > 0
+
+        UntrackedBranch _ ->
+            False
+
+        DetachedHead _ ->
+            False
+
+
+pulledMessage : Int -> String
+pulledMessage count =
+    if count == 1 then
+        "Pulled 1 commit."
+
+    else
+        "Pulled " ++ String.fromInt count ++ " commits."
 
 
 unchanged : Model -> ( Model, Effect Msg )
@@ -565,26 +691,26 @@ view syntaxHighlighting model =
 sourceControlView : Model -> Html Msg
 sourceControlView model =
     case model.sourceControl of
-        NotAsked ->
-            text ""
-
-        Loading _ ->
+        SourceLoading _ ->
             section [ class "repository-source-control", attribute "role" "status" ]
                 [ span [ class "source-control-loading" ] [ text "Reading Git state…" ] ]
 
-        Failure _ error ->
+        SourceUnavailable _ error ->
             section [ class "repository-source-control" ]
                 [ span [ class "source-control-feedback is-error", attribute "role" "alert" ] [ text error ]
                 , button [ type_ "button", onClick RequestedSourceRefresh ] [ text "Retry" ]
                 ]
 
-        Success _ status ->
-            sourceReady model status
+        SourceReady source ->
+            sourceReady source
 
 
-sourceReady : Model -> SourceControlStatus -> Html Msg
-sourceReady model status =
+sourceReady : SourceSnapshot -> Html Msg
+sourceReady source =
     let
+        status =
+            source.status
+
         branchState =
             case status.checkout of
                 TrackingBranch checkout ->
@@ -597,14 +723,7 @@ sourceReady model status =
                     { branch = "", ahead = 0, behind = 0, canPull = False }
 
         busy =
-            List.member model.sourceAction [ Refreshing, Pulling ]
-                || (case model.sourceAction of
-                        Switching _ ->
-                            True
-
-                        _ ->
-                            False
-                   )
+            sourceBusy source.activity
     in
     section [ class "repository-source-control" ]
         [ label [ class "source-control-branch" ]
@@ -654,15 +773,18 @@ sourceReady model status =
                     ++ " untracked"
                 )
             ]
-        , sourceFeedback model.sourceAction status.path
+        , sourceFeedback source.activity status.path
         , button
             [ type_ "button", class "source-control-refresh", disabled busy, attribute "aria-label" "Refresh repository source control", onClick RequestedSourceRefresh ]
             [ text "↻" ]
         , button [ type_ "button", class "source-control-pull", disabled (busy || not branchState.canPull), onClick RequestedPull ]
             [ text
-                (case model.sourceAction of
-                    Pulling ->
+                (case source.activity of
+                    PullInFlight ->
                         "Pulling…"
+
+                    PullSynchronizing count ->
+                        pulledMessage count ++ " Refreshing status…"
 
                     _ ->
                         if branchState.behind > 0 then
@@ -675,14 +797,11 @@ sourceReady model status =
         ]
 
 
-sourceFeedback : SourceAction -> String -> Html Msg
+sourceFeedback : SourceActivity -> String -> Html Msg
 sourceFeedback action path =
     case action of
         SourceSucceeded message ->
             span [ class "source-control-feedback is-success" ] [ text message ]
-
-        SourceBlocked message ->
-            span [ class "source-control-feedback is-error" ] [ text message ]
 
         _ ->
             span [ class "source-control-path" ] [ text path ]
