@@ -138,6 +138,35 @@ test("renders a nested repository tree and a deep-linked local file without head
     scrollWidth: bar.scrollWidth,
   }));
   expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
+
+  const sourceLineLayout = await page
+    .locator(".source-line")
+    .first()
+    .evaluate((row) => {
+      const number = row.querySelector<HTMLElement>(".line-number");
+      const code = row.querySelector<HTMLElement>(".line-code");
+      if (!number || !code)
+        throw new Error("Expected a source gutter and code cell");
+      const rowRect = row.getBoundingClientRect();
+      const numberRect = number.getBoundingClientRect();
+      const codeRect = code.getBoundingClientRect();
+      return {
+        display: getComputedStyle(row).display,
+        rowHeight: rowRect.height,
+        numberTop: numberRect.top,
+        numberRight: numberRect.right,
+        codeTop: codeRect.top,
+        codeLeft: codeRect.left,
+      };
+    });
+  expect(sourceLineLayout.display).toBe("grid");
+  expect(
+    Math.abs(sourceLineLayout.numberTop - sourceLineLayout.codeTop),
+  ).toBeLessThan(1);
+  expect(sourceLineLayout.codeLeft).toBeGreaterThanOrEqual(
+    sourceLineLayout.numberRight - 1,
+  );
+  expect(sourceLineLayout.rowHeight).toBeLessThan(32);
 });
 
 test("shows loading instead of stale review data and preserves a single fetched revision across history", async ({

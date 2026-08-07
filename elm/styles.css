@@ -558,11 +558,26 @@
   }
 
   .repository-file-view pre {
-    @apply m-0 overflow-auto rounded-xl border border-line bg-paper p-4 text-xs leading-6 shadow-sm;
+    @apply m-0 overflow-auto rounded-xl border border-line bg-paper p-0 text-xs leading-6 shadow-sm;
   }
 
-  .source-line {
-    @apply block min-w-max;
+  .repository-source > code {
+    @apply block min-w-max py-2;
+  }
+
+  .repository-source .source-line {
+    @apply grid min-w-full;
+    grid-template-columns: 3.5rem max-content;
+  }
+
+  .repository-source .line-number {
+    @apply min-h-6 py-0.5 leading-5;
+  }
+
+  .repository-source .line-code {
+    @apply min-h-6 min-w-max py-0.5 leading-5;
+    overflow-wrap: normal;
+    white-space: pre;
   }
 
   .repository-search-match,

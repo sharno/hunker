@@ -152,6 +152,20 @@ update msg model =
                         _ ->
                             startRoute settings route { model | route = route }
 
+                Ready settings (RepositoryPage repository) ->
+                    case route of
+                        Route.Repository repositoryLocation ->
+                            let
+                                ( updated, effect ) =
+                                    Repository.navigate repositoryLocation repository
+                            in
+                            ( { model | route = route, state = Ready settings (RepositoryPage updated) }
+                            , Effect.map RepositoryMsg effect
+                            )
+
+                        _ ->
+                            startRoute settings route { model | route = route }
+
                 Ready settings _ ->
                     startRoute settings route { model | route = route }
 

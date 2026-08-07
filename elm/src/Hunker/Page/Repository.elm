@@ -2,6 +2,7 @@ module Hunker.Page.Repository exposing
     ( Model
     , Msg(..)
     , init
+    , navigate
     , repositoryName
     , subscriptions
     , toolbar
@@ -176,6 +177,177 @@ init location =
             ]
     in
     ( model, Effect.batch effects )
+
+
+navigate : Route.RepositoryLocation -> Model -> ( Model, Effect Msg )
+navigate nextLocation model =
+    if
+        nextLocation.owner
+            /= model.location.owner
+            || nextLocation.repository
+            /= model.location.repository
+    then
+        init nextLocation
+
+    else
+        navigateWithinRepository nextLocation model
+
+
+navigateWithinRepository : Route.RepositoryLocation -> Model -> ( Model, Effect Msg )
+navigateWithinRepository nextLocation model =
+    let
+        name =
+            repositoryName model
+
+        fileChanged =
+            nextLocation.path /= model.location.path
+
+        searchChanged =
+            nextLocation.query
+                /= model.location.query
+                || nextLocation.searchMode
+                /= model.location.searchMode
+
+        pullsChanged =
+            nextLocation.pullState /= model.location.pullState
+
+        loadCommits =
+            nextLocation.tab
+                == RepositoryCommits
+                && (case model.commits of
+                        NotAsked ->
+                            True
+
+                        _ ->
+                            False
+                   )
+
+        loadPulls =
+            nextLocation.tab
+                == RepositoryPulls
+                && (pullsChanged
+                        || (case model.pulls of
+                                NotAsked ->
+                                    True
+
+                                _ ->
+                                    False
+                           )
+                   )
+
+        selectedFile =
+            if not fileChanged then
+                model.selectedFile
+
+            else
+                case nextLocation.path of
+                    Just path ->
+                        Loading ( name, path )
+
+                    Nothing ->
+                        NotAsked
+
+        search =
+            if not searchChanged then
+                model.search
+
+            else if nextLocation.query == "" then
+                NotAsked
+
+            else
+                Loading ( name, nextLocation.query, nextLocation.searchMode )
+
+        commits =
+            if loadCommits then
+                Loading name
+
+            else
+                model.commits
+
+        pullRequest =
+            ( name, nextLocation.pullState, 1 )
+
+        pulls =
+            if loadPulls then
+                Loading pullRequest
+
+            else
+                model.pulls
+
+        updated =
+            { model
+                | location = nextLocation
+                , selectedFile = selectedFile
+                , search = search
+                , commits = commits
+                , pulls = pulls
+                , pullRows =
+                    if pullsChanged then
+                        []
+
+                    else
+                        model.pullRows
+                , pullHasMore =
+                    if pullsChanged then
+                        False
+
+                    else
+                        model.pullHasMore
+                , collapsedFolders = revealLocationPath nextLocation.path model
+                , searchDraft = nextLocation.query
+                , searchMode = nextLocation.searchMode
+            }
+
+        effects =
+            [ case nextLocation.path of
+                Just path ->
+                    if fileChanged then
+                        Api.fetchRepositoryFile name path (FileLoaded ( name, path )) (FileFailed ( name, path ))
+
+                    else
+                        Effect.none
+
+                Nothing ->
+                    Effect.none
+            , if searchChanged && nextLocation.query /= "" then
+                Api.searchRepository name
+                    nextLocation.query
+                    nextLocation.searchMode
+                    (SearchLoaded ( name, nextLocation.query, nextLocation.searchMode ))
+                    (SearchFailed ( name, nextLocation.query, nextLocation.searchMode ))
+
+              else
+                Effect.none
+            , if loadCommits then
+                Api.fetchRepositoryCommits name (CommitsLoaded name) (CommitsFailed name)
+
+              else
+                Effect.none
+            , if loadPulls then
+                Api.fetchRepositoryPulls name
+                    nextLocation.pullState
+                    1
+                    (PullsLoaded pullRequest)
+                    (PullsFailed pullRequest)
+
+              else
+                Effect.none
+            ]
+    in
+    ( updated, Effect.batch effects )
+
+
+revealLocationPath : Maybe String -> Model -> Set String
+revealLocationPath maybePath model =
+    case ( maybePath, model.files ) of
+        ( Just path, Success _ files ) ->
+            model.collapsedFolders
+                |> Set.toList
+                |> FileTree.reveal path
+                |> Set.fromList
+
+        _ ->
+            model.collapsedFolders
 
 
 repositoryName : Model -> String
@@ -945,7 +1117,7 @@ repositoryFileView syntaxHighlighting model =
                             |> String.lines
                             |> List.indexedMap
                                 (\index sourceLine ->
-                                    div [ class "source-line" ]
+                                    span [ class "source-line" ]
                                         [ span [ class "line-number" ] [ text (String.fromInt (index + 1)) ]
                                         , span [ class "line-code" ] (Syntax.line syntaxHighlighting file.path sourceLine)
                                         ]

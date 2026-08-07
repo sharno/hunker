@@ -89,6 +89,25 @@ suite =
                         , containing [ text "Pull 1 ↓" ]
                         , disabled False
                         ]
+        , test "opens a repository file without reloading the tree or Git status" <|
+            \() ->
+                startedAt "/mohamed-rdr/hunker"
+                    |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
+                    |> ProgramTest.simulateHttpOk "GET" "/api/repository/files?repository=mohamed-rdr%2Fhunker" repositoryFilesJson
+                    |> ProgramTest.simulateHttpOk "GET" sourceControlRequest (sourceControlJson 2)
+                    |> ProgramTest.clickButton "README.md"
+                    |> ProgramTest.ensureViewHas
+                        [ text "Opening README.md…"
+                        , text "README.md"
+                        , text "Pull 2 ↓"
+                        ]
+                    |> ProgramTest.ensureHttpRequestWasMade "GET" repositoryFileRequest
+                    |> ProgramTest.simulateHttpOk "GET" repositoryFileRequest repositoryFileJson
+                    |> ProgramTest.expectViewHas
+                        [ text "README.md"
+                        , text "Local file contents"
+                        , text "Pull 2 ↓"
+                        ]
         ]
 
 
@@ -190,6 +209,17 @@ repositoriesJson =
 repositoryFilesJson : String
 repositoryFilesJson =
     """{"files":[{"path":"README.md","size":10,"gitStatus":"clean"}]}"""
+
+
+repositoryFileRequest : String
+repositoryFileRequest =
+    "/api/repository/file?repository=mohamed-rdr%2Fhunker&path=README.md"
+
+
+repositoryFileJson : String
+repositoryFileJson =
+    """{"path":"README.md","content":"# Local file contents
+","truncated":false}"""
 
 
 sourceControlRequest : String
