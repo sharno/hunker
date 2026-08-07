@@ -1219,8 +1219,10 @@ commitRow commit =
             [ strong [] [ text commit.subject ]
             , span [] [ text (commit.authorName ++ " · " ++ commit.authoredAt) ]
             ]
-        , code [ class "commit-sha" ] [ text (String.left 7 commit.sha) ]
-        , span [ class "commit-open-arrow" ] [ text "→" ]
+        , span [ class "commit-action" ]
+            [ code [ class "commit-sha" ] [ text (String.left 7 commit.sha) ]
+            , span [ class "commit-open-arrow" ] [ text "→" ]
+            ]
         ]
 
 

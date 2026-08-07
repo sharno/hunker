@@ -552,9 +552,13 @@
   }
 
   .repository-file-heading h1,
-  .commits-heading h1,
+  .commits-heading h2,
   .repository-pulls-heading h1 {
     @apply m-0 min-w-0 truncate font-mono text-sm;
+  }
+
+  .commits-heading p {
+    @apply m-0 mt-1 text-xs text-muted;
   }
 
   .repository-file-view pre {
@@ -1104,6 +1108,30 @@
 
   .commit-row {
     grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .repository-commit-row {
+    @apply mb-0 min-h-0 py-2.5;
+  }
+
+  .repository-commit-row .commit-avatar {
+    @apply grid shrink-0 place-items-center font-mono text-[9px] font-bold text-slate-600;
+  }
+
+  .repository-commit-row .commit-copy {
+    @apply flex min-w-0 flex-col gap-0.5;
+  }
+
+  .repository-commit-row .commit-action {
+    @apply flex shrink-0 items-center gap-3;
+  }
+
+  .repository-commit-row .commit-sha {
+    @apply font-mono text-xs text-ink;
+  }
+
+  .repository-commit-row .commit-open-arrow {
+    @apply text-sm text-muted;
   }
 
   .commit-detail {

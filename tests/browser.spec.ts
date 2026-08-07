@@ -169,6 +169,34 @@ test("renders a nested repository tree and a deep-linked local file without head
   expect(sourceLineLayout.rowHeight).toBeLessThan(32);
 });
 
+test("keeps repository commit rows compact and aligned", async ({ page }) => {
+  await mockRepository(page);
+  await page.goto("/example/hunker/commits");
+
+  const rows = page.locator(".repository-commit-row");
+  await expect(rows).toHaveCount(2);
+  const layout = await rows.first().evaluate((row) => {
+    const avatar = row.querySelector<HTMLElement>(".commit-avatar");
+    const copy = row.querySelector<HTMLElement>(".commit-copy");
+    const action = row.querySelector<HTMLElement>(".commit-action");
+    if (!avatar || !copy || !action)
+      throw new Error("Expected all repository commit cells");
+    const rowRect = row.getBoundingClientRect();
+    const avatarRect = avatar.getBoundingClientRect();
+    const copyRect = copy.getBoundingClientRect();
+    const actionRect = action.getBoundingClientRect();
+    return {
+      height: rowRect.height,
+      avatarCenter: avatarRect.top + avatarRect.height / 2,
+      copyCenter: copyRect.top + copyRect.height / 2,
+      actionCenter: actionRect.top + actionRect.height / 2,
+    };
+  });
+  expect(layout.height).toBeLessThan(72);
+  expect(Math.abs(layout.avatarCenter - layout.copyCenter)).toBeLessThan(2);
+  expect(Math.abs(layout.actionCenter - layout.copyCenter)).toBeLessThan(2);
+});
+
 test("shows loading instead of stale review data and preserves a single fetched revision across history", async ({
   page,
 }) => {
@@ -311,6 +339,34 @@ async function mockRepository(page: Page) {
         path: "src/nested/greet.ts",
         content: 'export const greeting = "hello";\n',
         truncated: false,
+      },
+    }),
+  );
+  await page.route("**/api/repository/commits?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: {
+        ref: "main",
+        shallow: false,
+        commits: [
+          {
+            sha: "1111111111111111111111111111111111111111",
+            parents: [],
+            authorName: "Mohamed Elsharnouby",
+            authorEmail: "mohamed@example.com",
+            authoredAt: "2026-08-07T12:00:00-04:00",
+            subject: "Keep repository commit rows compact",
+          },
+          {
+            sha: "2222222222222222222222222222222222222222",
+            parents: ["1111111111111111111111111111111111111111"],
+            authorName: "Hunker Agent",
+            authorEmail: "agent@example.com",
+            authoredAt: "2026-08-07T11:00:00-04:00",
+            subject: "Add repository commit view",
+          },
+        ],
       },
     }),
   );
