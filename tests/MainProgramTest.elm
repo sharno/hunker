@@ -168,9 +168,6 @@ simulateEffect effect =
         AppEffect.After milliseconds message ->
             SimulatedTask.perform (always message) (SimulatedProcess.sleep milliseconds)
 
-        AppEffect.ReadScroll toMessage ->
-            SimulatedTask.perform identity (SimulatedTask.succeed (toMessage 0))
-
 
 decodeResponse : Decode.Decoder msg -> (String -> msg) -> Http.Response String -> msg
 decodeResponse decoder onError response =

@@ -59,7 +59,6 @@ type alias Model =
     , reviewSubmission : Remote String String String
     , inlineComposer : Maybe InlineComposer
     , inlineSubmission : Remote String String ReviewComment
-    , toolbarCompact : Bool
     }
 
 
@@ -132,8 +131,6 @@ type Msg
     | RevisionLoaded String Revision
     | RevisionFailed String String
     | PollRevision Time.Posix
-    | PollScroll Time.Posix
-    | ReadScroll Float
 
 
 init : Settings -> Route.ReviewLocation -> ( Model, Effect Msg )
@@ -178,7 +175,6 @@ init settings reviewLocation =
             , reviewSubmission = NotAsked
             , inlineComposer = Nothing
             , inlineSubmission = NotAsked
-            , toolbarCompact = False
             }
     in
     ( model, Api.fetchReview githubUrl (ReviewLoaded githubUrl) (ReviewFailed githubUrl) )
@@ -228,11 +224,13 @@ title model =
 
 
 subscriptions : Model -> Sub Msg
-subscriptions _ =
-    Sub.batch
-        [ Time.every 120000 PollRevision
-        , Time.every 200 PollScroll
-        ]
+subscriptions model =
+    case model.location.target of
+        PullRequest _ _ _ ->
+            Time.every 120000 PollRevision
+
+        _ ->
+            Sub.none
 
 
 update : Msg -> Model -> ( Model, Effect Msg )
@@ -624,12 +622,6 @@ update msg model =
         PollRevision _ ->
             revisionCheck model
 
-        PollScroll _ ->
-            ( model, Effect.ReadScroll ReadScroll )
-
-        ReadScroll scrollY ->
-            ( { model | toolbarCompact = scrollY > 100 }, Effect.none )
-
 
 reviewReady : ReviewData -> Model -> ( Model, Effect Msg )
 reviewReady reviewData model =
@@ -689,7 +681,6 @@ reviewReady reviewData model =
         , analysisEffects updated
         , commentsEffect updated
         , revisionEffect updated
-        , Effect.ReadScroll ReadScroll
         ]
     )
 
@@ -789,21 +780,21 @@ commentsEffect model =
 
 revisionEffect : Model -> Effect Msg
 revisionEffect model =
-    case readyReview model of
-        Just reviewData ->
+    case ( model.location.target, readyReview model ) of
+        ( PullRequest _ _ _, Just reviewData ) ->
             Api.checkRevision model.requestUrl reviewData.backing.headOid (RevisionLoaded model.requestUrl) (RevisionFailed model.requestUrl)
 
-        Nothing ->
+        _ ->
             Effect.none
 
 
 revisionCheck : Model -> ( Model, Effect Msg )
 revisionCheck model =
-    case readyReview model of
-        Just _ ->
+    case ( model.location.target, readyReview model ) of
+        ( PullRequest _ _ _, Just _ ) ->
             ( { model | revision = Loading model.requestUrl }, revisionEffect model )
 
-        Nothing ->
+        _ ->
             unchanged model
 
 
@@ -1016,16 +1007,7 @@ revisionNotice revision =
 reviewToolbar : Model -> Html Msg
 reviewToolbar model =
     section
-        [ class
-            ("compact-review-toolbar "
-                ++ (if model.toolbarCompact then
-                        "is-compact"
-
-                    else
-                        "is-expanded"
-                   )
-            )
-        ]
+        [ class "compact-review-toolbar" ]
         [ div [ class "review-tab-picker" ]
             [ segment (model.location.tab == ReviewFiles) (SelectedTab ReviewFiles) "Files"
             , if Route.isPullRequest model.location.target then

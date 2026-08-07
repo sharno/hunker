@@ -252,6 +252,42 @@ test("shows loading instead of stale review data and preserves a single fetched 
   expect(lineLayout.overflowWrap).toBe("anywhere");
   expect(lineLayout.whiteSpace).toBe("break-spaces");
 
+  const sidebarHeaderLayout = await page
+    .locator(".file-sidebar")
+    .evaluate((sidebar) => {
+      const count = sidebar.querySelector<HTMLElement>(".count-badge");
+      const toggle = sidebar.querySelector<HTMLElement>(".sidebar-toggle");
+      if (!count || !toggle)
+        throw new Error("Expected sidebar count and collapse control");
+      return {
+        countRight: count.getBoundingClientRect().right,
+        toggleLeft: toggle.getBoundingClientRect().left,
+      };
+    });
+  expect(sidebarHeaderLayout.countRight).toBeLessThanOrEqual(
+    sidebarHeaderLayout.toggleLeft,
+  );
+
+  await page.getByLabel("Diff scope").selectOption("full");
+  await expect(page.locator(".review-diffs.full-diff .diff-panel")).toHaveCount(
+    2,
+  );
+  await expect(page.locator(".diff-panel").first()).toHaveCSS(
+    "content-visibility",
+    "auto",
+  );
+  const toolbar = page.locator(".compact-review-toolbar");
+  const toolbarHeight = await toolbar.evaluate(
+    (element) => element.getBoundingClientRect().height,
+  );
+  await page.evaluate(() => {
+    document.body.style.minHeight = "3000px";
+    window.scrollTo(0, 1200);
+  });
+  await page.waitForTimeout(300);
+  await expect(toolbar).toHaveCSS("height", `${toolbarHeight}px`);
+  await expect(toolbar).not.toHaveClass(/is-compact|is-expanded/);
+
   await page
     .locator(".file-sidebar")
     .getByRole("button", { name: /other\.ts/ })
@@ -262,6 +298,37 @@ test("shows loading instead of stale review data and preserves a single fetched 
   await page.goForward();
   await expect(page).toHaveURL("/example/hunker/pull/42/files/src/other.ts");
   expect(reviewRequests).toBe(1);
+});
+
+test("does not poll mutable revision state for an immutable commit", async ({
+  page,
+}) => {
+  const sha = "2222222222222222222222222222222222222222";
+  let revisionRequests = 0;
+  await page.route("**/api/diff?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: reviewResponse,
+    }),
+  );
+  await mockReviewAnalysis(page);
+  await page.route("**/api/revision?**", (route) => {
+    revisionRequests += 1;
+    return route.fulfill({
+      status: 400,
+      contentType: "application/json",
+      json: { error: "Immutable commits do not have a latest revision." },
+    });
+  });
+
+  await page.goto(`/example/hunker/commit/${sha}`);
+  await expect(
+    page.getByRole("heading", { name: "Improve the greeting" }),
+  ).toBeVisible();
+  await page.waitForTimeout(300);
+  expect(revisionRequests).toBe(0);
+  await expect(page.locator(".revision-notice")).toHaveCount(0);
 });
 
 test("posts an inline line comment through the real browser Fetch transport", async ({

@@ -26,7 +26,6 @@ type Effect msg
     | LoadExternal String
     | Focus String msg
     | After Float msg
-    | ReadScroll (Float -> msg)
 
 
 type alias HttpRequest msg =
@@ -123,9 +122,6 @@ map transform effect =
         After milliseconds message ->
             After milliseconds (transform message)
 
-        ReadScroll toMessage ->
-            ReadScroll (toMessage >> transform)
-
 
 perform : Navigation.Key -> Effect msg -> Cmd msg
 perform key effect =
@@ -163,10 +159,6 @@ perform key effect =
         After milliseconds message ->
             Process.sleep milliseconds
                 |> Task.perform (always message)
-
-        ReadScroll toMessage ->
-            Browser.Dom.getViewport
-                |> Task.perform (.viewport >> .y >> toMessage)
 
 
 expectJson : Decode.Decoder msg -> (String -> msg) -> Http.Expect msg

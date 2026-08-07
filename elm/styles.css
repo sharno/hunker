@@ -665,7 +665,8 @@
   }
 
   .review-header {
-    @apply relative flex items-end justify-between gap-8 border-b border-line bg-paper/95 px-7 py-5;
+    @apply relative grid items-end gap-x-8 gap-y-3 border-b border-line bg-paper/95 px-7 py-5;
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .review-header-copy {
@@ -722,7 +723,11 @@
   }
 
   .revision-notice {
-    @apply absolute right-6 bottom-[-14px] z-20 flex items-center gap-2 rounded-full border border-lime-dark bg-lime px-3 py-1.5 text-[10px] font-bold shadow;
+    @apply col-span-full flex items-center justify-self-end gap-2 rounded-full border border-lime-dark bg-lime px-3 py-1.5 text-[10px] font-bold shadow;
+  }
+
+  .revision-notice.is-error {
+    @apply border-red-300 bg-red-50 text-red-800;
   }
 
   .revision-notice button {
@@ -730,11 +735,7 @@
   }
 
   .compact-review-toolbar {
-    @apply sticky top-16 z-30 flex h-[54px] min-w-0 items-center gap-3 border-b border-slate-700 bg-ink px-4 text-white shadow-md transition-[height] duration-150;
-  }
-
-  .compact-review-toolbar.is-compact {
-    @apply h-11;
+    @apply sticky top-16 z-30 flex h-11 min-w-0 items-center gap-3 border-b border-slate-700 bg-ink px-4 text-white shadow-md;
   }
 
   .review-tab-picker {
@@ -806,7 +807,7 @@
   }
 
   .file-sidebar > div > header {
-    @apply flex items-center justify-between border-b border-line px-4 py-3;
+    @apply flex items-center justify-between border-b border-line py-3 pr-12 pl-4;
   }
 
   .sidebar-toggle {
@@ -823,6 +824,11 @@
 
   .diff-panel {
     @apply min-w-0 overflow-hidden rounded-xl border border-line bg-paper shadow-sm;
+  }
+
+  .review-diffs.full-diff .diff-panel {
+    content-visibility: auto;
+    contain-intrinsic-block-size: auto 480px;
   }
 
   .diff-panel.is-active {
@@ -1171,8 +1177,12 @@
   }
 
   .review-header {
-    align-items: flex-start;
-    flex-direction: column;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .review-summary,
+  .revision-notice {
+    justify-self: start;
   }
 
   .diff-options .filter-toggle:nth-of-type(n + 3) {
