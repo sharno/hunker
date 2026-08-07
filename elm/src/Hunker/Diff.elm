@@ -5,6 +5,7 @@ module Hunker.Diff exposing
     , SideLine
     , SplitRow
     , fullFileRows
+    , fullFileRowsPrepared
     , parsePatch
     , splitRows
     )
@@ -327,12 +328,17 @@ rightLine line =
 
 fullFileRows : String -> String -> String -> List SplitRow
 fullFileRows patch oldText newText =
+    fullFileRowsPrepared (parsePatch patch) oldText newText
+
+
+fullFileRowsPrepared : List Hunk -> String -> String -> List SplitRow
+fullFileRowsPrepared hunks oldText newText =
     stitchFullFile
         (String.lines oldText)
         (String.lines newText)
         1
         1
-        (parsePatch patch)
+        hunks
 
 
 stitchFullFile : List String -> List String -> Int -> Int -> List Hunk -> List SplitRow

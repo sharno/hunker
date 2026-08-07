@@ -305,6 +305,11 @@ test("does not poll mutable revision state for an immutable commit", async ({
 }) => {
   const sha = "2222222222222222222222222222222222222222";
   let revisionRequests = 0;
+  let analysisRequests = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/analysis")
+      analysisRequests += 1;
+  });
   await page.route("**/api/diff?**", (route) =>
     route.fulfill({
       status: 200,
@@ -326,8 +331,12 @@ test("does not poll mutable revision state for an immutable commit", async ({
   await expect(
     page.getByRole("heading", { name: "Improve the greeting" }),
   ).toBeVisible();
+  await expect(page).toHaveURL(
+    `/example/hunker/commit/${sha}?file=src%2Flong.ts`,
+  );
   await page.waitForTimeout(300);
   expect(revisionRequests).toBe(0);
+  expect(analysisRequests).toBe(1);
   await expect(page.locator(".revision-notice")).toHaveCount(0);
 });
 
@@ -462,36 +471,41 @@ async function mockRepository(page: Page) {
 }
 
 async function mockReviewAnalysis(page: Page) {
-  await page.route("**/api/semantic?**", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      json: {
+  await page.route("**/api/analysis?**", (route) => {
+    const query = new URL(route.request().url()).searchParams;
+    const file = (path: string) => ({
+      path,
+      semantic: {
         _tag: "Unsupported",
-        path: new URL(route.request().url()).searchParams.get("path"),
+        path,
         reason: "Fixture uses patch fallback.",
       },
-    }),
-  );
-  await page.route("**/api/characters?**", (route) =>
-    route.fulfill({
+      wordDiff: {
+        path,
+        ignoreWhitespace: query.get("whitespace") === "ignore",
+        mode: query.get("mode"),
+        rows: [],
+      },
+    });
+    return route.fulfill({
       status: 200,
       contentType: "application/json",
       json: {
-        path: new URL(route.request().url()).searchParams.get("path"),
-        ignoreWhitespace: true,
-        mode: "token",
-        rows: [],
+        key: {
+          repository: "example/hunker",
+          baseOid: query.get("baseOid"),
+          headOid: query.get("headOid"),
+          options: {
+            ignoreWhitespace: query.get("whitespace") === "ignore",
+            semantic: query.get("semantic") === "true",
+            inlineDiff: query.get("mode"),
+          },
+        },
+        files: [file("src/long.ts"), file("src/other.ts")],
+        moves: [],
       },
-    }),
-  );
-  await page.route("**/api/moves?**", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      json: { moves: [] },
-    }),
-  );
+    });
+  });
   await page.route("**/api/reviews?**", (route) =>
     route.fulfill({
       status: 200,

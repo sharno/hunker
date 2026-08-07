@@ -1,3 +1,4 @@
+mod analysis;
 mod character_diff;
 mod command;
 mod diff;
@@ -17,12 +18,10 @@ use axum::{
     http::{HeaderValue, Method},
     routing::{get, post},
 };
-use futures::{StreamExt, stream};
 use serde::Deserialize;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
 use crate::{
-    character_diff::DiffMode,
     error::{AppError, AppResult},
     github::{GitHub, GitHubTarget, InlineCommentInput, parse_url},
     local::Local,
@@ -31,6 +30,7 @@ use crate::{
 
 #[derive(Clone)]
 struct AppState {
+    analysis: analysis::AnalysisCache,
     github: GitHub,
     local: Local,
 }
@@ -44,6 +44,7 @@ async fn main() -> AppResult<()> {
         )
         .init();
     let state = Arc::new(AppState {
+        analysis: analysis::AnalysisCache::default(),
         github: GitHub::new().await?,
         local: Local::default(),
     });
@@ -78,9 +79,7 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/repository/branch", post(switch_repository_branch))
         .route("/api/repository/pull", post(pull_repository))
         .route("/api/file", get(get_file))
-        .route("/api/characters", get(get_characters))
-        .route("/api/semantic", get(get_semantic))
-        .route("/api/moves", get(get_moves))
+        .route("/api/analysis", get(get_analysis))
         .route("/api/reviews", get(get_reviews))
         .route("/api/reviews/comment", post(post_review_comment))
         .route("/api/reviews/reply", post(post_review_reply))
@@ -469,133 +468,54 @@ async fn get_file(
 }
 
 #[derive(Deserialize)]
-struct CharacterQuery {
-    #[serde(flatten)]
-    file: FileQuery,
-    whitespace: Option<String>,
-    mode: Option<String>,
-}
-async fn get_characters(
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<CharacterQuery>,
-) -> AppResult<Json<character_diff::CharacterDiffResult>> {
-    let target = parse_url(&query.file.url)?;
-    let pair = file_pair(&state, &target, &query.file).await?;
-    let mode = if query.mode.as_deref() == Some("character") {
-        DiffMode::Character
-    } else {
-        DiffMode::Token
-    };
-    Ok(Json(
-        character_diff::analyze(
-            &pair.path,
-            &pair.old_text,
-            &pair.new_text,
-            query.whitespace.as_deref() == Some("ignore"),
-            mode,
-        )
-        .await?,
-    ))
-}
-
-async fn get_semantic(
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<FileQuery>,
-) -> AppResult<Json<semantic::SemanticResult>> {
-    let target = parse_url(&query.url)?;
-    let pair = file_pair(&state, &target, &query).await?;
-    Ok(Json(semantic::analyze_file(&pair)))
-}
-
-#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct MovesQuery {
+struct AnalysisQuery {
     url: String,
-    base_oid: Option<String>,
-    head_oid: Option<String>,
+    base_oid: String,
+    head_oid: String,
+    whitespace: String,
+    semantic: bool,
+    mode: String,
 }
-async fn get_moves(
+async fn get_analysis(
     State(state): State<Arc<AppState>>,
-    Query(query): Query<MovesQuery>,
-) -> AppResult<Json<serde_json::Value>> {
+    Query(query): Query<AnalysisQuery>,
+) -> AppResult<Json<analysis::AnalysisSnapshot>> {
     let target = parse_url(&query.url)?;
-    let pinned = match (&query.base_oid, &query.head_oid) {
-        (Some(base), Some(head)) if local::valid_oid(base) && local::valid_oid(head) => {
-            Some((base.as_str(), head.as_str()))
+    if !local::valid_oid(&query.base_oid) || !local::valid_oid(&query.head_oid) {
+        return Err(AppError::bad_request(
+            "Analysis requires immutable base and head OIDs.",
+        ));
+    }
+    let ignore_whitespace = match query.whitespace.as_str() {
+        "ignore" => true,
+        "show" => false,
+        _ => {
+            return Err(AppError::bad_request(
+                "Whitespace mode must be ignore or show.",
+            ));
         }
-        _ => None,
     };
-    let diff = if let Some((base, head)) = pinned {
-        match state.local.load_diff(&target, base, head).await {
-            Ok(Some((_, diff))) => diff,
-            _ => state.github.revision_diff(&target, base, head).await?,
-        }
-    } else {
-        state.github.review_diff(&target).await?
-    };
-    let files = diff::parse_git_diff(&diff)
-        .into_iter()
-        .filter(|file| file.patch.contains("@@") && !diff::generated(&file.path))
-        .collect::<Vec<_>>();
-    let Some(refs) = pinned else {
-        let metadata = state.github.metadata(&target).await?;
-        return get_moves_at_refs(
-            &state,
-            &target,
-            files,
-            &metadata.base_oid,
-            &metadata.head_oid,
-        )
-        .await;
-    };
-    get_moves_at_refs(&state, &target, files, refs.0, refs.1).await
-}
-
-async fn get_moves_at_refs(
-    state: &AppState,
-    target: &GitHubTarget,
-    files: Vec<types::FileChange>,
-    base: &str,
-    head: &str,
-) -> AppResult<Json<serde_json::Value>> {
-    let pairs = stream::iter(files)
-        .map(|file| async move {
-            match state
-                .local
-                .load_file_pair(
-                    target,
-                    base,
-                    head,
-                    &file.path,
-                    &file.previous_path,
-                    file.status,
-                )
-                .await
-            {
-                Ok(Some(pair)) => Ok(pair),
-                _ => {
-                    state
-                        .github
-                        .file_pair(
-                            target,
-                            base,
-                            head,
-                            &file.path,
-                            &file.previous_path,
-                            file.status,
-                        )
-                        .await
-                }
-            }
+    let key = analysis::AnalysisSnapshotKey::new(
+        &target.repository(),
+        query.base_oid,
+        query.head_oid,
+        analysis::AnalysisOptions {
+            ignore_whitespace,
+            semantic: query.semantic,
+            inline_diff: analysis::InlineDiff::from_query(&query.mode)?,
+        },
+    );
+    let build_key = key.clone();
+    let local = state.local.clone();
+    let github = state.github.clone();
+    let snapshot = state
+        .analysis
+        .get_or_build(key, || async move {
+            analysis::build(&local, &github, &target, build_key).await
         })
-        .buffer_unordered(6)
-        .collect::<Vec<AppResult<FilePair>>>()
-        .await
-        .into_iter()
-        .collect::<AppResult<Vec<_>>>()?;
-    Ok(Json(
-        serde_json::json!({"moves": semantic::analyze_review(&pairs)}),
-    ))
+        .await?;
+    Ok(Json(snapshot.as_ref().clone()))
 }
 
 async fn get_reviews(
@@ -686,6 +606,7 @@ mod tests {
     #[tokio::test]
     async fn exposes_every_frontend_route() {
         let _router = router(Arc::new(AppState {
+            analysis: analysis::AnalysisCache::default(),
             github: GitHub::new().await.unwrap(),
             local: Local::default(),
         }));

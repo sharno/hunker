@@ -50,6 +50,12 @@
   destination anchors; color and navigation derive from that identity.
 - Tailwind v4 is CSS-first in `elm/styles.css`. Keep semantic class names for
   stable state selectors, and validate the stylesheet through the Rust build.
+- Prepare immutable hunks when a diff loads and index inline ranges by side and
+  line before rendering. Never parse patches or linearly scan all word-diff rows
+  inside a per-line view function.
+- Exercise a 100+ file, 10k+ changed-line fixture before shipping review data
+  pipeline changes. One route must issue one analysis request and apply one
+  model update for one immutable snapshot.
 
 ## Rust server
 
@@ -61,6 +67,13 @@
 - Read Git diffs, commits, and files from immutable OIDs. Worktree branch
   mutations are explicit repository actions; never switch a checkout merely to
   render a review.
+- Key analysis snapshots by repository, base OID, head OID, and options. Load
+  local blobs with one `git cat-file --batch` process and reuse the resulting
+  file pairs for word diff, AST analysis, and whole-review move detection. Do
+  not introduce per-file analysis endpoint fan-out.
+- Parse Git diff boundaries only at line-start `diff --git` headers and infer
+  status/rename metadata only before the first hunk. Changed source can itself
+  contain diff headers and mode strings.
 - Let Git decide whether checkout mutations are safe. Serialize them per
   repository, use `git switch` and fast-forward-only pulls, surface refusal, and
   refresh cached reads only after success.

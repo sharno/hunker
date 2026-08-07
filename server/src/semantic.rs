@@ -447,6 +447,7 @@ fn located_units(files: &[FilePair], old: bool) -> Vec<LocatedUnit> {
     files
         .iter()
         .enumerate()
+        .filter(|(_, file)| !crate::diff::generated(&file.path))
         .flat_map(|(pair_index, file)| {
             let Some(language) = language_for_path(&file.path) else {
                 return Vec::new();
@@ -647,7 +648,7 @@ fn longest_increasing(values: &[usize]) -> HashSet<usize> {
     result
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "_tag")]
 pub enum SemanticResult {
     Parsed {
@@ -667,7 +668,7 @@ pub enum SemanticResult {
         reason: String,
     },
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "_tag")]
 pub enum SemanticChange {
     Inserted {
@@ -706,7 +707,7 @@ pub enum SemanticChange {
         confidence: f64,
     },
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MovedBlock {
     pub from_path: String,

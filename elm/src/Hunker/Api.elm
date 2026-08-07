@@ -1,17 +1,15 @@
 module Hunker.Api exposing
     ( checkRevision
     , cloneRepository
-    , fetchCharacterDiff
+    , fetchAnalysis
     , fetchCommits
     , fetchFullFile
-    , fetchMoves
     , fetchRepositoryCommits
     , fetchRepositoryFile
     , fetchRepositoryFiles
     , fetchRepositoryPulls
     , fetchReview
     , fetchReviewComments
-    , fetchSemantic
     , listRepositories
     , loadSettings
     , postInlineComment
@@ -180,11 +178,33 @@ saveSettings settings succeeded failed =
         failed
 
 
-fetchSemantic : String -> Review.FileChange -> Review.ReviewBacking -> (Review.SemanticResult -> msg) -> (String -> msg) -> Effect msg
-fetchSemantic githubUrl file backing succeeded failed =
+fetchAnalysis : String -> Review.ReviewBacking -> Bool -> Bool -> String -> (Review.AnalysisSnapshot -> msg) -> (String -> msg) -> Effect msg
+fetchAnalysis githubUrl backing ignoreWhitespace semantic inlineDiff succeeded failed =
     Effect.get
-        ("/api/semantic?" ++ fileQuery githubUrl file backing)
-        (Decode.map succeeded Review.semanticDecoder)
+        ("/api/analysis?url="
+            ++ encode githubUrl
+            ++ "&baseOid="
+            ++ encode backing.baseOid
+            ++ "&headOid="
+            ++ encode backing.headOid
+            ++ "&whitespace="
+            ++ (if ignoreWhitespace then
+                    "ignore"
+
+                else
+                    "show"
+               )
+            ++ "&semantic="
+            ++ (if semantic then
+                    "true"
+
+                else
+                    "false"
+               )
+            ++ "&mode="
+            ++ encode inlineDiff
+        )
+        (Decode.map succeeded Review.analysisSnapshotDecoder)
         failed
 
 
@@ -193,39 +213,6 @@ fetchFullFile githubUrl file backing succeeded failed =
     Effect.get
         ("/api/file?" ++ fileQuery githubUrl file backing)
         (Decode.map succeeded Review.fullFileDecoder)
-        failed
-
-
-fetchCharacterDiff : String -> Review.FileChange -> Review.ReviewBacking -> Bool -> String -> (Review.CharacterDiff -> msg) -> (String -> msg) -> Effect msg
-fetchCharacterDiff githubUrl file backing ignoreWhitespace mode succeeded failed =
-    Effect.get
-        ("/api/characters?"
-            ++ fileQuery githubUrl file backing
-            ++ "&whitespace="
-            ++ (if ignoreWhitespace then
-                    "ignore"
-
-                else
-                    "show"
-               )
-            ++ "&mode="
-            ++ encode mode
-        )
-        (Decode.map succeeded Review.characterDiffDecoder)
-        failed
-
-
-fetchMoves : String -> Review.ReviewBacking -> (List Review.MovedBlock -> msg) -> (String -> msg) -> Effect msg
-fetchMoves githubUrl backing succeeded failed =
-    Effect.get
-        ("/api/moves?url="
-            ++ encode githubUrl
-            ++ "&baseOid="
-            ++ encode backing.baseOid
-            ++ "&headOid="
-            ++ encode backing.headOid
-        )
-        (Decode.map succeeded Review.movedBlocksDecoder)
         failed
 
 

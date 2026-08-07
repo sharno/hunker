@@ -16,11 +16,12 @@ import Html.Attributes exposing (attribute, checked, class, disabled, href, id, 
 import Html.Events exposing (onCheck, onClick, onInput, onSubmit)
 import Hunker.Api as Api
 import Hunker.Diff as Diff exposing (DiffLine, Hunk, Kind(..), SideLine, SplitRow)
-import Hunker.Domain.Review as Review exposing (CharacterDiff, CharacterRange, FileChange, FullFile, MovedBlock, PullCommit, ReviewComment, ReviewData, Revision, SemanticChange(..), SemanticResult(..))
+import Hunker.Domain.Review as Review exposing (AnalysisSnapshot, CharacterRange, FileChange, FullFile, MovedBlock, PullCommit, ReviewComment, ReviewData, Revision, SemanticChange(..), SemanticResult(..))
 import Hunker.Domain.Settings as Settings exposing (InlineDiffMode(..), ReviewScope(..), Settings, ViewMode(..))
 import Hunker.Effect as Effect exposing (Effect)
 import Hunker.FileTree as FileTree exposing (Tree(..))
-import Hunker.Remote exposing (Remote(..))
+import Hunker.PreparedDiff as PreparedDiff exposing (PreparedFile)
+import Hunker.Remote as Remote exposing (Remote(..))
 import Hunker.Route as Route exposing (ReviewTab(..), ReviewTarget(..))
 import Hunker.SemanticMove as SemanticMove exposing (Endpoint(..))
 import Hunker.Syntax as Syntax
@@ -37,11 +38,10 @@ type alias Model =
     , pullUrl : String
     , review : Remote String String ReviewData
     , files : List FileChange
+    , preparedFiles : Dict String PreparedFile
     , pullRequestFiles : List FileChange
     , commits : Remote String String (List PullCommit)
-    , semantic : Dict String (Remote String String SemanticResult)
-    , moves : Remote String String (List MovedBlock)
-    , characterDiffs : Dict String (Remote String String CharacterDiff)
+    , analysis : Remote AnalysisIdentity String AnalysisSnapshot
     , fullFiles : Dict String (Remote String String FullFile)
     , comments : Remote String String (List ReviewComment)
     , revision : Remote String String Revision
@@ -65,6 +65,16 @@ type alias Model =
 type SearchMode
     = Literal
     | Regex
+
+
+type alias AnalysisIdentity =
+    { requestUrl : String
+    , baseOid : String
+    , headOid : String
+    , ignoreWhitespace : Bool
+    , semantic : Bool
+    , inlineDiff : String
+    }
 
 
 type alias InlineComposer =
@@ -97,12 +107,8 @@ type Msg
     | ToggledReviews Bool
     | SettingsSaved
     | SettingsSaveFailed String
-    | SemanticLoaded String String SemanticResult
-    | SemanticFailed String String String
-    | MovesLoaded String (List MovedBlock)
-    | MovesFailed String String
-    | CharacterLoaded String String CharacterDiff
-    | CharacterFailed String String String
+    | AnalysisLoaded AnalysisIdentity AnalysisSnapshot
+    | AnalysisFailed AnalysisIdentity String
     | FullFileLoaded String String FullFile
     | FullFileFailed String String String
     | ToggledFullFile FileChange
@@ -153,11 +159,10 @@ init settings reviewLocation =
             , pullUrl = pullUrl
             , review = Loading githubUrl
             , files = []
+            , preparedFiles = Dict.empty
             , pullRequestFiles = []
             , commits = NotAsked
-            , semantic = Dict.empty
-            , moves = NotAsked
-            , characterDiffs = Dict.empty
+            , analysis = NotAsked
             , fullFiles = Dict.empty
             , comments = NotAsked
             , revision = NotAsked
@@ -204,7 +209,7 @@ navigate nextLocation model =
         ( updated, Effect.none )
 
     else
-        ( markAnalysisLoading updated, analysisEffects updated )
+        ( updated, Effect.none )
 
 
 title : Model -> String
@@ -245,7 +250,7 @@ update msg model =
 
         ReviewFailed requested error ->
             if requested == model.requestUrl then
-                ( { model | review = Failure requested error, files = [], pullRequestFiles = [] }, Effect.none )
+                ( { model | review = Failure requested error, files = [], preparedFiles = Dict.empty, pullRequestFiles = [] }, Effect.none )
 
             else
                 unchanged model
@@ -254,9 +259,8 @@ update msg model =
             ( { model
                 | review = Loading model.requestUrl
                 , files = []
-                , semantic = Dict.empty
-                , moves = NotAsked
-                , characterDiffs = Dict.empty
+                , preparedFiles = Dict.empty
+                , analysis = NotAsked
                 , fullFiles = Dict.empty
                 , comments = NotAsked
               }
@@ -324,7 +328,7 @@ update msg model =
                 updated =
                     { model | settings = mapSettings (\settings -> { settings | reviewScope = scope }) model }
             in
-            saveSettingsWith (analysisEffects updated) updated
+            saveSettings updated
 
         SelectedViewMode mode ->
             saveSettings { model | settings = mapSettings (\settings -> { settings | viewMode = mode }) model }
@@ -332,23 +336,23 @@ update msg model =
         ToggledWhitespace value ->
             let
                 updated =
-                    { model | settings = mapSettings (\settings -> { settings | ignoreWhitespace = value }) model, characterDiffs = Dict.empty }
+                    { model | settings = mapSettings (\settings -> { settings | ignoreWhitespace = value }) model }
             in
-            saveSettingsWith (characterEffects updated) updated
+            beginAnalysisAndSave updated
 
         ToggledSemantic value ->
             let
                 updated =
                     { model | settings = mapSettings (\settings -> { settings | semantic = value }) model }
             in
-            saveSettingsWith (analysisEffects updated) updated
+            beginAnalysisAndSave updated
 
         SelectedInlineMode mode ->
             let
                 updated =
-                    { model | settings = mapSettings (\settings -> { settings | inlineDiffMode = mode }) model, characterDiffs = Dict.empty }
+                    { model | settings = mapSettings (\settings -> { settings | inlineDiffMode = mode }) model }
             in
-            saveSettingsWith (characterEffects updated) updated
+            beginAnalysisAndSave updated
 
         ToggledSyntax value ->
             saveSettings { model | settings = mapSettings (\settings -> { settings | syntaxHighlighting = value }) model }
@@ -373,44 +377,21 @@ update msg model =
         SettingsSaveFailed error ->
             ( { model | reviewSubmission = Failure "settings" error }, Effect.none )
 
-        SemanticLoaded requested path result ->
-            if requested == model.pullUrl then
-                ( { model | semantic = Dict.insert path (Success requested result) model.semantic }, Effect.none )
+        AnalysisLoaded requested snapshot ->
+            if Just requested == Remote.identity model.analysis then
+                ( { model
+                    | analysis = Success requested snapshot
+                    , preparedFiles = applyAnalysis snapshot model.preparedFiles
+                  }
+                , Effect.none
+                )
 
             else
                 unchanged model
 
-        SemanticFailed requested path error ->
-            if requested == model.pullUrl then
-                ( { model | semantic = Dict.insert path (Failure requested error) model.semantic }, Effect.none )
-
-            else
-                unchanged model
-
-        MovesLoaded requested moves ->
-            if requested == model.requestUrl then
-                ( { model | moves = Success requested moves }, Effect.none )
-
-            else
-                unchanged model
-
-        MovesFailed requested error ->
-            if requested == model.requestUrl then
-                ( { model | moves = Failure requested error }, Effect.none )
-
-            else
-                unchanged model
-
-        CharacterLoaded requested path result ->
-            if requested == model.requestUrl then
-                ( { model | characterDiffs = Dict.insert path (Success requested result) model.characterDiffs }, Effect.none )
-
-            else
-                unchanged model
-
-        CharacterFailed requested path error ->
-            if requested == model.requestUrl then
-                ( { model | characterDiffs = Dict.insert path (Failure requested error) model.characterDiffs }, Effect.none )
+        AnalysisFailed requested error ->
+            if Just requested == Remote.identity model.analysis then
+                ( { model | analysis = Failure requested error }, Effect.none )
 
             else
                 unchanged model
@@ -650,6 +631,10 @@ reviewReady reviewData model =
             { model
                 | review = Success model.requestUrl reviewData
                 , files = files
+                , preparedFiles =
+                    files
+                        |> List.map (\file -> ( file.path, PreparedDiff.prepare file ))
+                        |> Dict.fromList
                 , pullRequestFiles = files
                 , location = updatedLocation
                 , commits =
@@ -674,99 +659,88 @@ reviewReady reviewData model =
             else
                 Effect.none
     in
-    ( markAnalysisLoading updated
+    let
+        ( analyzing, analysisEffect ) =
+            beginAnalysis updated
+    in
+    ( analyzing
     , Effect.batch
         [ canonical
         , commitsEffect
-        , analysisEffects updated
-        , commentsEffect updated
-        , revisionEffect updated
+        , analysisEffect
+        , commentsEffect analyzing
+        , revisionEffect analyzing
         ]
     )
 
 
-markAnalysisLoading : Model -> Model
-markAnalysisLoading model =
+beginAnalysis : Model -> ( Model, Effect Msg )
+beginAnalysis model =
+    case readyReview model of
+        Nothing ->
+            ( model, Effect.none )
+
+        Just reviewData ->
+            if not model.settings.semantic && model.settings.inlineDiffMode == InlineOff then
+                ( { model
+                    | analysis = NotAsked
+                    , preparedFiles = Dict.map (\_ prepared -> PreparedDiff.clearWordRanges prepared) model.preparedFiles
+                  }
+                , Effect.none
+                )
+
+            else
+                let
+                    identity =
+                        analysisIdentity model reviewData
+
+                    cleared =
+                        Dict.map (\_ prepared -> PreparedDiff.clearWordRanges prepared) model.preparedFiles
+                in
+                ( { model | analysis = Loading identity, preparedFiles = cleared }
+                , Api.fetchAnalysis model.requestUrl
+                    reviewData.backing
+                    model.settings.ignoreWhitespace
+                    model.settings.semantic
+                    identity.inlineDiff
+                    (AnalysisLoaded identity)
+                    (AnalysisFailed identity)
+                )
+
+
+beginAnalysisAndSave : Model -> ( Model, Effect Msg )
+beginAnalysisAndSave model =
     let
-        selectedPaths =
-            visibleFiles model |> List.map .path
-
-        semantic =
-            if model.settings.semantic then
-                List.foldl (\path -> Dict.insert path (Loading model.requestUrl)) model.semantic selectedPaths
-
-            else
-                model.semantic
-
-        characters =
-            if model.settings.inlineDiffMode /= InlineOff then
-                List.foldl (\path -> Dict.insert path (Loading model.requestUrl)) model.characterDiffs selectedPaths
-
-            else
-                model.characterDiffs
+        ( updated, effect ) =
+            beginAnalysis model
     in
-    { model
-        | semantic = semantic
-        , characterDiffs = characters
-        , moves =
-            if model.settings.semantic then
-                Loading model.requestUrl
+    saveSettingsWith effect updated
 
-            else
-                NotAsked
+
+analysisIdentity : Model -> ReviewData -> AnalysisIdentity
+analysisIdentity model reviewData =
+    { requestUrl = model.requestUrl
+    , baseOid = reviewData.backing.baseOid
+    , headOid = reviewData.backing.headOid
+    , ignoreWhitespace = model.settings.ignoreWhitespace
+    , semantic = model.settings.semantic
+    , inlineDiff = Settings.inlineDiffModeToString model.settings.inlineDiffMode
     }
 
 
-analysisEffects : Model -> Effect Msg
-analysisEffects model =
-    case readyReview model of
-        Nothing ->
-            Effect.none
+applyAnalysis : AnalysisSnapshot -> Dict String PreparedFile -> Dict String PreparedFile
+applyAnalysis snapshot preparedFiles =
+    Dict.foldl
+        (\_ file prepared ->
+            case ( Dict.get file.path prepared, file.wordDiff ) of
+                ( Just existing, Just wordDiff ) ->
+                    Dict.insert file.path (PreparedDiff.withWordDiff wordDiff existing) prepared
 
-        Just reviewData ->
-            Effect.batch
-                [ if model.settings.semantic then
-                    Effect.batch
-                        (List.map
-                            (\file -> Api.fetchSemantic model.requestUrl file reviewData.backing (SemanticLoaded model.requestUrl file.path) (SemanticFailed model.requestUrl file.path))
-                            (visibleFiles model)
-                        )
-
-                  else
-                    Effect.none
-                , if model.settings.semantic then
-                    Api.fetchMoves model.requestUrl reviewData.backing (MovesLoaded model.requestUrl) (MovesFailed model.requestUrl)
-
-                  else
-                    Effect.none
-                , characterEffects model
-                ]
-
-
-characterEffects : Model -> Effect Msg
-characterEffects model =
-    case ( readyReview model, model.settings.inlineDiffMode ) of
-        ( Just reviewData, mode ) ->
-            if mode == InlineOff then
-                Effect.none
-
-            else
-                Effect.batch
-                    (List.map
-                        (\file ->
-                            Api.fetchCharacterDiff model.requestUrl
-                                file
-                                reviewData.backing
-                                model.settings.ignoreWhitespace
-                                (Settings.inlineDiffModeToString mode)
-                                (CharacterLoaded model.requestUrl file.path)
-                                (CharacterFailed model.requestUrl file.path)
-                        )
-                        (visibleFiles model)
-                    )
-
-        _ ->
-            Effect.none
+                _ ->
+                    prepared
+        )
+        preparedFiles
+        snapshot.files
 
 
 commentsEffect : Model -> Effect Msg
@@ -1270,7 +1244,7 @@ fileDiff model file =
                 , footer [ class "diff-footer" ]
                     [ span [] [ text "End of patch" ]
                     , if Route.isPullRequest model.location.target then
-                        button [ type_ "button", onClick (OpenedInlineComposer file.path (lastNewLine file) "RIGHT") ] [ text "+ Add a review comment" ]
+                        button [ type_ "button", onClick (OpenedInlineComposer file.path (lastNewLine model file.path) "RIGHT") ] [ text "+ Add a review comment" ]
 
                       else
                         text ""
@@ -1285,44 +1259,50 @@ semanticSummary model file =
         text ""
 
     else
-        case Dict.get file.path model.semantic of
-            Just (Loading _) ->
+        case model.analysis of
+            Loading _ ->
                 div [ class "semantic-banner is-loading" ] [ span [ class "loading-spinner" ] [], text "Analyzing syntax tree…" ]
 
-            Just (Failure _ error) ->
+            Failure _ error ->
                 div [ class "semantic-banner is-error" ] [ text error ]
 
-            Just (Success _ result) ->
-                case result of
-                    SemanticParsed _ language semanticEqual changes ->
-                        div [ class "semantic-banner" ]
-                            [ span [ class "semantic-symbol" ] [ text "◎" ]
-                            , div []
-                                [ strong []
-                                    [ text
-                                        (if semanticEqual then
-                                            "Formatting-only semantic change"
+            Success _ snapshot ->
+                snapshot.files
+                    |> Dict.get file.path
+                    |> Maybe.andThen .semantic
+                    |> Maybe.map semanticResultView
+                    |> Maybe.withDefault (text "")
 
-                                         else
-                                            semanticCount changes
-                                        )
-                                    ]
-                                , span [] [ text (language ++ " syntax tree") ]
-                                ]
-                            , div [ class "semantic-chips" ] (List.map semanticChip changes)
-                            ]
-
-                    SemanticUnsupported _ reason ->
-                        div [ class "semantic-banner is-muted" ] [ strong [] [ text "Syntax analysis skipped" ], span [] [ text reason ] ]
-
-                    SemanticParseFailed _ language reason ->
-                        div [ class "semantic-banner is-error" ] [ strong [] [ text (language ++ " parse failed") ], span [] [ text reason ] ]
-
-            Nothing ->
+            NotAsked ->
                 text ""
 
-            Just NotAsked ->
-                text ""
+
+semanticResultView : SemanticResult -> Html msg
+semanticResultView result =
+    case result of
+        SemanticParsed _ language semanticEqual changes ->
+            div [ class "semantic-banner" ]
+                [ span [ class "semantic-symbol" ] [ text "◎" ]
+                , div []
+                    [ strong []
+                        [ text
+                            (if semanticEqual then
+                                "Formatting-only semantic change"
+
+                             else
+                                semanticCount changes
+                            )
+                        ]
+                    , span [] [ text (language ++ " syntax tree") ]
+                    ]
+                , div [ class "semantic-chips" ] (List.map semanticChip changes)
+                ]
+
+        SemanticUnsupported _ reason ->
+            div [ class "semantic-banner is-muted" ] [ strong [] [ text "Syntax analysis skipped" ], span [] [ text reason ] ]
+
+        SemanticParseFailed _ language reason ->
+            div [ class "semantic-banner is-error" ] [ strong [] [ text (language ++ " parse failed") ], span [] [ text reason ] ]
 
 
 semanticChip : SemanticChange -> Html msg
@@ -1355,10 +1335,6 @@ semanticCount changes =
 
 patchDiff : Model -> FileChange -> Html Msg
 patchDiff model file =
-    let
-        hunks =
-            Diff.parsePatch file.patch
-    in
     div
         [ class
             (if model.settings.viewMode == Split then
@@ -1368,7 +1344,7 @@ patchDiff model file =
                 "unified-diff"
             )
         ]
-        (List.map (hunkView model file) hunks)
+        (List.map (hunkView model file) (preparedHunks model file.path))
 
 
 hunkView : Model -> FileChange -> Hunk -> Html Msg
@@ -1491,9 +1467,9 @@ moveDecoration model path side lineNumber =
                 Destination
 
         move =
-            case model.moves of
-                Success _ moves ->
-                    List.filter (SemanticMove.containsLine path lineNumber endpoint) moves |> List.head
+            case model.analysis of
+                Success _ snapshot ->
+                    List.filter (SemanticMove.containsLine path lineNumber endpoint) snapshot.moves |> List.head
 
                 _ ->
                     Nothing
@@ -1555,33 +1531,11 @@ lineNumberButton model path side number maybeNumberValue =
 
 highlightedLine : Model -> String -> String -> Int -> String -> List (Html Msg)
 highlightedLine model path side number source =
-    case Dict.get path model.characterDiffs of
-        Just (Success _ characterDiff) ->
-            characterDiff.rows
-                |> List.filter
-                    (\row ->
-                        if side == "LEFT" then
-                            row.oldLine == Just number
+    case Dict.get path model.preparedFiles of
+        Just prepared ->
+            rangedSyntax model.settings.syntaxHighlighting path source (PreparedDiff.rangesFor side number prepared)
 
-                        else
-                            row.newLine == Just number
-                    )
-                |> List.head
-                |> Maybe.map
-                    (\row ->
-                        rangedSyntax model.settings.syntaxHighlighting
-                            path
-                            source
-                            (if side == "LEFT" then
-                                row.oldRanges
-
-                             else
-                                row.newRanges
-                            )
-                    )
-                |> Maybe.withDefault (Syntax.line model.settings.syntaxHighlighting path source)
-
-        _ ->
+        Nothing ->
             Syntax.line model.settings.syntaxHighlighting path source
 
 
@@ -1797,12 +1751,16 @@ reviewComposer model =
 
 fullFileDiff : Model -> FileChange -> FullFile -> Html Msg
 fullFileDiff model file full =
+    let
+        rows =
+            Diff.fullFileRowsPrepared (preparedHunks model file.path) full.oldText full.newText
+    in
     div [ class "full-file-diff" ]
         (if model.settings.viewMode == Split then
-            Diff.fullFileRows file.patch full.oldText full.newText |> List.map (splitRowView model file)
+            List.map (splitRowView model file) rows
 
          else
-            Diff.fullFileRows file.patch full.oldText full.newText
+            rows
                 |> List.concatMap fullUnifiedLines
                 |> List.map (unifiedLineView model file)
         )
@@ -1840,9 +1798,16 @@ githubFileUrl model file =
             "#"
 
 
-lastNewLine : FileChange -> Int
-lastNewLine file =
-    Diff.parsePatch file.patch
+preparedHunks : Model -> String -> List Hunk
+preparedHunks model path =
+    Dict.get path model.preparedFiles
+        |> Maybe.map .hunks
+        |> Maybe.withDefault []
+
+
+lastNewLine : Model -> String -> Int
+lastNewLine model path =
+    preparedHunks model path
         |> List.reverse
         |> List.head
         |> Maybe.andThen (.lines >> List.reverse >> List.filterMap .newLine >> List.head)

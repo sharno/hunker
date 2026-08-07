@@ -1,5 +1,9 @@
 module Hunker.Domain.Review exposing
-    ( CharacterDiff
+    ( AnalysisFile
+    , AnalysisOptions
+    , AnalysisSnapshot
+    , AnalysisSnapshotKey
+    , CharacterDiff
     , CharacterRange
     , CharacterRow
     , FileChange
@@ -13,6 +17,7 @@ module Hunker.Domain.Review exposing
     , SemanticChange(..)
     , SemanticResult(..)
     , SourceRange
+    , analysisSnapshotDecoder
     , characterDiffDecoder
     , commentDecoder
     , commentsDecoder
@@ -25,6 +30,7 @@ module Hunker.Domain.Review exposing
     , semanticDecoder
     )
 
+import Dict exposing (Dict)
 import Json.Decode as Decode exposing (Decoder)
 
 
@@ -125,6 +131,35 @@ type alias CharacterDiff =
     , ignoreWhitespace : Bool
     , mode : String
     , rows : List CharacterRow
+    }
+
+
+type alias AnalysisOptions =
+    { ignoreWhitespace : Bool
+    , semantic : Bool
+    , inlineDiff : String
+    }
+
+
+type alias AnalysisSnapshotKey =
+    { repository : String
+    , baseOid : String
+    , headOid : String
+    , options : AnalysisOptions
+    }
+
+
+type alias AnalysisFile =
+    { path : String
+    , semantic : Maybe SemanticResult
+    , wordDiff : Maybe CharacterDiff
+    }
+
+
+type alias AnalysisSnapshot =
+    { key : AnalysisSnapshotKey
+    , files : Dict String AnalysisFile
+    , moves : List MovedBlock
     }
 
 
@@ -350,6 +385,43 @@ characterDiffDecoder =
         (Decode.field "rows" (Decode.list characterRowDecoder))
 
 
+analysisSnapshotDecoder : Decoder AnalysisSnapshot
+analysisSnapshotDecoder =
+    Decode.map3 AnalysisSnapshot
+        (Decode.field "key" analysisSnapshotKeyDecoder)
+        (Decode.field "files"
+            (Decode.list analysisFileDecoder
+                |> Decode.map (List.map (\file -> ( file.path, file )) >> Dict.fromList)
+            )
+        )
+        (Decode.field "moves" (Decode.list movedBlockDecoder))
+
+
+analysisSnapshotKeyDecoder : Decoder AnalysisSnapshotKey
+analysisSnapshotKeyDecoder =
+    Decode.map4 AnalysisSnapshotKey
+        (Decode.field "repository" Decode.string)
+        (Decode.field "baseOid" Decode.string)
+        (Decode.field "headOid" Decode.string)
+        (Decode.field "options" analysisOptionsDecoder)
+
+
+analysisOptionsDecoder : Decoder AnalysisOptions
+analysisOptionsDecoder =
+    Decode.map3 AnalysisOptions
+        (Decode.field "ignoreWhitespace" Decode.bool)
+        (Decode.field "semantic" Decode.bool)
+        (Decode.field "inlineDiff" Decode.string)
+
+
+analysisFileDecoder : Decoder AnalysisFile
+analysisFileDecoder =
+    Decode.map3 AnalysisFile
+        (Decode.field "path" Decode.string)
+        (Decode.field "semantic" (Decode.nullable semanticDecoder))
+        (Decode.field "wordDiff" (Decode.nullable characterDiffDecoder))
+
+
 characterRowDecoder : Decoder CharacterRow
 characterRowDecoder =
     Decode.map4 CharacterRow
@@ -447,10 +519,36 @@ revisionDecoder =
 
 fileChangesFromDiff : String -> List FileChange
 fileChangesFromDiff diff =
-    diff
-        |> String.split "diff --git "
-        |> List.drop 1
+    diffChunks diff
         |> List.map parseFileChunk
+
+
+diffChunks : String -> List String
+diffChunks diff =
+    let
+        finish currentLines completedChunks =
+            if List.isEmpty currentLines then
+                completedChunks
+
+            else
+                (currentLines |> List.reverse |> String.join "\n") :: completedChunks
+
+        step line ( current, completed ) =
+            if String.startsWith "diff --git " line then
+                ( [ String.dropLeft (String.length "diff --git ") line ]
+                , finish current completed
+                )
+
+            else if List.isEmpty current then
+                ( current, completed )
+
+            else
+                ( line :: current, completed )
+
+        ( finalLines, finalChunks ) =
+            List.foldl step ( [], [] ) (String.lines diff)
+    in
+    finish finalLines finalChunks |> List.reverse
 
 
 parseFileChunk : String -> FileChange
@@ -458,6 +556,9 @@ parseFileChunk chunk =
     let
         lines =
             String.lines chunk
+
+        metadata =
+            lines |> takeUntil (String.startsWith "@@")
 
         headerPath =
             lines
@@ -474,10 +575,10 @@ parseFileChunk chunk =
                 |> Maybe.withDefault "unknown"
 
         renameFrom =
-            prefixedLine "rename from " lines
+            prefixedLine "rename from " metadata
 
         renameTo =
-            prefixedLine "rename to " lines
+            prefixedLine "rename to " metadata
 
         patch =
             lines
@@ -499,10 +600,10 @@ parseFileChunk chunk =
     { path = Maybe.withDefault headerPath renameTo
     , previousPath = Maybe.withDefault "" renameFrom
     , status =
-        if String.contains "new file mode" chunk then
+        if List.any (String.startsWith "new file mode") metadata then
             "added"
 
-        else if String.contains "deleted file mode" chunk then
+        else if List.any (String.startsWith "deleted file mode") metadata then
             "deleted"
 
         else if renameFrom /= Nothing then
@@ -536,3 +637,17 @@ dropUntil predicate values =
 
             else
                 dropUntil predicate rest
+
+
+takeUntil : (value -> Bool) -> List value -> List value
+takeUntil predicate values =
+    case values of
+        [] ->
+            []
+
+        first :: rest ->
+            if predicate first then
+                []
+
+            else
+                first :: takeUntil predicate rest
