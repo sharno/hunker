@@ -40,6 +40,39 @@ suite =
                             }
                         )
                         |> Expect.equal "/mohamed-rdr/hunker/commits/feature/elm"
+            , test "round trips a selected commit file through the canonical query" <|
+                \() ->
+                    let
+                        route =
+                            Review
+                                { target = Commit "mohamed-rdr" "hunker" "6b0dfa8"
+                                , tab = ReviewFiles
+                                , path = Just "elm/src/Hunker/Page/Review.elm"
+                                , commit = Nothing
+                                }
+
+                        path =
+                            Route.toPath route
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal "/mohamed-rdr/hunker/commit/6b0dfa8?file=elm%2Fsrc%2FHunker%2FPage%2FReview.elm" path
+                        , \_ -> Expect.equal route (routeFrom ("http://localhost:8787" ++ path))
+                        ]
+                        ()
+            , test "round trips a selected compare file through the canonical query" <|
+                \() ->
+                    let
+                        route =
+                            Review
+                                { target = Compare "mohamed-rdr" "hunker" "main...feature/elm"
+                                , tab = ReviewFiles
+                                , path = Just "server/src/main.rs"
+                                , commit = Nothing
+                                }
+                    in
+                    Route.toPath route
+                        |> (\path -> routeFrom ("http://localhost:8787" ++ path))
+                        |> Expect.equal route
             ]
         , describe "diff parsing"
             [ test "aligns deletion and addition runs in split rows" <|

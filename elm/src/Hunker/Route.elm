@@ -313,7 +313,12 @@ reviewPath location =
                     prefix ++ "/files"
 
         _ ->
-            prefix
+            case location.path of
+                Just path ->
+                    prefix ++ "?file=" ++ encode path
+
+                Nothing ->
+                    prefix
 
 
 githubUrl : ReviewTarget -> String
