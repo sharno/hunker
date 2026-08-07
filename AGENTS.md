@@ -1,5 +1,21 @@
 # Hunker agent guidance
 
+- The frontend is being migrated from Foldkit/Effect to Elm. Keep both
+  implementations runnable until the Elm `Browser.application`, program tests,
+  and real-browser suite cover the complete product; remove Foldkit only in a
+  dedicated final migration commit after parity is proven.
+- Keep Elm domain state independent of `Browser.Navigation.Key` and `Cmd` by
+  returning a typed application-effect ADT from `update`. Interpret that ADT at
+  the browser boundary and in `elm-program-test`; this makes navigation, HTTP,
+  focus, and timing branches testable without duplicating the state machine.
+- Decode HTTP JSON directly into Elm domain types at the request boundary. Put
+  each request identity in its remote-data ADT and ignore responses whose
+  identity no longer matches the active route.
+- Format every Elm source and test with `elm-format`; exercise complete Elm
+  update/view flows with `avh4/elm-program-test`, retaining Playwright only for
+  browser history, Fetch transport, CSS/layout, sticky behavior, and other
+  browser-specific contracts.
+
 - Use Effect v4 for frontend application effects, services, errors, and data
   validation. The local HTTP backend is Rust; keep its boundaries typed with
   Serde domain structs and `AppError` rather than recreating Effect conventions.
