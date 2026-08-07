@@ -4,6 +4,7 @@ module Hunker.Page.Review exposing
     , init
     , location
     , navigate
+    , settingsIntent
     , subscriptions
     , title
     , update
@@ -22,6 +23,7 @@ import Hunker.Effect as Effect exposing (Effect)
 import Hunker.FileTree as FileTree exposing (Tree(..))
 import Hunker.PreparedDiff as PreparedDiff exposing (PreparedFile)
 import Hunker.Remote as Remote exposing (Remote(..))
+import Hunker.Review.FileIndex as FileIndex exposing (FileIndex)
 import Hunker.Route as Route exposing (ReviewTab(..), ReviewTarget(..))
 import Hunker.SemanticMove as SemanticMove exposing (Endpoint(..))
 import Hunker.Syntax as Syntax
@@ -33,19 +35,8 @@ import Url
 
 
 type alias Model =
-    { location : Route.ReviewLocation
-    , requestUrl : String
-    , pullUrl : String
-    , review : Remote String String ReviewDocument
-    , files : List FileChange
-    , preparedFiles : Dict String PreparedFile
-    , pullRequestFiles : List FileChange
-    , commits : Remote String String (List PullCommit)
-    , analysis : Remote AnalysisIdentity String AnalysisSnapshot
+    { review : ReviewState
     , fullFiles : Dict String (Remote String String FullFile)
-    , comments : Remote String String (List ReviewComment)
-    , revision : Remote String String Revision
-    , settings : Settings
     , filter : String
     , filterMode : SearchMode
     , collapsedFolders : Set String
@@ -59,6 +50,42 @@ type alias Model =
     , reviewSubmission : Remote String String String
     , inlineComposer : Maybe InlineComposer
     , inlineSubmission : Remote String String ReviewComment
+    }
+
+
+type ReviewState
+    = ReviewLoading ReviewRequest
+    | ReviewFailure ReviewRequest String
+    | ReviewReady ReadyReview
+
+
+type alias ReviewRequest =
+    { location : Route.ReviewLocation
+    , requestUrl : String
+    , pullUrl : String
+    }
+
+
+type alias ReadyReview =
+    { request : ReviewRequest
+    , document : ReviewDocument
+    , files : FileIndex
+    , analysis : AnalysisState
+    , collaboration : CollaborationState
+    }
+
+
+type AnalysisState
+    = AnalysisDisabled
+    | AnalysisInFlight AnalysisIdentity
+    | AnalysisFailure AnalysisIdentity String
+    | AnalysisComplete AnalysisIdentity AnalysisSnapshot
+
+
+type alias CollaborationState =
+    { commits : Remote String String (List PullCommit)
+    , comments : Remote String String (List ReviewComment)
+    , revision : Remote String String Revision
     }
 
 
@@ -105,8 +132,6 @@ type Msg
     | SelectedInlineMode InlineDiffMode
     | ToggledSyntax Bool
     | ToggledReviews Bool
-    | SettingsSaved
-    | SettingsSaveFailed String
     | AnalysisLoaded AnalysisIdentity AnalysisSnapshot
     | AnalysisFailed AnalysisIdentity String
     | FullFileLoaded String String FullFile
@@ -139,8 +164,8 @@ type Msg
     | PollRevision Time.Posix
 
 
-init : Settings -> Route.ReviewLocation -> ( Model, Effect Msg )
-init settings reviewLocation =
+init : Route.ReviewLocation -> ( Model, Effect Msg )
+init reviewLocation =
     let
         pullUrl =
             Route.githubUrl reviewLocation.target
@@ -153,20 +178,15 @@ init settings reviewLocation =
                 _ ->
                     pullUrl
 
-        model =
+        request =
             { location = reviewLocation
             , requestUrl = githubUrl
             , pullUrl = pullUrl
-            , review = Loading githubUrl
-            , files = []
-            , preparedFiles = Dict.empty
-            , pullRequestFiles = []
-            , commits = NotAsked
-            , analysis = NotAsked
+            }
+
+        model =
+            { review = ReviewLoading request
             , fullFiles = Dict.empty
-            , comments = NotAsked
-            , revision = NotAsked
-            , settings = settings
             , filter = ""
             , filterMode = Literal
             , collapsedFolders = Set.empty
@@ -186,51 +206,48 @@ init settings reviewLocation =
 
 
 location : Model -> Route.ReviewLocation
-location =
-    .location
+location model =
+    (reviewRequest model).location
 
 
 navigate : Route.ReviewLocation -> Model -> ( Model, Effect Msg )
 navigate nextLocation model =
     let
+        currentRequest =
+            reviewRequest model
+
         sameRevision =
             nextLocation.target
-                == model.location.target
+                == currentRequest.location.target
                 && nextLocation.commit
-                == model.location.commit
-
-        updated =
-            { model | location = nextLocation }
+                == currentRequest.location.commit
     in
     if not sameRevision then
-        init model.settings nextLocation
+        init nextLocation
 
-    else if nextLocation.path == model.location.path then
-        ( updated, Effect.none )
+    else if nextLocation.path == currentRequest.location.path then
+        ( model, Effect.none )
 
     else
-        ( updated, Effect.none )
+        ( mapReviewRequest (\request -> { request | location = nextLocation }) model, Effect.none )
 
 
 title : Model -> String
 title model =
     case model.review of
-        Loading _ ->
+        ReviewLoading _ ->
             "Loading review · Hunker"
 
-        Success _ reviewData ->
-            reviewData.title ++ " · Hunker"
+        ReviewReady ready ->
+            ready.document.title ++ " · Hunker"
 
-        Failure _ _ ->
+        ReviewFailure _ _ ->
             "Could not load review · Hunker"
-
-        NotAsked ->
-            "Hunker"
 
 
 subscriptions : Model -> Sub Msg
 subscriptions model =
-    case model.location.target of
+    case (reviewRequest model).location.target of
         PullRequest _ _ _ ->
             Time.every 120000 PollRevision
 
@@ -238,45 +255,146 @@ subscriptions model =
             Sub.none
 
 
-update : Msg -> Model -> ( Model, Effect Msg )
-update msg model =
+reviewRequest : Model -> ReviewRequest
+reviewRequest model =
+    case model.review of
+        ReviewLoading request ->
+            request
+
+        ReviewFailure request _ ->
+            request
+
+        ReviewReady ready ->
+            ready.request
+
+
+mapReviewRequest : (ReviewRequest -> ReviewRequest) -> Model -> Model
+mapReviewRequest transform model =
+    case model.review of
+        ReviewLoading request ->
+            { model | review = ReviewLoading (transform request) }
+
+        ReviewFailure request error ->
+            { model | review = ReviewFailure (transform request) error }
+
+        ReviewReady ready ->
+            { model | review = ReviewReady { ready | request = transform ready.request } }
+
+
+mapReady : (ReadyReview -> ReadyReview) -> Model -> Model
+mapReady transform model =
+    case model.review of
+        ReviewReady ready ->
+            { model | review = ReviewReady (transform ready) }
+
+        _ ->
+            model
+
+
+readyState : Model -> Maybe ReadyReview
+readyState model =
+    case model.review of
+        ReviewReady ready ->
+            Just ready
+
+        _ ->
+            Nothing
+
+
+reviewFiles : Model -> List FileChange
+reviewFiles model =
+    readyState model
+        |> Maybe.map (.files >> FileIndex.changes)
+        |> Maybe.withDefault []
+
+
+reviewAnalysis : Model -> AnalysisState
+reviewAnalysis model =
+    readyState model
+        |> Maybe.map .analysis
+        |> Maybe.withDefault AnalysisDisabled
+
+
+reviewCollaboration : Model -> Maybe CollaborationState
+reviewCollaboration model =
+    readyState model |> Maybe.map .collaboration
+
+
+reviewComments : Model -> Remote String String (List ReviewComment)
+reviewComments model =
+    reviewCollaboration model
+        |> Maybe.map .comments
+        |> Maybe.withDefault NotAsked
+
+
+reviewCommits : Model -> Remote String String (List PullCommit)
+reviewCommits model =
+    reviewCollaboration model
+        |> Maybe.map .commits
+        |> Maybe.withDefault NotAsked
+
+
+mapCollaboration : (CollaborationState -> CollaborationState) -> Model -> Model
+mapCollaboration transform =
+    mapReady (\ready -> { ready | collaboration = transform ready.collaboration })
+
+
+analysisIdentityOf : AnalysisState -> Maybe AnalysisIdentity
+analysisIdentityOf state =
+    case state of
+        AnalysisInFlight identity ->
+            Just identity
+
+        AnalysisFailure identity _ ->
+            Just identity
+
+        AnalysisComplete identity _ ->
+            Just identity
+
+        AnalysisDisabled ->
+            Nothing
+
+
+update : Settings -> Msg -> Model -> ( Model, Effect Msg )
+update settings msg model =
     case msg of
         ReviewLoaded requested reviewData ->
-            if requested /= model.requestUrl then
+            if requested /= (reviewRequest model).requestUrl then
                 unchanged model
 
             else
-                reviewReady reviewData model
+                reviewReady settings reviewData model
 
         ReviewFailed requested error ->
-            if requested == model.requestUrl then
-                ( { model | review = Failure requested error, files = [], preparedFiles = Dict.empty, pullRequestFiles = [] }, Effect.none )
+            let
+                request =
+                    reviewRequest model
+            in
+            if requested == request.requestUrl then
+                ( { model | review = ReviewFailure request error }, Effect.none )
 
             else
                 unchanged model
 
         Refreshed ->
-            ( { model
-                | review = Loading model.requestUrl
-                , files = []
-                , preparedFiles = Dict.empty
-                , analysis = NotAsked
-                , fullFiles = Dict.empty
-                , comments = NotAsked
-              }
-            , Api.fetchReview model.requestUrl (ReviewLoaded model.requestUrl) (ReviewFailed model.requestUrl)
+            let
+                request =
+                    reviewRequest model
+            in
+            ( { model | review = ReviewLoading request, fullFiles = Dict.empty }
+            , Api.fetchReview request.requestUrl (ReviewLoaded request.requestUrl) (ReviewFailed request.requestUrl)
             )
 
         CommitsLoaded requested commits ->
-            if requested == model.pullUrl then
-                ( { model | commits = Success requested commits }, Effect.none )
+            if requested == (reviewRequest model).pullUrl then
+                ( mapCollaboration (\collaboration -> { collaboration | commits = Success requested commits }) model, Effect.none )
 
             else
                 unchanged model
 
         CommitsFailed requested error ->
-            if requested == model.pullUrl then
-                ( { model | commits = Failure requested error }, Effect.none )
+            if requested == (reviewRequest model).pullUrl then
+                ( mapCollaboration (\collaboration -> { collaboration | commits = Failure requested error }) model, Effect.none )
 
             else
                 unchanged model
@@ -284,7 +402,7 @@ update msg model =
         SelectedTab tab ->
             let
                 current =
-                    model.location
+                    (reviewRequest model).location
 
                 next =
                     { current | tab = tab, commit = Nothing, path = Nothing }
@@ -294,7 +412,7 @@ update msg model =
         SelectedCommit sha ->
             let
                 current =
-                    model.location
+                    (reviewRequest model).location
 
                 next =
                     { current | tab = ReviewCommits, commit = Just sha, path = Nothing }
@@ -304,7 +422,7 @@ update msg model =
         SelectedFile path ->
             let
                 current =
-                    model.location
+                    (reviewRequest model).location
 
                 next =
                     { current | tab = ReviewFiles, path = Just path, commit = Nothing }
@@ -321,68 +439,43 @@ update msg model =
             ( { model | collapsedFolders = toggleSet path model.collapsedFolders }, Effect.none )
 
         ToggledSidebar ->
-            saveSettings { model | settings = mapSettings (\settings -> { settings | sidebarCollapsed = not settings.sidebarCollapsed }) model }
-
-        SelectedScope scope ->
-            let
-                updated =
-                    { model | settings = mapSettings (\settings -> { settings | reviewScope = scope }) model }
-            in
-            saveSettings updated
-
-        SelectedViewMode mode ->
-            saveSettings { model | settings = mapSettings (\settings -> { settings | viewMode = mode }) model }
-
-        ToggledWhitespace value ->
-            let
-                updated =
-                    { model | settings = mapSettings (\settings -> { settings | ignoreWhitespace = value }) model }
-            in
-            beginAnalysisAndSave updated
-
-        ToggledSemantic value ->
-            let
-                updated =
-                    { model | settings = mapSettings (\settings -> { settings | semantic = value }) model }
-            in
-            beginAnalysisAndSave updated
-
-        SelectedInlineMode mode ->
-            let
-                updated =
-                    { model | settings = mapSettings (\settings -> { settings | inlineDiffMode = mode }) model }
-            in
-            beginAnalysisAndSave updated
-
-        ToggledSyntax value ->
-            saveSettings { model | settings = mapSettings (\settings -> { settings | syntaxHighlighting = value }) model }
-
-        ToggledReviews value ->
-            let
-                updated =
-                    { model | settings = mapSettings (\settings -> { settings | showGitHubReviews = value }) model }
-
-                effect =
-                    if value then
-                        commentsEffect updated
-
-                    else
-                        Effect.none
-            in
-            saveSettingsWith effect updated
-
-        SettingsSaved ->
             unchanged model
 
-        SettingsSaveFailed error ->
-            ( { model | reviewSubmission = Failure "settings" error }, Effect.none )
+        SelectedScope scope ->
+            unchanged model
+
+        SelectedViewMode mode ->
+            unchanged model
+
+        ToggledWhitespace value ->
+            beginAnalysis settings model
+
+        ToggledSemantic value ->
+            beginAnalysis settings model
+
+        SelectedInlineMode mode ->
+            beginAnalysis settings model
+
+        ToggledSyntax value ->
+            unchanged model
+
+        ToggledReviews value ->
+            if value then
+                ( model, commentsEffect settings model )
+
+            else
+                unchanged model
 
         AnalysisLoaded requested snapshot ->
-            if Just requested == Remote.identity model.analysis then
-                ( { model
-                    | analysis = Success requested snapshot
-                    , preparedFiles = applyAnalysis snapshot model.preparedFiles
-                  }
+            if analysisIdentityOf (reviewAnalysis model) == Just requested then
+                ( mapReady
+                    (\ready ->
+                        { ready
+                            | analysis = AnalysisComplete requested snapshot
+                            , files = FileIndex.withAnalysis snapshot ready.files
+                        }
+                    )
+                    model
                 , Effect.none
                 )
 
@@ -390,21 +483,21 @@ update msg model =
                 unchanged model
 
         AnalysisFailed requested error ->
-            if Just requested == Remote.identity model.analysis then
-                ( { model | analysis = Failure requested error }, Effect.none )
+            if analysisIdentityOf (reviewAnalysis model) == Just requested then
+                ( mapReady (\ready -> { ready | analysis = AnalysisFailure requested error }) model, Effect.none )
 
             else
                 unchanged model
 
         FullFileLoaded requested path fullFile ->
-            if requested == model.requestUrl then
+            if requested == (reviewRequest model).requestUrl then
                 ( { model | fullFiles = Dict.insert path (Success requested fullFile) model.fullFiles }, Effect.none )
 
             else
                 unchanged model
 
         FullFileFailed requested path error ->
-            if requested == model.requestUrl then
+            if requested == (reviewRequest model).requestUrl then
                 ( { model | fullFiles = Dict.insert path (Failure requested error) model.fullFiles }, Effect.none )
 
             else
@@ -424,8 +517,12 @@ update msg model =
                             unchanged model
 
                         Just reviewData ->
-                            ( { model | fullFiles = Dict.insert file.path (Loading model.requestUrl) model.fullFiles }
-                            , Api.fetchFullFile model.requestUrl file reviewData.backing (FullFileLoaded model.requestUrl file.path) (FullFileFailed model.requestUrl file.path)
+                            let
+                                requestUrl =
+                                    (reviewRequest model).requestUrl
+                            in
+                            ( { model | fullFiles = Dict.insert file.path (Loading requestUrl) model.fullFiles }
+                            , Api.fetchFullFile requestUrl file reviewData.backing (FullFileLoaded requestUrl file.path) (FullFileFailed requestUrl file.path)
                             )
 
         ToggledFile path ->
@@ -454,27 +551,26 @@ update msg model =
         SelectedMoveTarget path anchor ->
             let
                 current =
-                    model.location
-
-                currentSettings =
-                    model.settings
+                    (reviewRequest model).location
 
                 next =
                     { current | path = Just path, tab = ReviewFiles }
 
                 navigation =
-                    if model.location.path == Just path then
+                    if current.path == Just path then
                         Effect.none
 
                     else
                         Effect.ReplaceUrl (Route.toPath (Route.Review next))
             in
-            ( { model | location = next, settings = { currentSettings | reviewScope = OneFile }, collapsedFiles = Set.remove path model.collapsedFiles }
+            ( model
+                |> mapReviewRequest (\request -> { request | location = next })
+                |> (\updated -> { updated | collapsedFiles = Set.remove path model.collapsedFiles })
             , Effect.batch [ navigation, Effect.Focus anchor CheckedRevision ]
             )
 
         CommentsLoaded requested comments ->
-            if requested == model.pullUrl then
+            if requested == (reviewRequest model).pullUrl then
                 let
                     resolvedRoots =
                         comments
@@ -482,14 +578,17 @@ update msg model =
                             |> List.map .rootId
                             |> Set.fromList
                 in
-                ( { model | comments = Success requested comments, collapsedThreads = Set.union model.collapsedThreads resolvedRoots }, Effect.none )
+                ( mapCollaboration (\collaboration -> { collaboration | comments = Success requested comments }) model
+                    |> (\updated -> { updated | collapsedThreads = Set.union model.collapsedThreads resolvedRoots })
+                , Effect.none
+                )
 
             else
                 unchanged model
 
         CommentsFailed requested error ->
-            if requested == model.pullUrl then
-                ( { model | comments = Failure requested error }, Effect.none )
+            if requested == (reviewRequest model).pullUrl then
+                ( mapCollaboration (\collaboration -> { collaboration | comments = Failure requested error }) model, Effect.none )
 
             else
                 unchanged model
@@ -510,15 +609,17 @@ update msg model =
 
             else
                 ( { model | replyState = Loading commentId }
-                , Api.postReply model.pullUrl commentId body (ReplyLoaded commentId) (ReplyFailed commentId)
+                , Api.postReply (reviewRequest model).pullUrl commentId body (ReplyLoaded commentId) (ReplyFailed commentId)
                 )
 
         ReplyLoaded commentId comment ->
-            ( { model
-                | comments = mapSuccess (\comments -> comments ++ [ comment ]) model.comments
-                , replyDrafts = Dict.remove commentId model.replyDrafts
-                , replyState = Success commentId comment
-              }
+            ( mapCollaboration (\collaboration -> { collaboration | comments = mapSuccess (\comments -> comments ++ [ comment ]) collaboration.comments }) model
+                |> (\updated ->
+                        { updated
+                            | replyDrafts = Dict.remove commentId model.replyDrafts
+                            , replyState = Success commentId comment
+                        }
+                   )
             , Effect.none
             )
 
@@ -530,7 +631,7 @@ update msg model =
 
         SubmittedReview event ->
             ( { model | reviewSubmission = Loading event }
-            , Api.submitReview model.pullUrl model.reviewBody event (ReviewSubmitted event) (ReviewSubmitFailed event)
+            , Api.submitReview (reviewRequest model).pullUrl model.reviewBody event (ReviewSubmitted event) (ReviewSubmitFailed event)
             )
 
         ReviewSubmitted event response ->
@@ -557,7 +658,7 @@ update msg model =
                     else
                         ( { model | inlineSubmission = Loading composer.path }
                         , Api.postInlineComment
-                            { pullUrl = model.pullUrl
+                            { pullUrl = (reviewRequest model).pullUrl
                             , commitId = Review.backingHeadOid reviewData.backing
                             , path = composer.path
                             , line = composer.line
@@ -572,11 +673,8 @@ update msg model =
                     unchanged model
 
         InlineCommentLoaded path comment ->
-            ( { model
-                | comments = mapSuccess (\comments -> comments ++ [ comment ]) model.comments
-                , inlineComposer = Nothing
-                , inlineSubmission = Success path comment
-              }
+            ( mapCollaboration (\collaboration -> { collaboration | comments = mapSuccess (\comments -> comments ++ [ comment ]) collaboration.comments }) model
+                |> (\updated -> { updated | inlineComposer = Nothing, inlineSubmission = Success path comment })
             , Effect.none
             )
 
@@ -587,15 +685,15 @@ update msg model =
             revisionCheck model
 
         RevisionLoaded requested revision ->
-            if requested == model.requestUrl then
-                ( { model | revision = Success requested revision }, Effect.none )
+            if requested == (reviewRequest model).requestUrl then
+                ( mapCollaboration (\collaboration -> { collaboration | revision = Success requested revision }) model, Effect.none )
 
             else
                 unchanged model
 
         RevisionFailed requested error ->
-            if requested == model.requestUrl then
-                ( { model | revision = Failure requested error }, Effect.none )
+            if requested == (reviewRequest model).requestUrl then
+                ( mapCollaboration (\collaboration -> { collaboration | revision = Failure requested error }) model, Effect.none )
 
             else
                 unchanged model
@@ -604,17 +702,20 @@ update msg model =
             revisionCheck model
 
 
-reviewReady : ReviewDocument -> Model -> ( Model, Effect Msg )
-reviewReady reviewData model =
+reviewReady : Settings -> ReviewDocument -> Model -> ( Model, Effect Msg )
+reviewReady settings reviewData model =
     let
+        request =
+            reviewRequest model
+
         currentLocation =
-            model.location
+            request.location
 
         files =
             reviewData.files
 
         selected =
-            case model.location.path |> Maybe.andThen (\path -> List.filter (.path >> (==) path) files |> List.head) of
+            case request.location.path |> Maybe.andThen (\path -> List.filter (.path >> (==) path) files |> List.head) of
                 Just file ->
                     Just file
 
@@ -629,124 +730,101 @@ reviewReady reviewData model =
 
         updated =
             { model
-                | review = Success model.requestUrl reviewData
-                , files = files
-                , preparedFiles =
-                    files
-                        |> List.map (\file -> ( file.path, PreparedDiff.prepare file ))
-                        |> Dict.fromList
-                , pullRequestFiles = files
-                , location = updatedLocation
-                , commits =
-                    if Route.isPullRequest model.location.target then
-                        Loading model.pullUrl
+                | review =
+                    ReviewReady
+                        { request = { request | location = updatedLocation }
+                        , document = reviewData
+                        , files = FileIndex.fromChanges files
+                        , analysis = AnalysisDisabled
+                        , collaboration =
+                            { commits =
+                                if Route.isPullRequest request.location.target then
+                                    Loading request.pullUrl
 
-                    else
-                        NotAsked
+                                else
+                                    NotAsked
+                            , comments = NotAsked
+                            , revision = NotAsked
+                            }
+                        }
             }
 
         canonical =
-            if model.location.path == selectedPath || model.location.tab == ReviewCommits then
+            if request.location.path == selectedPath || request.location.tab == ReviewCommits then
                 Effect.none
 
             else
                 Effect.ReplaceUrl (Route.toPath (Route.Review updatedLocation))
 
         commitsEffect =
-            if Route.isPullRequest model.location.target then
-                Api.fetchCommits model.pullUrl (CommitsLoaded model.pullUrl) (CommitsFailed model.pullUrl)
+            if Route.isPullRequest request.location.target then
+                Api.fetchCommits request.pullUrl (CommitsLoaded request.pullUrl) (CommitsFailed request.pullUrl)
 
             else
                 Effect.none
     in
     let
         ( analyzing, analysisEffect ) =
-            beginAnalysis updated
+            beginAnalysis settings updated
     in
     ( analyzing
     , Effect.batch
         [ canonical
         , commitsEffect
         , analysisEffect
-        , commentsEffect analyzing
+        , commentsEffect settings analyzing
         , revisionEffect analyzing
         ]
     )
 
 
-beginAnalysis : Model -> ( Model, Effect Msg )
-beginAnalysis model =
-    case readyReview model of
+beginAnalysis : Settings -> Model -> ( Model, Effect Msg )
+beginAnalysis settings model =
+    case readyState model of
         Nothing ->
             ( model, Effect.none )
 
-        Just reviewData ->
-            if not model.settings.semantic && model.settings.inlineDiffMode == InlineOff then
-                ( { model
-                    | analysis = NotAsked
-                    , preparedFiles = Dict.map (\_ prepared -> PreparedDiff.clearWordRanges prepared) model.preparedFiles
-                  }
+        Just ready ->
+            if not settings.semantic && settings.inlineDiffMode == InlineOff then
+                ( mapReady (\current -> { current | analysis = AnalysisDisabled, files = FileIndex.clearWordRanges current.files }) model
                 , Effect.none
                 )
 
             else
                 let
                     identity =
-                        analysisIdentity model reviewData
-
-                    cleared =
-                        Dict.map (\_ prepared -> PreparedDiff.clearWordRanges prepared) model.preparedFiles
+                        analysisIdentity settings model ready.document
                 in
-                ( { model | analysis = Loading identity, preparedFiles = cleared }
-                , Api.fetchAnalysis model.requestUrl
-                    reviewData.backing
-                    model.settings.ignoreWhitespace
-                    model.settings.semantic
+                ( mapReady (\current -> { current | analysis = AnalysisInFlight identity, files = FileIndex.clearWordRanges current.files }) model
+                , Api.fetchAnalysis ready.request.requestUrl
+                    ready.document.backing
+                    settings.ignoreWhitespace
+                    settings.semantic
                     identity.inlineDiff
                     (AnalysisLoaded identity)
                     (AnalysisFailed identity)
                 )
 
 
-beginAnalysisAndSave : Model -> ( Model, Effect Msg )
-beginAnalysisAndSave model =
-    let
-        ( updated, effect ) =
-            beginAnalysis model
-    in
-    saveSettingsWith effect updated
-
-
-analysisIdentity : Model -> ReviewDocument -> AnalysisIdentity
-analysisIdentity model reviewData =
-    { requestUrl = model.requestUrl
+analysisIdentity : Settings -> Model -> ReviewDocument -> AnalysisIdentity
+analysisIdentity settings model reviewData =
+    { requestUrl = (reviewRequest model).requestUrl
     , baseOid = Review.backingBaseOid reviewData.backing
     , headOid = Review.backingHeadOid reviewData.backing
-    , ignoreWhitespace = model.settings.ignoreWhitespace
-    , semantic = model.settings.semantic
-    , inlineDiff = Settings.inlineDiffModeToString model.settings.inlineDiffMode
+    , ignoreWhitespace = settings.ignoreWhitespace
+    , semantic = settings.semantic
+    , inlineDiff = Settings.inlineDiffModeToString settings.inlineDiffMode
     }
 
 
-applyAnalysis : AnalysisSnapshot -> Dict String PreparedFile -> Dict String PreparedFile
-applyAnalysis snapshot preparedFiles =
-    Dict.foldl
-        (\_ file prepared ->
-            case ( Dict.get file.path prepared, file.wordDiff ) of
-                ( Just existing, Just wordDiff ) ->
-                    Dict.insert file.path (PreparedDiff.withWordDiff wordDiff existing) prepared
-
-                _ ->
-                    prepared
-        )
-        preparedFiles
-        snapshot.files
-
-
-commentsEffect : Model -> Effect Msg
-commentsEffect model =
-    if model.settings.showGitHubReviews && Route.isPullRequest model.location.target && model.location.commit == Nothing then
-        Api.fetchReviewComments model.pullUrl (CommentsLoaded model.pullUrl) (CommentsFailed model.pullUrl)
+commentsEffect : Settings -> Model -> Effect Msg
+commentsEffect settings model =
+    let
+        request =
+            reviewRequest model
+    in
+    if settings.showGitHubReviews && Route.isPullRequest request.location.target && request.location.commit == Nothing then
+        Api.fetchReviewComments request.pullUrl (CommentsLoaded request.pullUrl) (CommentsFailed request.pullUrl)
 
     else
         Effect.none
@@ -754,9 +832,13 @@ commentsEffect model =
 
 revisionEffect : Model -> Effect Msg
 revisionEffect model =
-    case ( model.location.target, readyReview model ) of
+    let
+        request =
+            reviewRequest model
+    in
+    case ( request.location.target, readyReview model ) of
         ( PullRequest _ _ _, Just reviewData ) ->
-            Api.checkRevision model.requestUrl (Review.backingHeadOid reviewData.backing) (RevisionLoaded model.requestUrl) (RevisionFailed model.requestUrl)
+            Api.checkRevision request.requestUrl (Review.backingHeadOid reviewData.backing) (RevisionLoaded request.requestUrl) (RevisionFailed request.requestUrl)
 
         _ ->
             Effect.none
@@ -764,60 +846,74 @@ revisionEffect model =
 
 revisionCheck : Model -> ( Model, Effect Msg )
 revisionCheck model =
-    case ( model.location.target, readyReview model ) of
+    let
+        request =
+            reviewRequest model
+    in
+    case ( request.location.target, readyReview model ) of
         ( PullRequest _ _ _, Just _ ) ->
-            ( { model | revision = Loading model.requestUrl }, revisionEffect model )
+            ( mapCollaboration (\collaboration -> { collaboration | revision = Loading request.requestUrl }) model, revisionEffect model )
 
         _ ->
             unchanged model
 
 
-saveSettings : Model -> ( Model, Effect Msg )
-saveSettings =
-    saveSettingsWith Effect.none
+settingsIntent : Settings -> Msg -> Maybe Settings
+settingsIntent settings msg =
+    case msg of
+        ToggledSidebar ->
+            Just { settings | sidebarCollapsed = not settings.sidebarCollapsed }
 
+        SelectedScope scope ->
+            Just { settings | reviewScope = scope }
 
-saveSettingsWith : Effect Msg -> Model -> ( Model, Effect Msg )
-saveSettingsWith additional model =
-    ( model
-    , Effect.batch
-        [ additional
-        , Api.saveSettings model.settings (always SettingsSaved) SettingsSaveFailed
-        ]
-    )
+        SelectedViewMode mode ->
+            Just { settings | viewMode = mode }
 
+        ToggledWhitespace value ->
+            Just { settings | ignoreWhitespace = value }
 
-mapSettings : (Settings -> Settings) -> Model -> Settings
-mapSettings transform model =
-    transform model.settings
+        ToggledSemantic value ->
+            Just { settings | semantic = value }
 
+        SelectedInlineMode mode ->
+            Just { settings | inlineDiffMode = mode }
 
-readyReview : Model -> Maybe ReviewDocument
-readyReview model =
-    case model.review of
-        Success requested reviewData ->
-            if requested == model.requestUrl then
-                Just reviewData
+        ToggledSyntax value ->
+            Just { settings | syntaxHighlighting = value }
 
-            else
-                Nothing
+        ToggledReviews value ->
+            Just { settings | showGitHubReviews = value }
+
+        SelectedMoveTarget _ _ ->
+            Just { settings | reviewScope = OneFile }
 
         _ ->
             Nothing
 
 
-visibleFiles : Model -> List FileChange
-visibleFiles model =
+readyReview : Model -> Maybe ReviewDocument
+readyReview model =
+    case model.review of
+        ReviewReady ready ->
+            Just ready.document
+
+        _ ->
+            Nothing
+
+
+visibleFiles : Settings -> Model -> List FileChange
+visibleFiles settings model =
     let
         searched =
-            List.filter (matchesFilter model) model.files
+            List.filter (matchesFilter model) (reviewFiles model)
     in
-    case model.settings.reviewScope of
+    case settings.reviewScope of
         FullDiff ->
             searched
 
         OneFile ->
-            case model.location.path of
+            case (reviewRequest model).location.path of
                 Just selected ->
                     List.filter (.path >> (==) selected) searched
 
@@ -850,28 +946,21 @@ matchesFilter model file =
                     |> Maybe.withDefault False
 
 
-view : Model -> Html Msg
-view model =
+view : Settings -> Model -> Html Msg
+view settings model =
     case model.review of
-        Loading url ->
-            loadingView url
+        ReviewLoading request ->
+            loadingView request.requestUrl
 
-        Failure _ error ->
+        ReviewFailure _ error ->
             section [ class "review-load-error", attribute "role" "alert" ]
                 [ strong [] [ text "Could not load this change" ]
                 , p [] [ text error ]
                 , button [ type_ "button", onClick Refreshed ] [ text "Try again" ]
                 ]
 
-        Success requested reviewData ->
-            if requested /= model.requestUrl then
-                loadingView model.requestUrl
-
-            else
-                readyView model reviewData
-
-        NotAsked ->
-            loadingView model.requestUrl
+        ReviewReady ready ->
+            readyView settings model ready.document
 
 
 loadingView : String -> Html Msg
@@ -888,29 +977,33 @@ loadingView url =
         ]
 
 
-readyView : Model -> ReviewDocument -> Html Msg
-readyView model reviewData =
+readyView : Settings -> Model -> ReviewDocument -> Html Msg
+readyView settings model reviewData =
+    let
+        currentLocation =
+            (reviewRequest model).location
+    in
     main_ [ class "review-page review-grid" ]
         [ reviewHeader model reviewData
-        , reviewToolbar model
-        , case model.location.tab of
+        , reviewToolbar settings model
+        , case currentLocation.tab of
             ReviewCommits ->
-                case model.location.commit of
+                case currentLocation.commit of
                     Just sha ->
                         div [ class "commit-diff-view" ]
                             [ div [ class "commit-detail" ]
                                 [ button [ type_ "button", onClick (SelectedTab ReviewCommits) ] [ text "← All commits" ]
                                 , h1 [] [ text ("Commit " ++ String.left 12 sha) ]
                                 ]
-                            , reviewWorkspace model
+                            , reviewWorkspace settings model
                             ]
 
                     Nothing ->
                         commitsView model
 
             ReviewFiles ->
-                reviewWorkspace model
-        , if Route.isPullRequest model.location.target && model.location.commit == Nothing then
+                reviewWorkspace settings model
+        , if Route.isPullRequest currentLocation.target && currentLocation.commit == Nothing then
             reviewComposer model
 
           else
@@ -920,6 +1013,15 @@ readyView model reviewData =
 
 reviewHeader : Model -> ReviewDocument -> Html Msg
 reviewHeader model reviewData =
+    let
+        files =
+            reviewFiles model
+
+        revision =
+            reviewCollaboration model
+                |> Maybe.map .revision
+                |> Maybe.withDefault NotAsked
+    in
     header [ class "review-header" ]
         [ div [ class "review-header-copy" ]
             [ div [ class "review-kicker" ]
@@ -931,12 +1033,12 @@ reviewHeader model reviewData =
             , p [] [ text (reviewData.author ++ " wants to merge "), code [] [ text reviewData.head ], text " into ", code [] [ text reviewData.base ] ]
             ]
         , div [ class "review-summary" ]
-            [ metric (String.fromInt (List.length model.files)) "files" ""
-            , metric ("+" ++ String.fromInt (List.sum (List.map .additions model.files))) "added" "is-addition"
-            , metric ("−" ++ String.fromInt (List.sum (List.map .deletions model.files))) "removed" "is-deletion"
+            [ metric (String.fromInt (List.length files)) "files" ""
+            , metric ("+" ++ String.fromInt (List.sum (List.map .additions files))) "added" "is-addition"
+            , metric ("−" ++ String.fromInt (List.sum (List.map .deletions files))) "removed" "is-deletion"
             , button [ type_ "button", attribute "title" "Refresh diff from GitHub", onClick Refreshed ] [ text "Refresh" ]
             ]
-        , revisionNotice model.revision
+        , revisionNotice revision
         ]
 
 
@@ -975,14 +1077,18 @@ revisionNotice revision =
             text ""
 
 
-reviewToolbar : Model -> Html Msg
-reviewToolbar model =
+reviewToolbar : Settings -> Model -> Html Msg
+reviewToolbar settings model =
+    let
+        currentLocation =
+            (reviewRequest model).location
+    in
     section
         [ class "compact-review-toolbar" ]
         [ div [ class "review-tab-picker" ]
-            [ segment (model.location.tab == ReviewFiles) (SelectedTab ReviewFiles) "Files"
-            , if Route.isPullRequest model.location.target then
-                segment (model.location.tab == ReviewCommits) (SelectedTab ReviewCommits) "Commits"
+            [ segment (currentLocation.tab == ReviewFiles) (SelectedTab ReviewFiles) "Files"
+            , if Route.isPullRequest currentLocation.target then
+                segment (currentLocation.tab == ReviewCommits) (SelectedTab ReviewCommits) "Commits"
 
               else
                 text ""
@@ -997,23 +1103,23 @@ reviewToolbar model =
             ]
         , div [ class "diff-options" ]
             [ select [ attribute "aria-label" "Diff scope", onInput (scopeFromString >> SelectedScope) ]
-                [ option [ value "file", selected (model.settings.reviewScope == OneFile) ] [ text "One file" ]
-                , option [ value "full", selected (model.settings.reviewScope == FullDiff) ] [ text "Full diff" ]
+                [ option [ value "file", selected (settings.reviewScope == OneFile) ] [ text "One file" ]
+                , option [ value "full", selected (settings.reviewScope == FullDiff) ] [ text "Full diff" ]
                 ]
             , select [ attribute "aria-label" "Diff layout", onInput (viewModeFromString >> SelectedViewMode) ]
-                [ option [ value "split", selected (model.settings.viewMode == Split) ] [ text "Side by side" ]
-                , option [ value "unified", selected (model.settings.viewMode == Unified) ] [ text "Unified" ]
+                [ option [ value "split", selected (settings.viewMode == Split) ] [ text "Side by side" ]
+                , option [ value "unified", selected (settings.viewMode == Unified) ] [ text "Unified" ]
                 ]
-            , toggle "Ignore whitespace" model.settings.ignoreWhitespace ToggledWhitespace
-            , toggle "Semantic" model.settings.semantic ToggledSemantic
+            , toggle "Ignore whitespace" settings.ignoreWhitespace ToggledWhitespace
+            , toggle "Semantic" settings.semantic ToggledSemantic
             , select [ attribute "aria-label" "Inline diff", onInput (Settings.inlineDiffModeFromString >> SelectedInlineMode) ]
-                [ option [ value "token", selected (model.settings.inlineDiffMode == Token) ] [ text "Word diff" ]
-                , option [ value "character", selected (model.settings.inlineDiffMode == Character) ] [ text "Character diff" ]
-                , option [ value "off", selected (model.settings.inlineDiffMode == InlineOff) ] [ text "Inline off" ]
+                [ option [ value "token", selected (settings.inlineDiffMode == Token) ] [ text "Word diff" ]
+                , option [ value "character", selected (settings.inlineDiffMode == Character) ] [ text "Character diff" ]
+                , option [ value "off", selected (settings.inlineDiffMode == InlineOff) ] [ text "Inline off" ]
                 ]
-            , toggle "Syntax" model.settings.syntaxHighlighting ToggledSyntax
-            , if Route.isPullRequest model.location.target then
-                toggle "GitHub reviews" model.settings.showGitHubReviews ToggledReviews
+            , toggle "Syntax" settings.syntaxHighlighting ToggledSyntax
+            , if Route.isPullRequest currentLocation.target then
+                toggle "GitHub reviews" settings.showGitHubReviews ToggledReviews
 
               else
                 text ""
@@ -1035,12 +1141,16 @@ segment active message labelText =
     button [ type_ "button", class ("segmented-button" ++ activeClass active), onClick message ] [ text labelText ]
 
 
-reviewWorkspace : Model -> Html Msg
-reviewWorkspace model =
+reviewWorkspace : Settings -> Model -> Html Msg
+reviewWorkspace settings model =
+    let
+        files =
+            reviewFiles model
+    in
     div
         [ class
             ("workspace"
-                ++ (if model.settings.sidebarCollapsed then
+                ++ (if settings.sidebarCollapsed then
                         " sidebar-collapsed"
 
                     else
@@ -1053,7 +1163,7 @@ reviewWorkspace model =
                 [ type_ "button"
                 , class "sidebar-toggle"
                 , attribute "title"
-                    (if model.settings.sidebarCollapsed then
+                    (if settings.sidebarCollapsed then
                         "Expand file sidebar"
 
                      else
@@ -1062,26 +1172,26 @@ reviewWorkspace model =
                 , onClick ToggledSidebar
                 ]
                 [ text
-                    (if model.settings.sidebarCollapsed then
+                    (if settings.sidebarCollapsed then
                         "›"
 
                      else
                         "‹"
                     )
                 ]
-            , if model.settings.sidebarCollapsed then
+            , if settings.sidebarCollapsed then
                 text ""
 
               else
                 div []
-                    [ header [] [ strong [] [ text "Changed files" ], span [ class "count-badge" ] [ text (String.fromInt (List.length model.files)) ] ]
-                    , reviewFileTree model (FileTree.build .path model.files)
+                    [ header [] [ strong [] [ text "Changed files" ], span [ class "count-badge" ] [ text (String.fromInt (List.length files)) ] ]
+                    , reviewFileTree model (FileTree.build .path files)
                     ]
             ]
         , section
             [ class
                 ("review-diffs"
-                    ++ (if model.settings.reviewScope == FullDiff then
+                    ++ (if settings.reviewScope == FullDiff then
                             " full-diff"
 
                         else
@@ -1089,11 +1199,11 @@ reviewWorkspace model =
                        )
                 )
             ]
-            (if List.isEmpty (visibleFiles model) then
+            (if List.isEmpty (visibleFiles settings model) then
                 [ div [ class "empty-diff" ] [ h1 [] [ text "No matching files" ], p [] [ text "Change or clear the review search." ] ] ]
 
              else
-                List.map (fileDiff model) (visibleFiles model)
+                List.map (fileDiff settings model) (visibleFiles settings model)
             )
         ]
 
@@ -1141,7 +1251,7 @@ reviewTreeNode model depth tree =
         Leaf name file ->
             let
                 selectedPath =
-                    Maybe.withDefault "" model.location.path
+                    Maybe.withDefault "" (reviewRequest model).location.path
 
                 reviewed =
                     Set.member file.path model.reviewedFiles
@@ -1166,8 +1276,8 @@ reviewTreeNode model depth tree =
                 ]
 
 
-fileDiff : Model -> FileChange -> Html Msg
-fileDiff model file =
+fileDiff : Settings -> Model -> FileChange -> Html Msg
+fileDiff settings model file =
     let
         collapsed =
             Set.member file.path model.collapsedFiles
@@ -1224,21 +1334,21 @@ fileDiff model file =
 
           else
             div []
-                [ semanticSummary model file
+                [ semanticSummary settings model file
                 , case fullFile of
                     Just (Success _ full) ->
-                        fullFileDiff model file full
+                        fullFileDiff settings model file full
 
                     Just (Failure _ error) ->
                         div [ class "diff-error" ] [ text error ]
 
                     _ ->
-                        patchDiff model file
+                        patchDiff settings model file
                 , detachedThreads model file.path
                 , inlineComposerFor model file.path
                 , footer [ class "diff-footer" ]
                     [ span [] [ text "End of patch" ]
-                    , if Route.isPullRequest model.location.target then
+                    , if Route.isPullRequest (reviewRequest model).location.target then
                         button [ type_ "button", onClick (OpenedInlineComposer file.path (lastNewLine model file.path) "RIGHT") ] [ text "+ Add a review comment" ]
 
                       else
@@ -1248,27 +1358,27 @@ fileDiff model file =
         ]
 
 
-semanticSummary : Model -> FileChange -> Html Msg
-semanticSummary model file =
-    if not model.settings.semantic then
+semanticSummary : Settings -> Model -> FileChange -> Html Msg
+semanticSummary settings model file =
+    if not settings.semantic then
         text ""
 
     else
-        case model.analysis of
-            Loading _ ->
+        case reviewAnalysis model of
+            AnalysisInFlight _ ->
                 div [ class "semantic-banner is-loading" ] [ span [ class "loading-spinner" ] [], text "Analyzing syntax tree…" ]
 
-            Failure _ error ->
+            AnalysisFailure _ error ->
                 div [ class "semantic-banner is-error" ] [ text error ]
 
-            Success _ snapshot ->
+            AnalysisComplete _ snapshot ->
                 snapshot.files
                     |> Dict.get file.path
                     |> Maybe.andThen .semantic
                     |> Maybe.map semanticResultView
                     |> Maybe.withDefault (text "")
 
-            NotAsked ->
+            AnalysisDisabled ->
                 text ""
 
 
@@ -1328,22 +1438,22 @@ semanticCount changes =
            )
 
 
-patchDiff : Model -> FileChange -> Html Msg
-patchDiff model file =
+patchDiff : Settings -> Model -> FileChange -> Html Msg
+patchDiff settings model file =
     div
         [ class
-            (if model.settings.viewMode == Split then
+            (if settings.viewMode == Split then
                 "split-diff"
 
              else
                 "unified-diff"
             )
         ]
-        (List.map (hunkView model file) (preparedHunks model file.path))
+        (List.map (hunkView settings model file) (preparedHunks model file.path))
 
 
-hunkView : Model -> FileChange -> Hunk -> Html Msg
-hunkView model file hunk =
+hunkView : Settings -> Model -> FileChange -> Hunk -> Html Msg
+hunkView settings model file hunk =
     let
         key =
             file.path ++ ":" ++ hunk.id
@@ -1367,11 +1477,11 @@ hunkView model file hunk =
         , if collapsed then
             text ""
 
-          else if model.settings.viewMode == Split then
-            div [ class "split-lines" ] (List.map (splitRowView model file) (Diff.splitRows model.settings.ignoreWhitespace hunk))
+          else if settings.viewMode == Split then
+            div [ class "split-lines" ] (List.map (splitRowView settings model file) (Diff.splitRows settings.ignoreWhitespace hunk))
 
           else
-            div [ class "unified-lines" ] (hunk.lines |> List.filter (keepLine model.settings.ignoreWhitespace) |> List.map (unifiedLineView model file))
+            div [ class "unified-lines" ] (hunk.lines |> List.filter (keepLine settings.ignoreWhitespace) |> List.map (unifiedLineView settings model file))
         ]
 
 
@@ -1380,16 +1490,16 @@ keepLine _ _ =
     True
 
 
-splitRowView : Model -> FileChange -> SplitRow -> Html Msg
-splitRowView model file row =
+splitRowView : Settings -> Model -> FileChange -> SplitRow -> Html Msg
+splitRowView settings model file row =
     div [ class "split-row" ]
-        [ splitCell model file "LEFT" "left" row.left
-        , splitCell model file "RIGHT" "right" row.right
+        [ splitCell settings model file "LEFT" "left" row.left
+        , splitCell settings model file "RIGHT" "right" row.right
         ]
 
 
-splitCell : Model -> FileChange -> String -> String -> Maybe SideLine -> Html Msg
-splitCell model file side sideClass maybeLine =
+splitCell : Settings -> Model -> FileChange -> String -> String -> Maybe SideLine -> Html Msg
+splitCell settings model file side sideClass maybeLine =
     case maybeLine of
         Nothing ->
             div [ class ("split-cell " ++ sideClass ++ " is-empty") ] [ span [ class "line-number" ] [], span [ class "line-marker" ] [], code [ class "line-code" ] [] ]
@@ -1408,14 +1518,14 @@ splitCell model file side sideClass maybeLine =
                 ]
                 [ lineNumberButton model file.path side number line.number
                 , span [ class "line-marker" ] [ text (kindMarker line.kind) ]
-                , code [ class "line-code" ] (highlightedLine model file.path side number line.text)
+                , code [ class "line-code" ] (highlightedLine settings model file.path side number line.text)
                 , decoration.button
                 , lineThreads model file.path side number
                 ]
 
 
-unifiedLineView : Model -> FileChange -> DiffLine -> Html Msg
-unifiedLineView model file line =
+unifiedLineView : Settings -> Model -> FileChange -> DiffLine -> Html Msg
+unifiedLineView settings model file line =
     let
         side =
             if line.kind == Deletion then
@@ -1438,7 +1548,7 @@ unifiedLineView model file line =
         [ span [ class "line-number old" ] [ text (maybeNumber line.oldLine) ]
         , lineNumberButton model file.path side number line.newLine
         , span [ class "line-marker" ] [ text (kindMarker line.kind) ]
-        , code [ class "line-code" ] (highlightedLine model file.path side number line.text)
+        , code [ class "line-code" ] (highlightedLine settings model file.path side number line.text)
         , decoration.button
         , lineThreads model file.path side number
         ]
@@ -1462,8 +1572,8 @@ moveDecoration model path side lineNumber =
                 Destination
 
         move =
-            case model.analysis of
-                Success _ snapshot ->
+            case reviewAnalysis model of
+                AnalysisComplete _ snapshot ->
                     List.filter (SemanticMove.containsLine path lineNumber endpoint) snapshot.moves |> List.head
 
                 _ ->
@@ -1517,21 +1627,21 @@ moveDecoration model path side lineNumber =
 
 lineNumberButton : Model -> String -> String -> Int -> Maybe Int -> Html Msg
 lineNumberButton model path side number maybeNumberValue =
-    if Route.isPullRequest model.location.target && maybeNumberValue /= Nothing then
+    if Route.isPullRequest (reviewRequest model).location.target && maybeNumberValue /= Nothing then
         button [ type_ "button", class "line-number comment-trigger", attribute "title" "Add a GitHub review comment", onClick (OpenedInlineComposer path number side) ] [ text (maybeNumber maybeNumberValue) ]
 
     else
         span [ class "line-number" ] [ text (maybeNumber maybeNumberValue) ]
 
 
-highlightedLine : Model -> String -> String -> Int -> String -> List (Html Msg)
-highlightedLine model path side number source =
-    case Dict.get path model.preparedFiles of
+highlightedLine : Settings -> Model -> String -> String -> Int -> String -> List (Html Msg)
+highlightedLine settings model path side number source =
+    case readyState model |> Maybe.andThen (.files >> FileIndex.get path) of
         Just prepared ->
-            rangedSyntax model.settings.syntaxHighlighting path source (PreparedDiff.rangesFor side number prepared)
+            rangedSyntax settings.syntaxHighlighting path source (PreparedDiff.rangesFor side number prepared)
 
         Nothing ->
-            Syntax.line model.settings.syntaxHighlighting path source
+            Syntax.line settings.syntaxHighlighting path source
 
 
 rangedSyntax : Bool -> String -> String -> List CharacterRange -> List (Html Msg)
@@ -1567,7 +1677,7 @@ rangesToSegments offset source ranges =
 
 lineThreads : Model -> String -> String -> Int -> Html Msg
 lineThreads model path side lineNumber =
-    case model.comments of
+    case reviewComments model of
         Success _ comments ->
             comments
                 |> rootComments
@@ -1581,7 +1691,7 @@ lineThreads model path side lineNumber =
 
 detachedThreads : Model -> String -> Html Msg
 detachedThreads model path =
-    case model.comments of
+    case reviewComments model of
         Success _ comments ->
             comments
                 |> rootComments
@@ -1693,7 +1803,7 @@ inlineComposerFor model path =
 commitsView : Model -> Html Msg
 commitsView model =
     section [ class "commits-view" ]
-        [ case model.location.commit of
+        [ case (reviewRequest model).location.commit of
             Just selectedSha ->
                 div [ class "commit-detail" ]
                     [ button [ type_ "button", onClick (SelectedTab ReviewCommits) ] [ text "← All commits" ]
@@ -1702,7 +1812,7 @@ commitsView model =
                     ]
 
             Nothing ->
-                case model.commits of
+                case reviewCommits model of
                     Loading _ ->
                         pageState "Loading commits…"
 
@@ -1744,20 +1854,20 @@ reviewComposer model =
         ]
 
 
-fullFileDiff : Model -> FileChange -> FullFile -> Html Msg
-fullFileDiff model file full =
+fullFileDiff : Settings -> Model -> FileChange -> FullFile -> Html Msg
+fullFileDiff settings model file full =
     let
         rows =
             Diff.fullFileRowsPrepared (preparedHunks model file.path) full.oldText full.newText
     in
     div [ class "full-file-diff" ]
-        (if model.settings.viewMode == Split then
-            List.map (splitRowView model file) rows
+        (if settings.viewMode == Split then
+            List.map (splitRowView settings model file) rows
 
          else
             rows
                 |> List.concatMap fullUnifiedLines
-                |> List.map (unifiedLineView model file)
+                |> List.map (unifiedLineView settings model file)
         )
 
 
@@ -1795,8 +1905,8 @@ githubFileUrl model file =
 
 preparedHunks : Model -> String -> List Hunk
 preparedHunks model path =
-    Dict.get path model.preparedFiles
-        |> Maybe.map .hunks
+    readyState model
+        |> Maybe.map (.files >> FileIndex.hunks path)
         |> Maybe.withDefault []
 
 

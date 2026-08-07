@@ -1,11 +1,31 @@
 use std::{
     env,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 
 use crate::error::{AppError, AppResult};
+
+#[derive(Clone, Default)]
+pub struct SettingsStore {
+    writes: Arc<Mutex<()>>,
+}
+
+impl SettingsStore {
+    pub async fn load(&self) -> AppResult<SettingsDocument> {
+        load().await
+    }
+
+    pub async fn save(&self, settings: HunkerSettings) -> AppResult<SettingsDocument> {
+        // All browser tabs share one settings file. Serializing the atomic
+        // replace prevents two requests from writing the same temporary path.
+        let _guard = self.writes.lock().await;
+        save(settings).await
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

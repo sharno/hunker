@@ -33,6 +33,7 @@ struct AppState {
     analysis: analysis::AnalysisCache,
     github: GitHub,
     local: Local,
+    settings: settings::SettingsStore,
 }
 
 #[tokio::main]
@@ -47,6 +48,7 @@ async fn main() -> AppResult<()> {
         analysis: analysis::AnalysisCache::default(),
         github: GitHub::new().await?,
         local: Local::default(),
+        settings: settings::SettingsStore::default(),
     });
     let app = router(state);
     let port = env::var("HUNKER_PORT")
@@ -365,17 +367,20 @@ async fn pull_repository(
     ))
 }
 
-async fn get_settings() -> AppResult<Json<settings::SettingsDocument>> {
-    Ok(Json(settings::load().await?))
+async fn get_settings(
+    State(state): State<Arc<AppState>>,
+) -> AppResult<Json<settings::SettingsDocument>> {
+    Ok(Json(state.settings.load().await?))
 }
 #[derive(Deserialize)]
 struct SettingsBody {
     settings: settings::HunkerSettings,
 }
 async fn save_settings(
+    State(state): State<Arc<AppState>>,
     Json(body): Json<SettingsBody>,
 ) -> AppResult<Json<settings::SettingsDocument>> {
-    Ok(Json(settings::save(body.settings).await?))
+    Ok(Json(state.settings.save(body.settings).await?))
 }
 
 #[derive(Deserialize)]
@@ -605,6 +610,7 @@ mod tests {
             analysis: analysis::AnalysisCache::default(),
             github: GitHub::new().await.unwrap(),
             local: Local::default(),
+            settings: settings::SettingsStore::default(),
         }));
     }
 }

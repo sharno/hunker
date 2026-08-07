@@ -1,26 +1,25 @@
-module Hunker.Page.Settings exposing (Model, Msg(..), init, update, view)
+module Hunker.Page.Settings exposing (Model, Msg(..), SaveStatus(..), init, submission, update, view)
 
 import Html exposing (Html, button, div, form, h1, header, input, label, main_, option, p, section, select, span, text)
 import Html.Attributes exposing (checked, class, disabled, selected, type_, value)
 import Html.Events exposing (onCheck, onInput, onSubmit)
-import Hunker.Api as Api
-import Hunker.Domain.Settings as Settings exposing (InlineDiffMode(..), ReviewScope(..), Settings, SettingsDocument, ViewMode(..))
+import Hunker.Domain.Settings as Settings exposing (ReviewScope(..), Settings, ViewMode(..))
 import Hunker.Effect as Effect exposing (Effect)
-import Hunker.Remote exposing (Remote(..))
 
 
 type alias Model =
-    { load : Remote () String SettingsDocument
-    , draft : Settings
-    , save : Remote Int String SettingsDocument
-    , generation : Int
-    }
+    { draft : Settings }
+
+
+type SaveStatus
+    = SaveIdle
+    | SaveInProgress
+    | SaveSucceeded String
+    | SaveError String
 
 
 type Msg
-    = Loaded SettingsDocument
-    | LoadFailed String
-    | ChangedRepositoriesRoot String
+    = ChangedRepositoriesRoot String
     | ChangedCacheRoot String
     | ChangedScope String
     | ChangedViewMode String
@@ -31,30 +30,16 @@ type Msg
     | ChangedSidebar Bool
     | ChangedReviews Bool
     | Submitted
-    | Saved Int SettingsDocument
-    | SaveFailed Int String
 
 
 init : Settings -> ( Model, Effect Msg )
 init defaults =
-    ( { load = Loading ()
-      , draft = defaults
-      , save = NotAsked
-      , generation = 0
-      }
-    , Api.loadSettings Loaded LoadFailed
-    )
+    ( { draft = defaults }, Effect.none )
 
 
 update : Msg -> Model -> ( Model, Effect Msg )
 update msg model =
     case msg of
-        Loaded document ->
-            ( { model | load = Success () document, draft = document.settings }, Effect.none )
-
-        LoadFailed error ->
-            ( { model | load = Failure () error }, Effect.none )
-
         ChangedRepositoriesRoot value ->
             draft (\settings -> { settings | repositoriesRoot = value }) model
 
@@ -108,56 +93,38 @@ update msg model =
             draft (\settings -> { settings | showGitHubReviews = value }) model
 
         Submitted ->
-            let
-                generation =
-                    model.generation + 1
-            in
-            ( { model | generation = generation, save = Loading generation }
-            , Api.saveSettings model.draft (Saved generation) (SaveFailed generation)
-            )
-
-        Saved generation document ->
-            if model.generation /= generation then
-                ( model, Effect.none )
-
-            else
-                ( { model | save = Success generation document, draft = document.settings }, Effect.none )
-
-        SaveFailed generation error ->
-            if model.generation /= generation then
-                ( model, Effect.none )
-
-            else
-                ( { model | save = Failure generation error }, Effect.none )
+            ( model, Effect.none )
 
 
 draft : (Settings -> Settings) -> Model -> ( Model, Effect Msg )
 draft transform model =
-    ( { model | draft = transform model.draft, save = NotAsked }, Effect.none )
+    ( { model | draft = transform model.draft }, Effect.none )
 
 
-view : Model -> Html Msg
-view model =
+submission : Msg -> Model -> Maybe Settings
+submission msg model =
+    case msg of
+        Submitted ->
+            Just model.draft
+
+        _ ->
+            Nothing
+
+
+view : SaveStatus -> Model -> Html Msg
+view saveStatus model =
     main_ [ class "settings-page" ]
         [ header [ class "settings-heading" ]
             [ span [ class "eyebrow" ] [ text "Local configuration" ]
             , h1 [] [ text "Hunker settings" ]
             , p [] [ text "These defaults live with the Rust server, so every browser and tab shares them." ]
             ]
-        , case model.load of
-            Loading _ ->
-                state "Loading settings…" "Reading the server-owned settings document."
-
-            Failure _ error ->
-                section [ class "page-state is-error" ] [ h1 [] [ text "Could not load settings" ], p [] [ text error ] ]
-
-            _ ->
-                settingsForm model
+        , settingsForm saveStatus model
         ]
 
 
-settingsForm : Model -> Html Msg
-settingsForm model =
+settingsForm : SaveStatus -> Model -> Html Msg
+settingsForm saveStatus model =
     form [ class "settings-form", onSubmit Submitted ]
         [ section [ class "settings-section" ]
             [ h1 [] [ text "Repository storage" ]
@@ -177,10 +144,10 @@ settingsForm model =
             , toggle "Show GitHub reviews" "Load and render inline review conversations." model.draft.showGitHubReviews ChangedReviews
             ]
         , div [ class "settings-actions" ]
-            [ saveFeedback model.save
-            , button [ type_ "submit", disabled (isSaving model.save) ]
+            [ saveFeedback saveStatus
+            , button [ type_ "submit", disabled (saveStatus == SaveInProgress) ]
                 [ text
-                    (if isSaving model.save then
+                    (if saveStatus == SaveInProgress then
                         "Saving…"
 
                      else
@@ -221,27 +188,17 @@ toggle title description current toMsg =
         ]
 
 
-saveFeedback : Remote Int String SettingsDocument -> Html Msg
-saveFeedback remote =
-    case remote of
-        Success _ document ->
-            span [ class "save-feedback is-success" ] [ text ("Saved to " ++ document.configPath) ]
+saveFeedback : SaveStatus -> Html Msg
+saveFeedback saveStatus =
+    case saveStatus of
+        SaveSucceeded path ->
+            span [ class "save-feedback is-success" ] [ text ("Saved to " ++ path) ]
 
-        Failure _ error ->
+        SaveError error ->
             span [ class "save-feedback is-error" ] [ text error ]
 
         _ ->
             text ""
-
-
-isSaving : Remote Int String SettingsDocument -> Bool
-isSaving remote =
-    case remote of
-        Loading _ ->
-            True
-
-        _ ->
-            False
 
 
 state : String -> String -> Html Msg

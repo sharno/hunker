@@ -19,7 +19,17 @@ import Url exposing (Url)
 type AppState
     = Booting Route
     | BootFailed Route String
-    | Ready Settings Page
+    | Ready SettingsState Page
+
+
+type SettingsState
+    = SettingsClean Settings
+    | SettingsSaving SettingsRevision Settings
+    | SettingsFailed SettingsRevision Settings String
+
+
+type SettingsRevision
+    = SettingsRevision Int
 
 
 type Page
@@ -35,6 +45,9 @@ type alias Model =
     , state : AppState
     , githubInput : String
     , githubInputError : String
+    , settingsRevision : Int
+    , pendingSettings : Maybe Settings
+    , settingsConfigPath : String
     }
 
 
@@ -48,7 +61,9 @@ type Msg
     = LinkClicked Browser.UrlRequest
     | UrlChanged Url
     | SettingsLoaded SettingsDocument
-    | SettingsFailed String
+    | SettingsLoadFailed String
+    | SettingsSaved SettingsRevision SettingsDocument
+    | SettingsSaveFailed SettingsRevision String
     | RetriedBootstrap
     | ChangedGitHubInput String
     | SubmittedGitHubInput
@@ -80,8 +95,11 @@ init _ url _ =
       , state = Booting route
       , githubInput = ""
       , githubInputError = ""
+      , settingsRevision = 0
+      , pendingSettings = Nothing
+      , settingsConfigPath = ""
       }
-    , Api.loadSettings SettingsLoaded SettingsFailed
+    , Api.loadSettings SettingsLoaded SettingsLoadFailed
     )
 
 
@@ -138,36 +156,36 @@ update msg model =
                     Route.fromUrl url
             in
             case model.state of
-                Ready settings (ReviewPage review) ->
+                Ready settingsState (ReviewPage review) ->
                     case route of
                         Route.Review reviewLocation ->
                             let
                                 ( updated, effect ) =
                                     Review.navigate reviewLocation review
                             in
-                            ( { model | route = route, state = Ready updated.settings (ReviewPage updated) }
+                            ( { model | route = route, state = Ready settingsState (ReviewPage updated) }
                             , Effect.map ReviewMsg effect
                             )
 
                         _ ->
-                            startRoute settings route { model | route = route }
+                            startRoute settingsState route { model | route = route }
 
-                Ready settings (RepositoryPage repository) ->
+                Ready settingsState (RepositoryPage repository) ->
                     case route of
                         Route.Repository repositoryLocation ->
                             let
                                 ( updated, effect ) =
                                     Repository.navigate repositoryLocation repository
                             in
-                            ( { model | route = route, state = Ready settings (RepositoryPage updated) }
+                            ( { model | route = route, state = Ready settingsState (RepositoryPage updated) }
                             , Effect.map RepositoryMsg effect
                             )
 
                         _ ->
-                            startRoute settings route { model | route = route }
+                            startRoute settingsState route { model | route = route }
 
-                Ready settings _ ->
-                    startRoute settings route { model | route = route }
+                Ready settingsState _ ->
+                    startRoute settingsState route { model | route = route }
 
                 BootFailed _ error ->
                     ( { model | route = route, state = BootFailed route error }, Effect.none )
@@ -176,13 +194,19 @@ update msg model =
                     ( { model | route = route, state = Booting route }, Effect.none )
 
         SettingsLoaded document ->
-            startRoute document.settings model.route model
+            startRoute (SettingsClean document.settings) model.route { model | settingsConfigPath = document.configPath }
 
-        SettingsFailed error ->
+        SettingsLoadFailed error ->
             ( { model | state = BootFailed model.route error }, Effect.none )
 
+        SettingsSaved revision document ->
+            finishSettingsSave revision document model
+
+        SettingsSaveFailed revision error ->
+            failSettingsSave revision error model
+
         RetriedBootstrap ->
-            ( { model | state = Booting model.route }, Api.loadSettings SettingsLoaded SettingsFailed )
+            ( { model | state = Booting model.route }, Api.loadSettings SettingsLoaded SettingsLoadFailed )
 
         ChangedGitHubInput githubInput ->
             ( { model | githubInput = githubInput, githubInputError = "" }, Effect.none )
@@ -209,16 +233,23 @@ update msg model =
 
         SettingsMsg message ->
             updatePage model
-                (\settings page ->
+                (\settingsState page ->
                     case page of
                         SettingsPage settingsModel ->
                             let
                                 ( updated, effect ) =
                                     SettingsPage.update message settingsModel
+
+                                updatedModel =
+                                    { model | state = Ready settingsState (SettingsPage updated) }
                             in
-                            ( { model | state = Ready updated.draft (SettingsPage updated) }
-                            , Effect.map SettingsMsg effect
-                            )
+                            case SettingsPage.submission message updated of
+                                Just desired ->
+                                    queueSettings desired updatedModel
+                                        |> addEffect (Effect.map SettingsMsg effect)
+
+                                Nothing ->
+                                    ( updatedModel, Effect.map SettingsMsg effect )
 
                         _ ->
                             unchanged model
@@ -238,48 +269,66 @@ update msg model =
 
         ReviewMsg message ->
             updatePage model
-                (\settings page ->
+                (\settingsState page ->
                     case page of
                         ReviewPage review ->
                             let
+                                settings =
+                                    settingsValue settingsState
+
+                                desired =
+                                    Review.settingsIntent settings message
+                                        |> Maybe.withDefault settings
+
                                 ( updated, effect ) =
-                                    Review.update message review
+                                    Review.update desired message review
+
+                                updatedModel =
+                                    { model | state = Ready settingsState (ReviewPage updated) }
                             in
-                            ( { model | state = Ready updated.settings (ReviewPage updated) }
-                            , Effect.map ReviewMsg effect
-                            )
+                            case Review.settingsIntent settings message of
+                                Just changed ->
+                                    queueSettings changed updatedModel
+                                        |> addEffect (Effect.map ReviewMsg effect)
+
+                                Nothing ->
+                                    ( updatedModel, Effect.map ReviewMsg effect )
 
                         _ ->
                             unchanged model
                 )
 
 
-updatePage : Model -> (Settings -> Page -> ( Model, Effect Msg )) -> ( Model, Effect Msg )
+updatePage : Model -> (SettingsState -> Page -> ( Model, Effect Msg )) -> ( Model, Effect Msg )
 updatePage model apply =
     case model.state of
-        Ready settings page ->
-            apply settings page
+        Ready settingsState page ->
+            apply settingsState page
 
         _ ->
             unchanged model
 
 
-mapPage : (childModel -> Page) -> (childMsg -> Msg) -> Settings -> Model -> ( childModel, Effect childMsg ) -> ( Model, Effect Msg )
-mapPage toPage toMsg settings model ( childModel, childEffect ) =
-    ( { model | state = Ready settings (toPage childModel) }
+mapPage : (childModel -> Page) -> (childMsg -> Msg) -> SettingsState -> Model -> ( childModel, Effect childMsg ) -> ( Model, Effect Msg )
+mapPage toPage toMsg settingsState model ( childModel, childEffect ) =
+    ( { model | state = Ready settingsState (toPage childModel) }
     , Effect.map toMsg childEffect
     )
 
 
-startRoute : Settings -> Route -> Model -> ( Model, Effect Msg )
-startRoute settings route model =
+startRoute : SettingsState -> Route -> Model -> ( Model, Effect Msg )
+startRoute settingsState route model =
+    let
+        settings =
+            settingsValue settingsState
+    in
     case route of
         Route.Home ->
             let
                 ( home, effect ) =
                     Home.init
             in
-            ( { model | route = route, state = Ready settings (HomePage home) }
+            ( { model | route = route, state = Ready settingsState (HomePage home) }
             , Effect.map HomeMsg effect
             )
 
@@ -288,7 +337,7 @@ startRoute settings route model =
                 ( settingsModel, effect ) =
                     SettingsPage.init settings
             in
-            ( { model | route = route, state = Ready settings (SettingsPage settingsModel) }
+            ( { model | route = route, state = Ready settingsState (SettingsPage settingsModel) }
             , Effect.map SettingsMsg effect
             )
 
@@ -297,21 +346,135 @@ startRoute settings route model =
                 ( repository, effect ) =
                     Repository.init repositoryLocation
             in
-            ( { model | route = route, state = Ready settings (RepositoryPage repository) }
+            ( { model | route = route, state = Ready settingsState (RepositoryPage repository) }
             , Effect.map RepositoryMsg effect
             )
 
         Route.Review reviewLocation ->
             let
                 ( review, effect ) =
-                    Review.init settings reviewLocation
+                    Review.init reviewLocation
             in
-            ( { model | route = route, state = Ready settings (ReviewPage review) }
+            ( { model | route = route, state = Ready settingsState (ReviewPage review) }
             , Effect.map ReviewMsg effect
             )
 
         Route.NotFound path ->
-            ( { model | route = route, state = Ready settings (NotFoundPage path) }, Effect.none )
+            ( { model | route = route, state = Ready settingsState (NotFoundPage path) }, Effect.none )
+
+
+settingsValue : SettingsState -> Settings
+settingsValue state =
+    case state of
+        SettingsClean settings ->
+            settings
+
+        SettingsSaving _ settings ->
+            settings
+
+        SettingsFailed _ settings _ ->
+            settings
+
+
+queueSettings : Settings -> Model -> ( Model, Effect Msg )
+queueSettings desired model =
+    case model.state of
+        Ready (SettingsSaving revision _) page ->
+            ( { model
+                | state = Ready (SettingsSaving revision desired) page
+                , pendingSettings = Just desired
+              }
+            , Effect.none
+            )
+
+        Ready _ page ->
+            startSettingsSave desired page model
+
+        _ ->
+            unchanged model
+
+
+startSettingsSave : Settings -> Page -> Model -> ( Model, Effect Msg )
+startSettingsSave settings page model =
+    let
+        number =
+            model.settingsRevision + 1
+
+        revision =
+            SettingsRevision number
+    in
+    ( { model
+        | state = Ready (SettingsSaving revision settings) page
+        , settingsRevision = number
+        , pendingSettings = Nothing
+      }
+    , Api.saveSettings settings (SettingsSaved revision) (SettingsSaveFailed revision)
+    )
+
+
+finishSettingsSave : SettingsRevision -> SettingsDocument -> Model -> ( Model, Effect Msg )
+finishSettingsSave revision document model =
+    case model.state of
+        Ready (SettingsSaving active desired) page ->
+            if revision /= active then
+                unchanged model
+
+            else
+                case model.pendingSettings of
+                    Just pending ->
+                        startSettingsSave pending page { model | settingsConfigPath = document.configPath }
+
+                    Nothing ->
+                        ( { model
+                            | state = Ready (SettingsClean document.settings) page
+                            , settingsConfigPath = document.configPath
+                          }
+                        , Effect.none
+                        )
+
+        _ ->
+            unchanged model
+
+
+failSettingsSave : SettingsRevision -> String -> Model -> ( Model, Effect Msg )
+failSettingsSave revision error model =
+    case model.state of
+        Ready (SettingsSaving active desired) page ->
+            if revision /= active then
+                unchanged model
+
+            else
+                ( { model
+                    | state = Ready (SettingsFailed revision desired error) page
+                    , pendingSettings = Nothing
+                  }
+                , Effect.none
+                )
+
+        _ ->
+            unchanged model
+
+
+settingsSaveStatus : Model -> SettingsState -> SettingsPage.SaveStatus
+settingsSaveStatus model settingsState =
+    case settingsState of
+        SettingsClean _ ->
+            if model.settingsConfigPath == "" then
+                SettingsPage.SaveIdle
+
+            else
+                SettingsPage.SaveSucceeded model.settingsConfigPath
+
+        SettingsSaving _ _ ->
+            SettingsPage.SaveInProgress
+
+        SettingsFailed _ _ error ->
+            SettingsPage.SaveError error
+
+
+addEffect : Effect Msg -> ( Model, Effect Msg ) -> ( Model, Effect Msg )
+addEffect additional ( model, effect ) =
+    ( model, Effect.batch [ effect, additional ] )
 
 
 view : Model -> Browser.Document Msg
@@ -396,7 +559,7 @@ pageToolbar model =
         Ready _ (ReviewPage review) ->
             div [ class "review-app-location" ]
                 [ span [] [ text "Review" ]
-                , strong [] [ text (Route.repositoryName review.location.target) ]
+                , strong [] [ text (Route.repositoryName (Review.location review).target) ]
                 ]
 
         _ ->
@@ -416,19 +579,23 @@ pageView model =
                 , button [ type_ "button", Html.Events.onClick RetriedBootstrap ] [ text "Try again" ]
                 ]
 
-        Ready settings page ->
+        Ready settingsState page ->
+            let
+                settings =
+                    settingsValue settingsState
+            in
             case page of
                 HomePage home ->
                     Html.map HomeMsg (Home.view home)
 
                 SettingsPage settingsModel ->
-                    Html.map SettingsMsg (SettingsPage.view settingsModel)
+                    Html.map SettingsMsg (SettingsPage.view (settingsSaveStatus model settingsState) settingsModel)
 
                 RepositoryPage repository ->
                     Html.map RepositoryMsg (Repository.view settings.syntaxHighlighting repository)
 
                 ReviewPage review ->
-                    Html.map ReviewMsg (Review.view review)
+                    Html.map ReviewMsg (Review.view settings review)
 
                 NotFoundPage path ->
                     main_ [ class "page-state is-error" ]
