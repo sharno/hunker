@@ -2,6 +2,7 @@ mod character_diff;
 mod command;
 mod diff;
 mod error;
+mod frontend;
 mod github;
 mod local;
 mod semantic;
@@ -50,11 +51,11 @@ async fn main() -> AppResult<()> {
     let port = env::var("HUNKER_PORT")
         .ok()
         .and_then(|value| value.parse().ok())
-        .unwrap_or(8787);
+        .unwrap_or(5173);
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
         .await
         .map_err(|error| AppError::internal(format!("Could not bind port {port}: {error}")))?;
-    tracing::info!(port, "Hunker Rust API listening");
+    tracing::info!(port, "Hunker listening");
     axum::serve(listener, app)
         .await
         .map_err(|error| AppError::internal(format!("Hunker server stopped: {error}")))
@@ -84,6 +85,8 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/api/reviews/comment", post(post_review_comment))
         .route("/api/reviews/reply", post(post_review_reply))
         .route("/api/reviews/submit", post(post_review))
+        .route("/assets/app.js", get(frontend::javascript))
+        .route("/assets/app.css", get(frontend::stylesheet))
         .layer(
             CorsLayer::new()
                 .allow_origin(
@@ -96,6 +99,7 @@ fn router(state: Arc<AppState>) -> Router {
         )
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+        .fallback(get(frontend::index))
 }
 
 #[derive(Deserialize)]

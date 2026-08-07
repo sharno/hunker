@@ -5,14 +5,14 @@
   "type": "module",
   "scripts": {
     "prepare": "effect-tsgo patch --no-typescript --oxlint",
-    "dev": "concurrently --kill-others --names api,web --prefix-colors magenta,cyan \"bun run dev:api\" \"bun run dev:web\"",
+    "dev": "cargo run --quiet -p hunker-server",
     "dev:api": "cargo run --quiet -p hunker-server",
     "dev:web": "vite",
     "elm:build": "elm make elm/src/Main.elm --output=dist/elm.js",
     "elm:format": "elm-format elm/src tests --yes",
     "elm:format:check": "elm-format elm/src tests --validate",
     "elm:test": "elm-test",
-    "build": "bun run typecheck && vite build && cargo build --release -p hunker-server",
+    "build": "cargo build --release -p hunker-server",
     "format": "oxfmt --write . && cargo fmt --all",
     "format:check": "oxfmt --check . && cargo fmt --all --check",
     "lint": "oxlint --disable-nested-config . && cargo clippy --workspace --all-targets -- -D warnings",
@@ -21,7 +21,8 @@
     "test:integration": "playwright test",
     "test:integration:ui": "playwright test --ui",
     "start:api": "cargo run --release --quiet -p hunker-server",
-    "preview": "vite preview"
+    "start": "cargo run --release --quiet -p hunker-server",
+    "preview": "cargo run --release --quiet -p hunker-server"
   },
   "dependencies": {
     "@effect/platform-browser": "4.0.0-beta.102",
