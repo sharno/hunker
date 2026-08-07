@@ -348,6 +348,7 @@ topBar model =
         , form [ class "github-location-form", onSubmit SubmittedGitHubInput ]
             [ input
                 [ type_ "text"
+                , attribute "aria-label" "GitHub URL"
                 , placeholder "Paste any GitHub URL"
                 , value model.githubInput
                 , onInput ChangedGitHubInput

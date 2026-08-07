@@ -473,7 +473,6 @@ toolbar model =
         , tabButton "Pull requests" RepositoryPulls model.location.tab
         , tabButton "Commits" RepositoryCommits model.location.tab
         ]
-    , searchForm model
     ]
 
 
@@ -500,6 +499,7 @@ searchForm model =
             ]
         , input
             [ type_ "search"
+            , attribute "aria-label" "Search repository"
             , placeholder "Search repository"
             , value model.searchDraft
             , onInput ChangedSearch
@@ -524,7 +524,12 @@ searchModeButton short labelText mode active =
 view : Bool -> Model -> Html Msg
 view syntaxHighlighting model =
     main_ [ class "repository-shell" ]
-        [ sourceControlView model
+        [ if model.location.tab == RepositoryFiles then
+            div [ class "repository-context-bar" ] [ searchForm model ]
+
+          else
+            text ""
+        , sourceControlView model
         , case model.location.tab of
             RepositoryPulls ->
                 pullsView model

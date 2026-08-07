@@ -53,6 +53,7 @@ view model =
                 ]
             , input
                 [ type_ "search"
+                , Html.Attributes.attribute "aria-label" "Filter repositories"
                 , placeholder "Filter repositories"
                 , value model.query
                 , onInput ChangedQuery

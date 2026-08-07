@@ -3,6 +3,7 @@ module MainProgramTest exposing (suite)
 import Http
 import Hunker.Effect as AppEffect
 import Json.Decode as Decode
+import Json.Encode as Encode
 import Main
 import ProgramTest
 import SimulatedEffect.Cmd as SimulatedCmd
@@ -39,11 +40,36 @@ suite =
                     |> ProgramTest.clickButton "Open"
                     |> ProgramTest.ensureViewHas [ text "Loading the latest change…", text "example/hunker/pull/42" ]
                     |> ProgramTest.expectHttpRequestWasMade "GET" "/api/diff?url=https%3A%2F%2Fgithub.com%2Fexample%2Fhunker%2Fpull%2F42&refresh=https%3A%2F%2Fgithub.com%2Fexample%2Fhunker%2Fpull%2F42"
+        , test "renders a loaded review and auto-collapses a reviewed file" <|
+            \() ->
+                startedAt "/example/hunker/pull/42/files/src/greet.ts"
+                    |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
+                    |> ProgramTest.ensureViewHas [ text "Loading the latest change…" ]
+                    |> ProgramTest.simulateHttpOk "GET" reviewRequest reviewJson
+                    |> ProgramTest.ensureViewHas
+                        [ text "Improve the greeting"
+                        , text "src/greet.ts"
+                        , text "hello"
+                        ]
+                    |> ProgramTest.clickButton "Mark reviewed"
+                    |> ProgramTest.expectViewHas [ text "Reviewed" ]
+        , test "collapses resolved GitHub review threads by default" <|
+            \() ->
+                startedAt "/example/hunker/pull/42/files/src/greet.ts"
+                    |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
+                    |> ProgramTest.simulateHttpOk "GET" reviewRequest reviewJson
+                    |> ProgramTest.simulateHttpOk "GET" "/api/reviews?url=https%3A%2F%2Fgithub.com%2Fexample%2Fhunker%2Fpull%2F42" resolvedCommentsJson
+                    |> ProgramTest.expectViewHas [ text "Resolved", text "reviewer" ]
         ]
 
 
 started : ProgramTest.ProgramTest Main.Model Main.Msg (AppEffect.Effect Main.Msg)
 started =
+    startedAt "/"
+
+
+startedAt : String -> ProgramTest.ProgramTest Main.Model Main.Msg (AppEffect.Effect Main.Msg)
+startedAt path =
     ProgramTest.createApplication
         { init = Main.init
         , onUrlChange = Main.UrlChanged
@@ -51,7 +77,7 @@ started =
         , update = Main.update
         , view = Main.view
         }
-        |> ProgramTest.withBaseUrl "http://localhost:8787/"
+        |> ProgramTest.withBaseUrl ("http://localhost:8787" ++ path)
         |> ProgramTest.withSimulatedEffects simulateEffect
         |> ProgramTest.start ()
 
@@ -130,3 +156,47 @@ settingsJson =
 repositoriesJson : String
 repositoriesJson =
     """{"configuredRoot":"/Users/mohamed/src","temporaryRoot":"/tmp/hunker/repositories","repositories":[{"owner":"mohamed-rdr","name":"hunker","path":"/Users/mohamed/src/hunker","source":"configured"}]}"""
+
+
+reviewRequest : String
+reviewRequest =
+    "/api/diff?url=https%3A%2F%2Fgithub.com%2Fexample%2Fhunker%2Fpull%2F42&refresh=https%3A%2F%2Fgithub.com%2Fexample%2Fhunker%2Fpull%2F42"
+
+
+reviewJson : String
+reviewJson =
+    Encode.encode 0 <|
+        Encode.object
+            [ ( "title", Encode.string "Improve the greeting" )
+            , ( "repository", Encode.string "example/hunker" )
+            , ( "number", Encode.string "42" )
+            , ( "author", Encode.string "agent" )
+            , ( "base", Encode.string "main" )
+            , ( "head", Encode.string "feature/greeting" )
+            , ( "url", Encode.string "https://github.com/example/hunker/pull/42" )
+            , ( "diff"
+              , Encode.string
+                    """diff --git a/src/greet.ts b/src/greet.ts
+index 1111111..2222222 100644
+--- a/src/greet.ts
++++ b/src/greet.ts
+@@ -1 +1 @@
+-const greeting = "hi";
++const greeting = "hello";
+"""
+              )
+            , ( "backing"
+              , Encode.object
+                    [ ( "source", Encode.string "github" )
+                    , ( "baseOid", Encode.string "1111111111111111111111111111111111111111" )
+                    , ( "headOid", Encode.string "2222222222222222222222222222222222222222" )
+                    , ( "headRef", Encode.string "feature/greeting" )
+                    , ( "path", Encode.string "" )
+                    ]
+              )
+            ]
+
+
+resolvedCommentsJson : String
+resolvedCommentsJson =
+    """{"comments":[{"id":7,"rootId":7,"path":"src/greet.ts","body":"This **thread** is resolved.","author":"reviewer","htmlUrl":"https://github.com/example/hunker/pull/42#discussion_r7","createdAt":"2026-08-07T12:00:00Z","line":1,"side":"RIGHT","resolved":true}]}"""

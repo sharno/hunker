@@ -1029,7 +1029,7 @@ reviewToolbar model =
                 [ option [ value "literal", selected (model.filterMode == Literal) ] [ text "Text" ]
                 , option [ value "regex", selected (model.filterMode == Regex) ] [ text "Regex" ]
                 ]
-            , input [ type_ "search", placeholder "Search this change", value model.filter, onInput ChangedFilter ] []
+            , input [ type_ "search", attribute "aria-label" "Search this change", placeholder "Search this change", value model.filter, onInput ChangedFilter ] []
             ]
         , div [ class "diff-options" ]
             [ select [ attribute "aria-label" "Diff scope", onInput (scopeFromString >> SelectedScope) ]
@@ -1212,23 +1212,25 @@ fileDiff model file =
             Dict.get file.path model.fullFiles
     in
     article [ class ("diff-panel" ++ activeClass (Set.member file.path model.reviewedFiles)), id (fileAnchor file.path) ]
-        [ header [ class "diff-file-header", onClick (ToggledFile file.path) ]
-            [ span [ class "file-collapse" ]
-                [ text
-                    (if collapsed then
-                        "›"
+        [ header [ class "diff-file-header" ]
+            [ button [ type_ "button", class "file-header-main", onClick (ToggledFile file.path) ]
+                [ span [ class "file-collapse" ]
+                    [ text
+                        (if collapsed then
+                            "›"
 
-                     else
-                        "⌄"
-                    )
+                         else
+                            "⌄"
+                        )
+                    ]
+                , span [ class ("file-status status-" ++ file.status) ] [ text (statusGlyph file.status) ]
+                , strong [] [ text file.path ]
+                , if file.previousPath /= "" then
+                    span [ class "previous-path" ] [ text ("from " ++ file.previousPath) ]
+
+                  else
+                    text ""
                 ]
-            , span [ class ("file-status status-" ++ file.status) ] [ text (statusGlyph file.status) ]
-            , strong [] [ text file.path ]
-            , if file.previousPath /= "" then
-                span [ class "previous-path" ] [ text ("from " ++ file.previousPath) ]
-
-              else
-                text ""
             , div [ class "file-actions", attribute "data-ignore-file-collapse" "true" ]
                 [ button [ type_ "button", onClick (ToggledFullFile file) ]
                     [ text
