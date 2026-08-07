@@ -56,13 +56,10 @@ index 3333333..4444444 100644
 test.beforeEach(async ({ page }) => {
   await page.route("**/api/settings", async (route) => {
     if (route.request().method() === "PUT") {
-      const body = route.request().postDataJSON() as {
-        settings: typeof settings;
-      };
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        json: { ...settingsDocument, settings: body.settings },
+        json: settingsDocument,
       });
       return;
     }

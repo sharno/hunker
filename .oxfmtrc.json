@@ -2,5 +2,5 @@
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
   "printWidth": 80,
   "proseWrap": "always",
-  "ignorePatterns": ["dist/", "node_modules/", "vendor/"]
+  "ignorePatterns": ["dist/", "node_modules/"]
 }

@@ -68,6 +68,24 @@ suite =
                         |> Maybe.map .lines
                         |> Maybe.map (List.map (\line -> ( line.oldLine, line.newLine )))
                         |> Expect.equal (Just [ ( Just 3, Nothing ), ( Nothing, Just 9 ) ])
+            , test "stitches zero-width insertion hunks into full-file context" <|
+                \() ->
+                    Diff.fullFileRows
+                        "@@ -2,0 +3 @@\n+inserted"
+                        "alpha\nbeta\ntail"
+                        "alpha\nbeta\ninserted\ntail"
+                        |> List.map
+                            (\row ->
+                                ( Maybe.map (\line -> ( line.number, line.text, line.kind )) row.left
+                                , Maybe.map (\line -> ( line.number, line.text, line.kind )) row.right
+                                )
+                            )
+                        |> Expect.equal
+                            [ ( Just ( Just 1, "alpha", Context ), Just ( Just 1, "alpha", Context ) )
+                            , ( Just ( Just 2, "beta", Context ), Just ( Just 2, "beta", Context ) )
+                            , ( Nothing, Just ( Just 3, "inserted", Addition ) )
+                            , ( Just ( Just 3, "tail", Context ), Just ( Just 4, "tail", Context ) )
+                            ]
             ]
         , test "builds a directory-first nested file tree" <|
             \() ->

@@ -28,7 +28,9 @@ type alias Hunk =
     { id : String
     , header : String
     , oldStart : Int
+    , oldCount : Int
     , newStart : Int
+    , newCount : Int
     , lines : List DiffLine
     }
 
@@ -50,7 +52,9 @@ type alias Builder =
     { id : String
     , header : String
     , oldStart : Int
+    , oldCount : Int
     , newStart : Int
+    , newCount : Int
     , oldLine : Int
     , newLine : Int
     , lines : List DiffLine
@@ -63,20 +67,22 @@ parsePatch patch =
         step raw ( completed, current ) =
             if String.startsWith "@@" raw then
                 let
-                    ( oldStart, newStart ) =
-                        hunkStarts raw
+                    ranges =
+                        hunkRanges raw
 
                     finished =
                         Maybe.map finish current
                 in
                 ( maybeCons finished completed
                 , Just
-                    { id = String.fromInt oldStart ++ "-" ++ String.fromInt newStart
+                    { id = String.fromInt ranges.oldStart ++ "-" ++ String.fromInt ranges.newStart
                     , header = raw
-                    , oldStart = oldStart
-                    , newStart = newStart
-                    , oldLine = oldStart
-                    , newLine = newStart
+                    , oldStart = ranges.oldStart
+                    , oldCount = ranges.oldCount
+                    , newStart = ranges.newStart
+                    , newCount = ranges.newCount
+                    , oldLine = ranges.oldStart
+                    , newLine = ranges.newStart
                     , lines = []
                     }
                 )
@@ -100,7 +106,9 @@ finish builder =
     { id = builder.id
     , header = builder.header
     , oldStart = builder.oldStart
+    , oldCount = builder.oldCount
     , newStart = builder.newStart
+    , newCount = builder.newCount
     , lines = List.reverse builder.lines
     }
 
@@ -163,31 +171,61 @@ appendContext value builder =
     }
 
 
-hunkStarts : String -> ( Int, Int )
-hunkStarts header =
+type alias HunkRanges =
+    { oldStart : Int
+    , oldCount : Int
+    , newStart : Int
+    , newCount : Int
+    }
+
+
+hunkRanges : String -> HunkRanges
+hunkRanges header =
     case String.words header of
         "@@" :: oldRange :: newRange :: _ ->
-            ( rangeStart '-' oldRange, rangeStart '+' newRange )
+            let
+                ( oldStart, oldCount ) =
+                    range '-' oldRange
+
+                ( newStart, newCount ) =
+                    range '+' newRange
+            in
+            { oldStart = oldStart
+            , oldCount = oldCount
+            , newStart = newStart
+            , newCount = newCount
+            }
+
+        _ ->
+            { oldStart = 0, oldCount = 0, newStart = 0, newCount = 0 }
+
+
+range : Char -> String -> ( Int, Int )
+range marker value =
+    let
+        parts =
+            value
+                |> String.trimLeft
+                |> String.dropLeft
+                    (if String.startsWith (String.fromChar marker) value then
+                        1
+
+                     else
+                        0
+                    )
+                |> String.split ","
+    in
+    case parts of
+        start :: count :: _ ->
+            ( Maybe.withDefault 0 (String.toInt start)
+            , Maybe.withDefault 1 (String.toInt count)
+            )
+
+        [ start ] ->
+            ( Maybe.withDefault 0 (String.toInt start), 1 )
 
         _ ->
             ( 0, 0 )
-
-
-rangeStart : Char -> String -> Int
-rangeStart marker value =
-    value
-        |> String.trimLeft
-        |> String.dropLeft
-            (if String.startsWith (String.fromChar marker) value then
-                1
-
-             else
-                0
-            )
-        |> String.split ","
-        |> List.head
-        |> Maybe.andThen String.toInt
-        |> Maybe.withDefault 0
 
 
 splitRows : Bool -> Hunk -> List SplitRow
@@ -287,30 +325,76 @@ rightLine line =
     { number = line.newLine, text = line.text, kind = line.kind }
 
 
-fullFileRows : String -> String -> List SplitRow
-fullFileRows oldText newText =
-    zipFull 1 (String.lines oldText) (String.lines newText)
+fullFileRows : String -> String -> String -> List SplitRow
+fullFileRows patch oldText newText =
+    stitchFullFile
+        (String.lines oldText)
+        (String.lines newText)
+        1
+        1
+        (parsePatch patch)
 
 
-zipFull : Int -> List String -> List String -> List SplitRow
-zipFull lineNumber oldLines newLines =
+stitchFullFile : List String -> List String -> Int -> Int -> List Hunk -> List SplitRow
+stitchFullFile oldLines newLines oldPosition newPosition hunks =
+    case hunks of
+        [] ->
+            zipFull oldPosition
+                newPosition
+                (List.drop (oldPosition - 1) oldLines)
+                (List.drop (newPosition - 1) newLines)
+
+        hunk :: remaining ->
+            let
+                oldContext =
+                    oldLines
+                        |> List.drop (oldPosition - 1)
+                        |> List.take (max 0 (hunk.oldStart - oldPosition + zeroRangeOffset hunk.oldCount))
+
+                newContext =
+                    newLines
+                        |> List.drop (newPosition - 1)
+                        |> List.take (max 0 (hunk.newStart - newPosition + zeroRangeOffset hunk.newCount))
+
+                nextOld =
+                    hunk.oldStart + max 1 hunk.oldCount
+
+                nextNew =
+                    hunk.newStart + max 1 hunk.newCount
+            in
+            zipFull oldPosition newPosition oldContext newContext
+                ++ splitRows False hunk
+                ++ stitchFullFile oldLines newLines nextOld nextNew remaining
+
+
+zeroRangeOffset : Int -> Int
+zeroRangeOffset count =
+    if count == 0 then
+        1
+
+    else
+        0
+
+
+zipFull : Int -> Int -> List String -> List String -> List SplitRow
+zipFull oldLineNumber newLineNumber oldLines newLines =
     case ( oldLines, newLines ) of
         ( [], [] ) ->
             []
 
         ( old :: remainingOld, new :: remainingNew ) ->
-            { left = Just { number = Just lineNumber, text = old, kind = Context }
-            , right = Just { number = Just lineNumber, text = new, kind = Context }
+            { left = Just { number = Just oldLineNumber, text = old, kind = Context }
+            , right = Just { number = Just newLineNumber, text = new, kind = Context }
             }
-                :: zipFull (lineNumber + 1) remainingOld remainingNew
+                :: zipFull (oldLineNumber + 1) (newLineNumber + 1) remainingOld remainingNew
 
         ( old :: remainingOld, [] ) ->
-            { left = Just { number = Just lineNumber, text = old, kind = Deletion }, right = Nothing }
-                :: zipFull (lineNumber + 1) remainingOld []
+            { left = Just { number = Just oldLineNumber, text = old, kind = Deletion }, right = Nothing }
+                :: zipFull (oldLineNumber + 1) newLineNumber remainingOld []
 
         ( [], new :: remainingNew ) ->
-            { left = Nothing, right = Just { number = Just lineNumber, text = new, kind = Addition } }
-                :: zipFull (lineNumber + 1) [] remainingNew
+            { left = Nothing, right = Just { number = Just newLineNumber, text = new, kind = Addition } }
+                :: zipFull oldLineNumber (newLineNumber + 1) [] remainingNew
 
 
 normalizeWhitespace : String -> String

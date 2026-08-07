@@ -63,6 +63,7 @@ type Msg
     | PullsLoaded ( String, String, Int ) PullRequestsPage
     | PullsFailed ( String, String, Int ) String
     | SourceLoaded String SourceControlStatus
+    | PullLoaded String Int SourceControlStatus
     | SourceFailed String String
     | CloneLoaded ( String, String ) String
     | CloneFailed ( String, String ) String
@@ -286,6 +287,25 @@ update msg model =
             else
                 unchanged model
 
+        PullLoaded requested count status ->
+            if requested == repositoryName model then
+                ( { model
+                    | sourceControl = Success requested status
+                    , sourceAction =
+                        SourceSucceeded
+                            (if count == 1 then
+                                "Pulled 1 commit."
+
+                             else
+                                "Pulled " ++ String.fromInt count ++ " commits."
+                            )
+                  }
+                , Effect.none
+                )
+
+            else
+                unchanged model
+
         SourceFailed requested error ->
             if requested == repositoryName model then
                 ( { model | sourceControl = Failure requested error, sourceAction = SourceBlocked error }, Effect.none )
@@ -396,7 +416,7 @@ update msg model =
             in
             ( { model | sourceAction = Pulling }
             , Api.pullRepository name
-                (\( status, count ) -> SourceLoaded name status)
+                (\( status, count ) -> PullLoaded name count status)
                 (SourceFailed name)
             )
 

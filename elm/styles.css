@@ -1095,6 +1095,14 @@
     @apply rounded-xl border border-line bg-paper p-5;
   }
 
+  .commit-diff-view > .commit-detail {
+    @apply m-4 mb-0 flex items-center gap-3 p-3;
+  }
+
+  .commit-diff-view > .commit-detail h1 {
+    @apply m-0;
+  }
+
   .commit-detail h1 {
     @apply font-mono text-lg;
   }

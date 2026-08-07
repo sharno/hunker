@@ -1,23 +1,14 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "useDefineForClassFields": true,
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "lib": ["ES2024", "DOM"],
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
     "verbatimModuleSyntax": true,
-    "allowImportingTsExtensions": true,
-    "types": ["node", "vitest/globals"]
+    "types": ["node"]
   },
-  "include": [
-    "src",
-    "backend",
-    "tests",
-    "playwright.config.ts",
-    "vite.config.ts",
-    "vitest.config.ts"
-  ]
+  "include": ["tests/browser.spec.ts", "playwright.config.ts"]
 }

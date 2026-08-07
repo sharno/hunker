@@ -1,7 +1,6 @@
 {
-  "$schema": "./node_modules/@effect/tsgo/oxlint-schema.json",
-  "extends": ["./node_modules/@foldkit/oxlint-plugin/recommended.json"],
-  "plugins": ["typescript", "effecttsgo"],
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript"],
   "categories": {
     "correctness": "error",
     "suspicious": "error",
@@ -29,5 +28,5 @@
       { "assertionStyle": "never" }
     ]
   },
-  "ignorePatterns": ["dist/", "node_modules/", "vendor/", "**/*.d.ts"]
+  "ignorePatterns": ["dist/", "node_modules/", "**/*.d.ts"]
 }

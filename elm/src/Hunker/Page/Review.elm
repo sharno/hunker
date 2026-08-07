@@ -930,7 +930,18 @@ readyView model reviewData =
         , reviewToolbar model
         , case model.location.tab of
             ReviewCommits ->
-                commitsView model
+                case model.location.commit of
+                    Just sha ->
+                        div [ class "commit-diff-view" ]
+                            [ div [ class "commit-detail" ]
+                                [ button [ type_ "button", onClick (SelectedTab ReviewCommits) ] [ text "← All commits" ]
+                                , h1 [] [ text ("Commit " ++ String.left 12 sha) ]
+                                ]
+                            , reviewWorkspace model
+                            ]
+
+                    Nothing ->
+                        commitsView model
 
             ReviewFiles ->
                 reviewWorkspace model
@@ -1806,18 +1817,35 @@ fullFileDiff : Model -> FileChange -> FullFile -> Html Msg
 fullFileDiff model file full =
     div [ class "full-file-diff" ]
         (if model.settings.viewMode == Split then
-            Diff.fullFileRows full.oldText full.newText |> List.map (splitRowView model file)
+            Diff.fullFileRows file.patch full.oldText full.newText |> List.map (splitRowView model file)
 
          else
-            String.lines full.newText
-                |> List.indexedMap
-                    (\index source ->
-                        div [ class "unified-line context" ]
-                            [ span [ class "line-number" ] [ text (String.fromInt (index + 1)) ]
-                            , code [ class "line-code" ] (Syntax.line model.settings.syntaxHighlighting file.path source)
-                            ]
-                    )
+            Diff.fullFileRows file.patch full.oldText full.newText
+                |> List.concatMap fullUnifiedLines
+                |> List.map (unifiedLineView model file)
         )
+
+
+fullUnifiedLines : SplitRow -> List DiffLine
+fullUnifiedLines row =
+    case ( row.left, row.right ) of
+        ( Just left, Just right ) ->
+            if left.kind == Context && right.kind == Context then
+                [ { kind = Context, text = right.text, oldLine = left.number, newLine = right.number } ]
+
+            else
+                [ { kind = left.kind, text = left.text, oldLine = left.number, newLine = Nothing }
+                , { kind = right.kind, text = right.text, oldLine = Nothing, newLine = right.number }
+                ]
+
+        ( Just left, Nothing ) ->
+            [ { kind = left.kind, text = left.text, oldLine = left.number, newLine = Nothing } ]
+
+        ( Nothing, Just right ) ->
+            [ { kind = right.kind, text = right.text, oldLine = Nothing, newLine = right.number } ]
+
+        ( Nothing, Nothing ) ->
+            []
 
 
 githubFileUrl : Model -> FileChange -> String

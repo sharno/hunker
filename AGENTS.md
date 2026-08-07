@@ -1,154 +1,85 @@
 # Hunker agent guidance
 
-- The frontend is being migrated from Foldkit/Effect to Elm. Keep both
-  implementations runnable until the Elm `Browser.application`, program tests,
-  and real-browser suite cover the complete product; remove Foldkit only in a
-  dedicated final migration commit after parity is proven.
-- Keep Elm domain state independent of `Browser.Navigation.Key` and `Cmd` by
-  returning a typed application-effect ADT from `update`. Interpret that ADT at
-  the browser boundary and in `elm-program-test`; this makes navigation, HTTP,
-  focus, and timing branches testable without duplicating the state machine.
-- Decode HTTP JSON directly into Elm domain types at the request boundary. Put
-  each request identity in its remote-data ADT and ignore responses whose
-  identity no longer matches the active route.
-- Format every Elm source and test with `elm-format`; exercise complete Elm
-  update/view flows with `avh4/elm-program-test`, retaining Playwright only for
-  browser history, Fetch transport, CSS/layout, sticky behavior, and other
-  browser-specific contracts.
+## Architecture
 
-- Use Effect v4 for frontend application effects, services, errors, and data
-  validation. The local HTTP backend is Rust; keep its boundaries typed with
-  Serde domain structs and `AppError` rather than recreating Effect conventions.
-- Decode external data at its boundary with Effect Schema and keep the decoded
-  type through the rest of the program. Do not add `isRecord`, `asRecord`,
-  `Record<string, unknown>` shape shims, ad hoc object/property probing, or
-  unchecked assertions to recover missing types. Improve the schema or domain
-  model instead.
-- Consult the pinned source before guessing library APIs or conventions:
-  - Effect: `vendor/effect`, especially `vendor/effect/packages/effect/src`
-  - Foldkit: `vendor/foldkit`
-- Organize growing Foldkit code by page or feature. A stateful feature folder
-  owns its `model.ts`, `message.ts`, `command.ts`, `update.ts`, `view.ts`, and
-  colocated tests, and exposes a namespace through `index.ts`.
-- Use a Foldkit Submodel when a feature owns a distinct state machine whose
-  messages primarily update its own model slice. Keep stateless render helpers
-  as ordinary view functions and shared pure logic in domain or shared modules;
-  Submodel boundaries are not a substitute for file organization.
-- Parent code must delegate child state changes through the Submodel's `update`
-  or public helper and map child Commands through a `Got*Message` wrapper. Do
-  not mutate a child's model slice directly.
-- Foldkit Message bindings must exactly match their `m()` tags, and Command
-  bindings must exactly match their `Command.define` names. Treat these names as
-  stable DevTools identities rather than local aliases.
-- For no-argument Foldkit Commands, omit `args`, provide the Effect directly as
-  `execute`, and invoke the Command with no object argument.
-- Update nested Foldkit records with a nested `evo`; spreading a nested record
-  inside a parent `evo` updater escapes the strict Model update path and is
-  rejected by the Foldkit Oxlint rule.
-- Use Foldkit `restString` for canonical URL resources that own a
-  slash-delimited path, and order more-specific routes before their parent route
-  in `oneOf`.
-- Keep `AppRoute` as the sole authority for the rendered location. Do not add a
-  second page discriminator or let cached resource state choose which page is
-  visible. Cold loads and `ChangedUrl` must enter the same exhaustive
-  `Route.Transition` function.
-- Put a resource request's identity inside its state ADT. Model review state as
-  `Idle | Loading(url) | Failed(url, error) | Ready(url)` rather than a phase
-  plus a parallel target string, and never represent absence as `Ready` with an
-  empty sentinel value.
-- Use `Navigation.pushUrl` for user-visible location changes such as opening a
-  file, tab, search result, or commit. Reserve `Navigation.replaceUrl` for
-  canonicalization and non-navigational configuration synchronization. Encode
-  those intents as separate Commands rather than a boolean or string method, and
-  cover Back and Forward behavior with a real-browser test.
-- When Submodel `viewInputs` need parent-owned interactive markup, pass a
-  top-level slot callback that builds the `Html`. Do not pass already-rendered
-  `Html` containing nested event functions; Foldkit can only auto-scope
-  top-level callbacks to the parent boundary.
-- Apply project `HtmlBuilder` adapters inside every Foldkit Submodel view.
-  Foldkit intentionally supplies its singleton builder at each child boundary,
-  so a builder wrapped by the parent does not propagate into the child.
-- Put schemas shared by the root Model and a nested feature's messages in a leaf
-  domain module. Importing the root model back into that feature creates an ESM
-  initialization cycle before Effect Schema can construct the message ADT.
-- Treat a Foldkit Submodel `slotId` as component identity only; it does not
-  become a DOM class. Pass visual variants through typed `viewInputs`, apply the
-  variant class at the child view root, and cover that rendered class contract
-  with a Scene test.
-- Record durable Effect, Foldkit, tooling, and architecture discoveries in this
-  file as they are learned. Keep the guidance general and remove or correct it
-  when the vendored sources prove it wrong.
-- Treat structured subprocess output as an external boundary: decode each record
-  with Effect Schema in the frontend or a typed parser/domain constructor in
-  Rust, model command-specific exit statuses (for example, a search command's
-  no-match status), and normalize tool paths to the app's canonical
-  repository-relative form before they enter domain state.
-- Keep independent repository-page data sources independent in state and view
-  logic. A GitHub-backed tab must not be blocked by a missing local clone, and a
-  local Git failure should only replace views that actually depend on it.
-- Let Git decide whether checkout mutations are safe: serialize mutations per
-  local repository, use `git switch` and fast-forward-only pulls, surface Git's
-  refusal without modifying the cached read model, and refresh files, search,
-  open-file content, and commits only after a successful checkout change.
-- A shallow `--single-branch` clone does not treat an explicitly fetched branch
-  as tracking-capable unless its refspec is also added to `remote.origin.fetch`.
-  Expand that refspec only for branches the user opens, preserving the clone's
-  incremental-history behavior.
-- For paginated Foldkit data, keep accumulated rows visible with `Refreshing`
-  while the next page loads and use `Stale` for a later-page failure. Correlate
-  responses with the repository, filter, and page before appending them.
-- Use Bun for dependency management and scripts.
-- Keep the Rust backend in `server/`, use Tokio/Axum for HTTP, and keep GitHub,
-  subprocess, and JSON decoding at module boundaries. Run Cargo formatting,
-  Clippy with warnings denied, tests, and a release build alongside frontend
-  validation.
-- Retain one watched FFF `SharedFilePicker` per local repository in server
-  state. Starting a fresh picker for every query turns fuzzy search into an
-  indexing operation and discards FFF's latency advantage.
-- Keep the project on TypeScript 7 and strict typing. Do not introduce `any`.
-- Use Oxfmt for formatting and Oxlint with type-aware linting. Do not add
-  Prettier or competing formatter configuration.
-- Keep Effect's Oxlint integration reproducible with `@effect/tsgo`, the
-  `effecttsgo` plugin, and the `effect-tsgo patch --no-typescript --oxlint`
-  prepare hook. The Effect patch validates that the installed `oxlint` and
-  `oxlint-tsgolint` versions are compatible; rerun the hook after dependency
-  installation or tooling upgrades.
-- Do not use lint-disable or TypeScript-suppression comments to paper over an
-  architectural or typing mismatch in first-party code. Move Effect Layers to
-  the owning Foldkit runtime's `resources`, use a properly disposed
-  `ManagedRuntime` at imperative test boundaries, or improve the domain type so
-  the rule passes without suppression.
-- Capture dependencies used by lazy service methods when constructing the
-  service. A `ConfigProvider` Layer controls Layer construction, but an Effect
-  stored in a service and executed later runs in its caller's fiber context;
-  provide the captured provider to that Effect instead of assuming the Layer's
-  build context will be retained.
-- Test Foldkit state machines with colocated `story.test.ts` files and rendered
-  user flows with colocated `scene.test.ts` files. Keep Playwright deliberately
-  thin: browser history and reload, real transport wiring, computed CSS/layout,
-  and browser-only behavior. Pure domain and backend integration tests belong in
-  Vitest, not under the Playwright test directory.
-- In diff grids, make code tracks shrinkable with `minmax(0, 1fr)` and code
-  items `min-width: 0`. Preserve indentation with `white-space: break-spaces`
-  and allow long tokens to wrap; a `max-content` code track can paint one side
-  of a split diff through the other instead of participating in row sizing.
-- Bind GitHub inline comments to the loaded PR head OID, file path, side, and
-  line as one request identity. Offer comment controls only for lines that came
-  from a real patch hunk; synthesized full-file context cannot be anchored by
-  GitHub's review-comment API.
-- Treat a Foldkit Submodel `slotId` as rendered-location identity, separate from
-  the child model or domain target. For repeated diff rows, derive it from the
-  layout, file, side, hunk, and line position, and ensure alignment consumes
-  every source and destination line at most once.
-- Model cross-file semantic annotations with one stable identity plus distinct
-  source and destination ranges. Use that identity for matching colors and DOM
-  anchors; a single shared line count is inaccurate when moved code was edited.
-- For diff-to-diff navigation, update the selected/expanded state first, push a
-  canonical URL with an anchor, then focus the rendered anchor from a Command
-  after the next frame. Keep DOM timing out of the state transition and cover
-  Back navigation in a real browser.
-- Scope test `ManagedRuntime`s to the Layer fixture. Reuse one suite runtime for
-  a stable Layer and dispose it in `afterAll`; construct per-fixture runtimes
-  when a Layer captures test-specific configuration such as temporary paths.
-- Run `bun run format:check`, `bun run lint`, `bun run test`, `bun run build`,
-  and `bun run test:integration` before pushing.
+- The browser application is Elm 0.19.2 under `elm/src`; Rust/Axum owns the
+  local API and serves the compiled Elm and Tailwind assets from the same
+  process. Do not introduce a second frontend runtime or development server.
+- Keep `Hunker.Route.Route` as the sole authority for rendered location. Browser
+  Back, Forward, cold loads, and pasted GitHub URLs must enter the same
+  exhaustive route transition.
+- Keep Elm domain state independent of `Browser.Navigation.Key` and `Cmd`.
+  Updates return `Hunker.Effect.Effect`; the browser runtime and
+  `elm-program-test` interpret that same ADT.
+- Model async resources as
+  `NotAsked | Loading identity | Failure identity error | Success identity value`.
+  Put request identity inside the ADT and ignore responses that no longer match
+  the active route.
+- Decode external JSON directly into domain types in `Hunker.Domain.*`. Do not
+  pass `Decode.Value`, unchecked flags, or parallel sentinel fields beyond the
+  boundary.
+- Organize stateful screens under `Hunker.Page.*`, transport in `Hunker.Api`,
+  domain ADTs/decoders in `Hunker.Domain.*`, and shared pure rendering logic in
+  focused modules such as `Hunker.Diff`, `Hunker.FileTree`, and
+  `Hunker.SemanticMove`.
+- Prefer ADTs and exhaustive pattern matching. If two fields can disagree,
+  replace them with one type that makes the invalid combination unrepresentable.
+
+## Elm UI and tests
+
+- Format every Elm source and test with `elm-format`.
+- Test state-machine and view branches through `avh4/elm-program-test`, mapping
+  the real `Hunker.Effect.Effect` into simulated effects. Do not create a second
+  test-only update function.
+- Keep Playwright deliberately thin: history/deep-route fallback, real Fetch
+  transport, CSS/layout/sticky behavior, and browser-specific interactions. Pure
+  route, diff, tree, and state behavior belongs in Elm tests.
+- URLs encode location (repository, tab, PR, commit, selected file), never
+  display preferences. Save review preferences through `/api/settings`.
+- Repository trees start collapsed; review trees start expanded. Selecting a
+  nested file reveals its ancestors. Marking a review file reviewed also
+  collapses it.
+- Use a shrinkable `minmax(0, 1fr)` code track, `min-width: 0`,
+  `white-space: break-spaces`, and `overflow-wrap: anywhere` for diff code.
+  Verify split columns with a real-browser layout test.
+- Bind GitHub inline comments to the loaded head OID, path, side, and a real
+  patch line. Full-file synthetic context is not a valid GitHub anchor.
+- Render GitHub Markdown with sanitization enabled. Resolved threads are tagged
+  and collapsed by default.
+- Cross-file move annotations use one stable identity with distinct source and
+  destination anchors; color and navigation derive from that identity.
+- Tailwind v4 is CSS-first in `elm/styles.css`. Keep semantic class names for
+  stable state selectors, and validate the stylesheet through the Rust build.
+
+## Rust server
+
+- Keep the backend in `server/`, using typed Serde request/response structs and
+  `AppError` at boundaries. Do not recover types with ad hoc JSON probing.
+- `server/build.rs` compiles optimized Elm and Tailwind into `OUT_DIR`;
+  `server/src/frontend.rs` embeds them. `bun install` is a prerequisite for a
+  Cargo build.
+- Read Git diffs, commits, and files from immutable OIDs. Worktree branch
+  mutations are explicit repository actions; never switch a checkout merely to
+  render a review.
+- Let Git decide whether checkout mutations are safe. Serialize them per
+  repository, use `git switch` and fast-forward-only pulls, surface refusal, and
+  refresh cached reads only after success.
+- Keep independent repository data sources independent. GitHub-backed PR lists
+  must not be blocked by a missing local clone.
+- Decode structured subprocess output into Rust domain constructors at the
+  command boundary and normalize paths before they enter application state.
+- Retain one watched FFF picker per repository. Recreating it per query turns
+  fuzzy search back into indexing work.
+- Shallow clones expand refs/history only when a selected branch or immutable
+  object requires it.
+
+## Tooling
+
+- Use Bun for JavaScript tool dependencies, Elm tooling, and scripts.
+- TypeScript remains only at browser-test/tooling boundaries; keep TypeScript 7,
+  strict types, Oxlint type-aware checks, and Oxfmt. Do not add Prettier.
+- Do not add lint-disable or suppression comments to hide first-party design or
+  type problems.
+- Before pushing, run `bun run format:check`, `bun run lint`,
+  `bun run typecheck`, `bun run test`, `bun run build`, and
+  `bun run test:integration`.
