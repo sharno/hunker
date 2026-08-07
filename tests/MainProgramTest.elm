@@ -1,7 +1,15 @@
 module MainProgramTest exposing (suite)
 
+import Http
+import Hunker.Effect as AppEffect
+import Json.Decode as Decode
 import Main
 import ProgramTest
+import SimulatedEffect.Cmd as SimulatedCmd
+import SimulatedEffect.Http as SimulatedHttp
+import SimulatedEffect.Navigation as SimulatedNavigation
+import SimulatedEffect.Process as SimulatedProcess
+import SimulatedEffect.Task as SimulatedTask
 import Test exposing (Test, describe, test)
 import Test.Html.Selector exposing (text)
 
@@ -9,18 +17,116 @@ import Test.Html.Selector exposing (text)
 suite : Test
 suite =
     describe "Hunker Elm program"
-        [ test "drives an update branch through the complete program" <|
+        [ test "boots from server settings and renders the local repository catalog" <|
             \() ->
-                ProgramTest.createApplication
-                    { init = Main.init
-                    , onUrlChange = Main.UrlChanged
-                    , onUrlRequest = Main.LinkClicked
-                    , update = Main.update
-                    , view = Main.view
-                    }
-                    |> ProgramTest.withBaseUrl "http://localhost:8787/"
-                    |> ProgramTest.start ()
-                    |> ProgramTest.clickButton "Toggle navigation preview"
-                    |> ProgramTest.expectViewHas
-                        [ text "Elm update branch is active" ]
+                started
+                    |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
+                    |> ProgramTest.simulateHttpOk "GET" "/api/repositories" repositoriesJson
+                    |> ProgramTest.expectViewHas [ text "Repositories", text "mohamed-rdr/hunker" ]
+        , test "keeps boot failure as an explicit state and can retry" <|
+            \() ->
+                started
+                    |> ProgramTest.simulateHttpOk "GET" "/api/settings" "{}"
+                    |> ProgramTest.ensureViewHas [ text "Could not load Hunker settings" ]
+                    |> ProgramTest.clickButton "Try again"
+                    |> ProgramTest.expectHttpRequestWasMade "GET" "/api/settings"
+        , test "parses a pasted GitHub pull request into the canonical Hunker route" <|
+            \() ->
+                started
+                    |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
+                    |> ProgramTest.simulateHttpOk "GET" "/api/repositories" repositoriesJson
+                    |> ProgramTest.update (Main.ChangedGitHubInput "https://github.com/example/hunker/pull/42")
+                    |> ProgramTest.clickButton "Open"
+                    |> ProgramTest.ensureViewHas [ text "Loading the latest change…", text "example/hunker/pull/42" ]
+                    |> ProgramTest.expectHttpRequestWasMade "GET" "/api/diff?url=https%3A%2F%2Fgithub.com%2Fexample%2Fhunker%2Fpull%2F42&refresh=https%3A%2F%2Fgithub.com%2Fexample%2Fhunker%2Fpull%2F42"
         ]
+
+
+started : ProgramTest.ProgramTest Main.Model Main.Msg (AppEffect.Effect Main.Msg)
+started =
+    ProgramTest.createApplication
+        { init = Main.init
+        , onUrlChange = Main.UrlChanged
+        , onUrlRequest = Main.LinkClicked
+        , update = Main.update
+        , view = Main.view
+        }
+        |> ProgramTest.withBaseUrl "http://localhost:8787/"
+        |> ProgramTest.withSimulatedEffects simulateEffect
+        |> ProgramTest.start ()
+
+
+simulateEffect : AppEffect.Effect msg -> ProgramTest.SimulatedEffect msg
+simulateEffect effect =
+    case effect of
+        AppEffect.None ->
+            SimulatedCmd.none
+
+        AppEffect.Batch effects ->
+            SimulatedCmd.batch (List.map simulateEffect effects)
+
+        AppEffect.Request request ->
+            SimulatedHttp.request
+                { method = request.method
+                , url = request.url
+                , body = SimulatedHttp.emptyBody
+                , headers = []
+                , expect =
+                    SimulatedHttp.expectStringResponse
+                        (Result.withDefault (request.onError "The simulated request failed."))
+                        (decodeResponse request.decoder request.onError >> Ok)
+                , timeout = Nothing
+                , tracker = Nothing
+                }
+
+        AppEffect.PushUrl url ->
+            SimulatedNavigation.pushUrl url
+
+        AppEffect.ReplaceUrl url ->
+            SimulatedNavigation.replaceUrl url
+
+        AppEffect.LoadExternal url ->
+            SimulatedNavigation.load url
+
+        AppEffect.Focus _ message ->
+            SimulatedTask.perform identity (SimulatedTask.succeed message)
+
+        AppEffect.After milliseconds message ->
+            SimulatedTask.perform (always message) (SimulatedProcess.sleep milliseconds)
+
+        AppEffect.ReadScroll toMessage ->
+            SimulatedTask.perform identity (SimulatedTask.succeed (toMessage 0))
+
+
+decodeResponse : Decode.Decoder msg -> (String -> msg) -> Http.Response String -> msg
+decodeResponse decoder onError response =
+    case response of
+        Http.GoodStatus_ _ body ->
+            case Decode.decodeString decoder body of
+                Ok message ->
+                    message
+
+                Err error ->
+                    onError (Decode.errorToString error)
+
+        Http.BadUrl_ url ->
+            onError ("Invalid API URL: " ++ url)
+
+        Http.Timeout_ ->
+            onError "The Hunker API timed out."
+
+        Http.NetworkError_ ->
+            onError "Could not reach the local Hunker API."
+
+        Http.BadStatus_ metadata _ ->
+            onError ("The Hunker API returned " ++ String.fromInt metadata.statusCode ++ ".")
+
+
+settingsJson : String
+settingsJson =
+    """{"settings":{"repositoriesRoot":"~/src","cacheRoot":"/tmp/hunker/repositories","reviewScope":"file","viewMode":"split","ignoreWhitespace":true,"semantic":true,"inlineDiffMode":"token","syntaxHighlighting":true,"sidebarCollapsed":false,"showGitHubReviews":true},"configPath":"/tmp/hunker/settings.json"}"""
+
+
+repositoriesJson : String
+repositoriesJson =
+    """{"configuredRoot":"/Users/mohamed/src","temporaryRoot":"/tmp/hunker/repositories","repositories":[{"owner":"mohamed-rdr","name":"hunker","path":"/Users/mohamed/src/hunker","source":"configured"}]}"""

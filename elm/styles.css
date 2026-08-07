@@ -1,0 +1,1197 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: #101b2c;
+  --color-muted: #6f756f;
+  --color-paper: #fffefa;
+  --color-canvas: #f2f0e9;
+  --color-line: #d9d8d0;
+  --color-lime: #d8ff52;
+  --color-lime-dark: #9bb72f;
+  --color-add: #d9f8e9;
+  --color-add-strong: #b6edcf;
+  --color-remove: #ffe0da;
+  --color-remove-strong: #ffc4b8;
+  --color-move: #e4dcff;
+  --font-sans:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #root,
+  .hunker-app {
+    min-height: 100%;
+  }
+
+  html {
+    background: var(--color-canvas);
+  }
+
+  body {
+    @apply m-0 bg-canvas font-sans text-ink antialiased;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+
+  button,
+  select {
+    color: inherit;
+  }
+
+  button:focus-visible,
+  input:focus-visible,
+  textarea:focus-visible,
+  select:focus-visible,
+  a:focus-visible {
+    outline: 3px solid rgb(167 196 57 / 55%);
+    outline-offset: 2px;
+  }
+
+  code,
+  pre {
+    font-family: var(--font-mono);
+  }
+}
+
+@layer components {
+  .hunker-app {
+    @apply min-h-screen bg-canvas;
+    background-image:
+      linear-gradient(rgb(16 27 44 / 2.5%) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(16 27 44 / 2%) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+
+  .app-bar {
+    @apply sticky top-0 z-40 grid h-16 items-center gap-3 bg-ink px-5 text-white shadow-lg;
+    grid-template-columns: auto minmax(0, 1fr) minmax(300px, 520px) auto;
+  }
+
+  .brand {
+    @apply flex shrink-0 items-center gap-2.5 text-white no-underline;
+  }
+
+  .brand-mark {
+    @apply grid size-8 -rotate-3 place-items-center rounded-[7px_2px_7px_2px] bg-lime text-sm font-black text-ink;
+  }
+
+  .brand-name {
+    @apply text-xl font-extrabold tracking-[-0.04em];
+  }
+
+  .brand-tagline {
+    @apply min-w-0 truncate border-l border-white/20 pl-3 text-xs text-slate-400;
+  }
+
+  .app-bar-button {
+    @apply shrink-0 rounded-md border border-slate-600 px-3 py-2 text-xs font-bold text-slate-200 no-underline hover:border-slate-400;
+  }
+
+  .github-location-form {
+    @apply relative grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center rounded-lg border border-slate-600 bg-slate-800 p-1;
+  }
+
+  .github-location-form input {
+    @apply min-w-0 border-0 bg-transparent px-2.5 py-1.5 text-sm text-white outline-none placeholder:text-slate-400;
+  }
+
+  .github-location-form > button {
+    @apply rounded-md border-0 bg-lime px-4 py-2 text-xs font-extrabold text-ink hover:bg-[#e5ff85];
+  }
+
+  .github-location-error {
+    @apply absolute top-full right-0 left-0 z-50 mt-1 rounded bg-red-100 px-2 py-1 text-xs text-red-900 shadow;
+  }
+
+  .repository-toolbar {
+    @apply grid min-w-0 grid-cols-[auto_auto_minmax(220px,1fr)] items-center gap-3;
+  }
+
+  .repository-identity,
+  .review-app-location {
+    @apply flex min-w-0 flex-col;
+  }
+
+  .repository-identity span,
+  .review-app-location span {
+    @apply text-[9px] font-bold tracking-widest text-slate-400 uppercase;
+  }
+
+  .repository-identity strong,
+  .review-app-location strong {
+    @apply truncate text-xs text-white;
+  }
+
+  .segmented {
+    @apply inline-flex rounded-lg bg-black/10 p-1;
+  }
+
+  .segmented-button {
+    @apply cursor-pointer rounded-md border-0 bg-transparent px-3 py-2 text-xs font-bold text-muted;
+  }
+
+  .segmented-button.is-active {
+    @apply bg-paper text-ink shadow-sm;
+  }
+
+  .repository-view-tabs {
+    @apply bg-slate-700;
+  }
+
+  .repository-view-tabs .segmented-button {
+    @apply text-slate-300;
+  }
+
+  .repository-view-tabs .segmented-button.is-active {
+    @apply bg-slate-100 text-ink;
+  }
+
+  .repository-search {
+    @apply grid min-w-0 grid-cols-[auto_minmax(80px,1fr)_auto] items-center rounded-lg border border-slate-600 bg-slate-800 p-1;
+  }
+
+  .repository-search.is-active {
+    @apply invisible;
+  }
+
+  .search-mode-picker {
+    @apply flex gap-0.5;
+  }
+
+  .search-mode-button {
+    @apply size-7 rounded border-0 bg-transparent text-[10px] font-bold text-slate-400 hover:bg-slate-700;
+  }
+
+  .search-mode-button.is-active {
+    @apply bg-slate-600 text-white;
+  }
+
+  .repository-search input {
+    @apply min-w-0 border-0 bg-transparent px-2 text-xs text-white outline-none placeholder:text-slate-400;
+  }
+
+  .repository-search-submit {
+    @apply rounded-md border-0 bg-lime px-3 py-2 text-xs font-bold text-ink;
+  }
+
+  .page-state,
+  .review-load-error {
+    @apply grid min-h-[calc(100vh-64px)] place-content-center justify-items-center gap-2 px-6 text-center;
+  }
+
+  .page-state strong,
+  .page-state h1,
+  .review-load-error strong {
+    @apply m-0 text-lg font-extrabold;
+  }
+
+  .page-state p,
+  .review-load-error p {
+    @apply m-0 max-w-xl text-sm text-muted;
+  }
+
+  .page-state.is-error,
+  .review-load-error {
+    @apply text-red-900;
+  }
+
+  .loading-spinner,
+  .review-loading-spinner {
+    @apply size-7 rounded-full border-[3px] border-slate-300 border-t-lime-dark;
+    animation: refresh-spin 800ms linear infinite;
+  }
+
+  .home-page,
+  .settings-page {
+    @apply mx-auto w-full max-w-7xl px-6 py-8;
+  }
+
+  .home-heading,
+  .settings-heading {
+    @apply mb-7 flex items-end justify-between gap-5;
+  }
+
+  .home-heading h1,
+  .settings-heading h1 {
+    @apply my-1 text-3xl font-extrabold tracking-tight;
+  }
+
+  .home-heading p,
+  .settings-heading p {
+    @apply m-0 text-sm text-muted;
+  }
+
+  .home-heading input {
+    @apply w-72 rounded-lg border border-line bg-paper px-3 py-2 text-sm;
+  }
+
+  .eyebrow {
+    @apply text-[10px] font-extrabold tracking-[0.15em] text-lime-dark uppercase;
+  }
+
+  .repository-catalog {
+    @apply grid gap-7;
+  }
+
+  .repository-group {
+    @apply overflow-hidden rounded-xl border border-line bg-paper shadow-sm;
+  }
+
+  .repository-group > header {
+    @apply flex items-center justify-between border-b border-line px-5 py-4;
+  }
+
+  .repository-group h1,
+  .repository-group p {
+    @apply m-0;
+  }
+
+  .repository-group h1 {
+    @apply text-base font-extrabold;
+  }
+
+  .repository-group header p,
+  .empty-copy {
+    @apply mt-1 text-xs text-muted;
+  }
+
+  .count-badge {
+    @apply inline-flex min-w-7 justify-center rounded-full bg-black/7 px-2 py-1 text-[10px] font-bold text-muted;
+  }
+
+  .repository-cards {
+    @apply grid grid-cols-2 gap-px bg-line;
+  }
+
+  .repository-card {
+    @apply grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 bg-paper px-5 py-4 text-ink no-underline hover:bg-lime/10;
+  }
+
+  .repository-card-icon {
+    @apply grid size-9 place-items-center rounded-lg bg-ink font-mono text-[9px] font-bold text-lime;
+  }
+
+  .repository-card-copy {
+    @apply flex min-w-0 flex-col;
+  }
+
+  .repository-card-copy strong {
+    @apply truncate text-sm;
+  }
+
+  .repository-card-copy span {
+    @apply truncate text-[10px] text-muted;
+  }
+
+  .repository-card-arrow {
+    @apply text-lg text-muted;
+  }
+
+  .settings-form {
+    @apply grid gap-5;
+  }
+
+  .settings-section {
+    @apply grid gap-4 rounded-xl border border-line bg-paper p-5 shadow-sm;
+  }
+
+  .settings-section > h1,
+  .settings-section > p {
+    @apply m-0;
+  }
+
+  .settings-section > h1 {
+    @apply text-base font-extrabold;
+  }
+
+  .settings-section > p {
+    @apply text-xs text-muted;
+  }
+
+  .settings-field {
+    @apply grid grid-cols-[180px_minmax(0,1fr)] items-center gap-4 text-xs font-bold;
+  }
+
+  .settings-field input,
+  .settings-field select {
+    @apply rounded-md border border-line bg-white px-3 py-2 font-normal;
+  }
+
+  .settings-toggle {
+    @apply flex items-start gap-3 rounded-lg border border-line px-3 py-3;
+  }
+
+  .settings-toggle > span {
+    @apply flex flex-col gap-1 text-xs;
+  }
+
+  .settings-toggle small {
+    @apply font-normal text-muted;
+  }
+
+  .settings-actions {
+    @apply flex items-center justify-end gap-4;
+  }
+
+  .settings-actions button,
+  .page-state button,
+  .review-load-error button {
+    @apply rounded-md border-0 bg-ink px-4 py-2 text-xs font-bold text-white;
+  }
+
+  .save-feedback,
+  .form-error {
+    @apply text-xs;
+  }
+
+  .save-feedback.is-success {
+    @apply text-emerald-700;
+  }
+
+  .save-feedback.is-error,
+  .form-error {
+    @apply text-red-700;
+  }
+
+  .repository-shell {
+    @apply min-h-[calc(100vh-64px)] bg-canvas;
+  }
+
+  .repository-source-control {
+    @apply flex min-h-12 items-center gap-2 border-b border-line bg-paper px-5 text-xs;
+  }
+
+  .source-control-branch {
+    @apply flex items-center gap-2 font-bold;
+  }
+
+  .source-control-branch select {
+    @apply max-w-60 rounded border border-line bg-white px-2 py-1.5 font-mono text-[10px];
+  }
+
+  .source-control-count {
+    @apply rounded px-1.5 py-1 font-mono text-[10px] font-bold;
+  }
+
+  .source-control-count.is-ahead {
+    @apply bg-add text-emerald-800;
+  }
+
+  .source-control-count.is-behind {
+    @apply bg-remove text-red-800;
+  }
+
+  .source-control-changes,
+  .source-control-path {
+    @apply min-w-0 truncate text-muted;
+  }
+
+  .source-control-feedback {
+    @apply min-w-0 truncate font-semibold;
+  }
+
+  .source-control-feedback.is-error {
+    @apply text-red-700;
+  }
+
+  .source-control-feedback.is-success {
+    @apply text-emerald-700;
+  }
+
+  .source-control-refresh,
+  .source-control-pull {
+    @apply ml-auto rounded-md border border-line bg-white px-3 py-1.5 text-xs font-bold disabled:opacity-50;
+  }
+
+  .source-control-pull {
+    @apply ml-0 bg-ink text-white;
+  }
+
+  .repository-workspace {
+    @apply grid min-h-[calc(100vh-112px)];
+    grid-template-columns: 330px minmax(0, 1fr);
+  }
+
+  .repository-file-sidebar {
+    @apply overflow-auto border-r border-line bg-[#efede6];
+  }
+
+  .repository-file-sidebar > header {
+    @apply sticky top-0 z-10 flex items-center justify-between border-b border-line bg-[#efede6] px-4 py-3;
+  }
+
+  .repository-results {
+    @apply min-w-0 overflow-auto bg-paper/70;
+  }
+
+  .file-tree {
+    @apply py-2;
+  }
+
+  .folder-row,
+  .file-row,
+  .repository-file-row {
+    @apply flex w-full cursor-pointer items-center gap-2 border-0 bg-transparent py-2 pr-3 text-left text-xs hover:bg-white/70;
+  }
+
+  .file-row.is-active,
+  .repository-file-row.is-active,
+  .file-row.is-selected {
+    @apply bg-white shadow-[inset_3px_0_#a5c42f];
+  }
+
+  .folder-chevron {
+    @apply w-3 text-center text-muted;
+  }
+
+  .folder-icon {
+    @apply text-[9px] text-lime-dark;
+  }
+
+  .tree-count {
+    @apply ml-auto text-[9px] text-muted;
+  }
+
+  .file-status {
+    @apply grid size-6 shrink-0 place-items-center rounded-md bg-slate-200 font-mono text-[9px] font-extrabold text-slate-600;
+  }
+
+  .status-added,
+  .file-status.is-added,
+  .file-status.is-Added {
+    @apply bg-add text-emerald-700;
+  }
+
+  .status-deleted,
+  .file-status.is-deleted,
+  .file-status.is-Deleted {
+    @apply bg-remove text-red-700;
+  }
+
+  .file-copy {
+    @apply min-w-0 flex-1 truncate;
+  }
+
+  .file-name {
+    @apply font-mono font-semibold;
+  }
+
+  .file-delta {
+    @apply ml-auto flex gap-1 font-mono text-[9px];
+  }
+
+  .plus {
+    @apply text-emerald-700;
+  }
+
+  .minus {
+    @apply text-red-700;
+  }
+
+  .repository-empty-selection,
+  .repository-clone-offer {
+    @apply grid min-h-[calc(100vh-112px)] place-content-center justify-items-center gap-2 p-8 text-center;
+  }
+
+  .repository-empty-selection h1,
+  .repository-empty-selection p,
+  .repository-clone-offer h1,
+  .repository-clone-offer p {
+    @apply m-0;
+  }
+
+  .repository-empty-selection p,
+  .repository-clone-offer p {
+    @apply max-w-xl text-sm text-muted;
+  }
+
+  .repository-clone-actions {
+    @apply mt-3 flex gap-2;
+  }
+
+  .repository-clone-actions button {
+    @apply rounded-md border border-line bg-white px-4 py-2 text-xs font-bold;
+  }
+
+  .repository-clone-actions button:first-child {
+    @apply border-ink bg-ink text-white;
+  }
+
+  .repository-file-view,
+  .repository-search-results,
+  .commits-browser,
+  .repository-pulls-browser {
+    @apply min-w-0 p-5;
+  }
+
+  .repository-file-heading,
+  .commits-heading,
+  .repository-pulls-heading {
+    @apply mb-4 flex items-center justify-between gap-3;
+  }
+
+  .repository-file-heading h1,
+  .commits-heading h1,
+  .repository-pulls-heading h1 {
+    @apply m-0 min-w-0 truncate font-mono text-sm;
+  }
+
+  .repository-file-view pre {
+    @apply m-0 overflow-auto rounded-xl border border-line bg-paper p-4 text-xs leading-6 shadow-sm;
+  }
+
+  .source-line {
+    @apply block min-w-max;
+  }
+
+  .repository-search-match,
+  .repository-pull-row,
+  .commit-row {
+    @apply mb-2 grid w-full min-w-0 cursor-pointer items-center gap-3 rounded-lg border border-line bg-paper p-3 text-left text-ink no-underline shadow-sm hover:border-lime-dark;
+  }
+
+  .repository-search-match {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .repository-match-heading {
+    @apply flex items-center justify-between gap-4 text-xs;
+  }
+
+  .repository-search-match pre {
+    @apply col-span-full m-0 overflow-x-auto rounded bg-slate-100 p-2 text-[11px];
+  }
+
+  .repository-pull-row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .repository-pull-avatar,
+  .commit-avatar {
+    @apply size-8 rounded-full bg-slate-200;
+  }
+
+  .repository-pull-copy,
+  .commit-copy,
+  .commit-row > div {
+    @apply flex min-w-0 flex-col gap-1;
+  }
+
+  .repository-pull-copy strong,
+  .commit-row strong {
+    @apply truncate text-xs;
+  }
+
+  .repository-pull-copy span,
+  .commit-row span {
+    @apply truncate text-[10px] text-muted;
+  }
+
+  .repository-pull-labels {
+    @apply flex flex-wrap gap-1;
+  }
+
+  .repository-pull-labels span,
+  .repository-pull-state {
+    @apply rounded-full bg-slate-100 px-2 py-1 text-[9px] font-bold;
+  }
+
+  .repository-pull-load-more {
+    @apply rounded-md border border-line bg-paper px-4 py-2 text-xs font-bold;
+  }
+
+  .review-loading {
+    @apply grid min-h-[calc(100vh-64px)] place-items-center p-8;
+  }
+
+  .review-loading-card {
+    @apply flex w-full max-w-xl items-center gap-4 rounded-xl border border-line bg-paper p-5 shadow-lg;
+  }
+
+  .review-loading-copy {
+    @apply flex min-w-0 flex-col gap-1;
+  }
+
+  .review-loading-copy strong {
+    @apply text-sm;
+  }
+
+  .review-loading-copy code {
+    @apply truncate text-xs text-slate-600;
+  }
+
+  .review-loading-copy span {
+    @apply text-xs text-muted;
+  }
+
+  .review-header {
+    @apply relative flex items-end justify-between gap-8 border-b border-line bg-paper/95 px-7 py-5;
+  }
+
+  .review-header-copy {
+    @apply min-w-0;
+  }
+
+  .review-kicker,
+  .review-header-copy p {
+    @apply m-0 flex items-center gap-2 text-xs text-muted;
+  }
+
+  .review-kicker a {
+    @apply font-bold text-slate-700 no-underline hover:underline;
+  }
+
+  .backing-badge {
+    @apply rounded-full border border-slate-300 bg-slate-100 px-2 py-1 font-mono text-[8px] font-bold uppercase;
+  }
+
+  .review-header h1 {
+    @apply my-2 max-w-4xl text-2xl leading-tight font-extrabold tracking-tight;
+  }
+
+  .review-header code {
+    @apply rounded bg-slate-100 px-1.5 py-1 text-[10px];
+  }
+
+  .review-summary {
+    @apply flex shrink-0 items-end gap-4;
+  }
+
+  .review-metric {
+    @apply flex flex-col border-l-2 border-slate-300 pl-3;
+  }
+
+  .review-metric strong {
+    @apply text-xl;
+  }
+
+  .review-metric span {
+    @apply text-[9px] tracking-widest text-muted uppercase;
+  }
+
+  .review-metric.is-addition {
+    @apply border-emerald-400 text-emerald-700;
+  }
+
+  .review-metric.is-deletion {
+    @apply border-red-400 text-red-700;
+  }
+
+  .review-summary > button {
+    @apply rounded-md border border-line bg-white px-3 py-2 text-xs font-bold;
+  }
+
+  .revision-notice {
+    @apply absolute right-6 bottom-[-14px] z-20 flex items-center gap-2 rounded-full border border-lime-dark bg-lime px-3 py-1.5 text-[10px] font-bold shadow;
+  }
+
+  .revision-notice button {
+    @apply border-0 bg-transparent underline;
+  }
+
+  .compact-review-toolbar {
+    @apply sticky top-16 z-30 flex h-[54px] min-w-0 items-center gap-3 border-b border-slate-700 bg-ink px-4 text-white shadow-md transition-[height] duration-150;
+  }
+
+  .compact-review-toolbar.is-compact {
+    @apply h-11;
+  }
+
+  .review-tab-picker {
+    @apply flex shrink-0 rounded-lg bg-slate-700 p-1;
+  }
+
+  .review-tab-picker .segmented-button {
+    @apply px-3 py-1.5 text-[10px] text-slate-300;
+  }
+
+  .review-tab-picker .segmented-button.is-active {
+    @apply bg-slate-100 text-ink;
+  }
+
+  .review-search {
+    @apply flex min-w-32 flex-1 items-center rounded-md border border-slate-600 bg-slate-800;
+  }
+
+  .review-search select,
+  .review-search input,
+  .diff-options select {
+    @apply min-w-0 border-0 bg-transparent px-2 py-1.5 text-[10px] text-slate-200 outline-none;
+  }
+
+  .review-search input {
+    @apply flex-1 placeholder:text-slate-400;
+  }
+
+  .diff-options {
+    @apply flex min-w-0 items-center gap-1.5;
+  }
+
+  .diff-options select,
+  .filter-toggle {
+    @apply h-8 rounded-md border border-slate-600 bg-slate-800 px-2 text-[10px] font-bold text-slate-300;
+  }
+
+  .filter-toggle {
+    @apply flex cursor-pointer items-center gap-1.5 whitespace-nowrap;
+  }
+
+  .filter-toggle input {
+    @apply sr-only;
+  }
+
+  .filter-toggle.is-active {
+    @apply border-lime-dark text-white;
+  }
+
+  .toggle-dot {
+    @apply size-2 rounded-full bg-slate-500;
+  }
+
+  .filter-toggle.is-active .toggle-dot {
+    @apply bg-lime;
+  }
+
+  .workspace {
+    @apply grid min-h-[calc(100vh-118px)];
+    grid-template-columns: 320px minmax(0, 1fr);
+  }
+
+  .workspace.sidebar-collapsed {
+    grid-template-columns: 40px minmax(0, 1fr);
+  }
+
+  .file-sidebar {
+    @apply relative overflow-auto border-r border-line bg-[#efede6];
+  }
+
+  .file-sidebar > div > header {
+    @apply flex items-center justify-between border-b border-line px-4 py-3;
+  }
+
+  .sidebar-toggle {
+    @apply absolute top-2 right-2 z-10 grid size-7 place-items-center rounded-md border border-line bg-paper text-sm shadow-sm;
+  }
+
+  .workspace.sidebar-collapsed .sidebar-toggle {
+    @apply right-1.5;
+  }
+
+  .review-diffs {
+    @apply min-w-0 space-y-4 overflow-hidden p-4;
+  }
+
+  .diff-panel {
+    @apply min-w-0 overflow-hidden rounded-xl border border-line bg-paper shadow-sm;
+  }
+
+  .diff-panel.is-active {
+    @apply border-lime-dark opacity-75;
+  }
+
+  .diff-file-header {
+    @apply flex min-h-14 cursor-pointer items-center gap-3 border-b border-line px-4 py-2;
+  }
+
+  .diff-file-header > strong {
+    @apply min-w-0 flex-1 truncate font-mono text-xs;
+  }
+
+  .previous-path {
+    @apply truncate text-[9px] text-muted;
+  }
+
+  .file-actions {
+    @apply ml-auto flex shrink-0 gap-2;
+  }
+
+  .file-actions button,
+  .file-actions a,
+  .diff-footer button {
+    @apply rounded-md border border-line bg-white px-3 py-2 text-xs font-bold text-ink no-underline;
+  }
+
+  .semantic-banner {
+    @apply flex items-start gap-3 border-b border-[#d4caee] bg-[#f1ecff] px-4 py-3 text-xs;
+  }
+
+  .semantic-banner > div:not(.semantic-chips) {
+    @apply flex flex-col;
+  }
+
+  .semantic-banner > div > span {
+    @apply text-[10px] text-[#71678d];
+  }
+
+  .semantic-banner.is-muted {
+    @apply bg-slate-100 text-slate-600;
+  }
+
+  .semantic-banner.is-error {
+    @apply bg-red-50 text-red-800;
+  }
+
+  .semantic-symbol {
+    @apply grid size-7 shrink-0 place-items-center rounded-full bg-[#dfd5fa] text-lg;
+  }
+
+  .semantic-chips {
+    @apply ml-auto flex max-w-[60%] flex-wrap justify-end gap-1;
+  }
+
+  .semantic-chip {
+    @apply rounded-full border border-[#cabee7] bg-white/70 px-2 py-1 font-mono text-[8px];
+  }
+
+  .semantic-chip.is-added {
+    @apply text-emerald-700;
+  }
+
+  .semantic-chip.is-deleted {
+    @apply text-red-700;
+  }
+
+  .hunk-header {
+    @apply flex w-full cursor-pointer items-center gap-2 border-0 border-b border-[#d8d0ef] bg-[#f0ecfa] px-4 py-2 text-left text-[#655d81];
+  }
+
+  .hunk-header code {
+    @apply truncate text-[11px];
+  }
+
+  .split-row {
+    @apply grid min-w-0 border-b border-black/5;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .split-cell {
+    @apply relative grid min-w-0 items-stretch;
+    grid-template-columns: 46px 24px minmax(0, 1fr) auto;
+  }
+
+  .split-cell.left {
+    @apply border-r border-line;
+  }
+
+  .split-cell.is-empty {
+    @apply bg-black/[0.025];
+  }
+
+  .unified-line {
+    @apply relative grid min-w-0 border-b border-black/5;
+    grid-template-columns: 46px 46px 24px minmax(0, 1fr) auto;
+  }
+
+  .split-cell.addition,
+  .unified-line.addition {
+    @apply bg-add;
+  }
+
+  .split-cell.deletion,
+  .unified-line.deletion {
+    @apply bg-remove;
+  }
+
+  .line-number {
+    @apply flex min-h-6 items-start justify-end border-0 border-r border-black/7 bg-black/[0.025] px-2 pt-1 font-mono text-[10px] leading-5 text-muted select-none;
+  }
+
+  button.line-number {
+    @apply cursor-pointer hover:bg-lime/30 hover:text-ink;
+  }
+
+  .line-marker {
+    @apply pt-1 text-center font-mono text-xs leading-5 select-none;
+  }
+
+  .line-code {
+    @apply block min-w-0 px-2 py-1 font-mono text-xs leading-5;
+    overflow-wrap: anywhere;
+    white-space: break-spaces;
+  }
+
+  .inline-change {
+    @apply rounded bg-black/10 px-px ring-1 ring-black/10;
+  }
+
+  .syntax-comment {
+    @apply text-slate-500;
+  }
+
+  .syntax-string {
+    @apply text-blue-700;
+  }
+
+  .syntax-number {
+    @apply text-fuchsia-700;
+  }
+
+  .syntax-keyword {
+    @apply font-semibold text-violet-700;
+  }
+
+  .syntax-type {
+    @apply text-orange-700;
+  }
+
+  .line-move {
+    @apply shadow-[inset_4px_0_var(--color-move)];
+  }
+
+  .line-move.move-tone-1 {
+    @apply shadow-[inset_4px_0_#b7e5ff];
+  }
+
+  .line-move.move-tone-2 {
+    @apply shadow-[inset_4px_0_#ffe39e];
+  }
+
+  .semantic-move-link {
+    @apply m-1 self-start rounded-full border border-violet-300 bg-white/90 px-2 py-1 text-[8px] font-bold whitespace-nowrap text-violet-700;
+  }
+
+  .diff-footer {
+    @apply flex items-center justify-between border-t border-line px-4 py-3 text-[10px] text-muted;
+  }
+
+  .inline-review-threads {
+    @apply col-span-full;
+  }
+
+  .detached-review-threads {
+    @apply border-t border-line;
+  }
+
+  .github-review-thread {
+    @apply m-3 overflow-hidden rounded-lg border border-slate-300 bg-white;
+  }
+
+  .github-review-thread.is-resolved {
+    @apply border-slate-200 bg-slate-50;
+  }
+
+  .review-thread-header {
+    @apply flex w-full items-center gap-2 border-0 border-b border-slate-200 bg-slate-50 px-3 py-2 text-left text-[10px];
+  }
+
+  .review-thread-header > span:last-child {
+    @apply ml-auto text-muted;
+  }
+
+  .resolved-tag {
+    @apply rounded-full bg-slate-200 px-2 py-1 text-[8px] font-bold uppercase;
+  }
+
+  .review-thread-body {
+    @apply p-3 text-xs;
+  }
+
+  .github-markdown {
+    @apply leading-5;
+  }
+
+  .github-markdown > :first-child {
+    @apply mt-0;
+  }
+
+  .github-markdown > :last-child {
+    @apply mb-0;
+  }
+
+  .github-markdown pre,
+  .github-markdown code {
+    @apply rounded bg-slate-100 px-1 py-0.5 text-[11px];
+  }
+
+  .github-review-reply {
+    @apply mt-3 border-t border-slate-200 pt-3;
+  }
+
+  .github-review-reply header {
+    @apply mb-2 flex gap-2 text-[10px];
+  }
+
+  .review-reply-composer,
+  .inline-comment-composer,
+  .github-review-composer {
+    @apply mt-3 grid gap-2 rounded-lg border border-slate-300 bg-white p-3;
+  }
+
+  .inline-comment-composer {
+    @apply m-3;
+  }
+
+  .review-reply-composer textarea,
+  .inline-comment-composer textarea,
+  .github-review-composer textarea {
+    @apply min-h-20 w-full resize-y rounded-md border border-line p-2 text-xs;
+  }
+
+  .review-reply-composer button,
+  .inline-comment-composer button,
+  .github-review-composer button {
+    @apply rounded-md border border-line bg-white px-3 py-2 text-xs font-bold;
+  }
+
+  .github-review-composer {
+    @apply mx-auto mb-6 max-w-3xl;
+  }
+
+  .github-review-composer h2 {
+    @apply m-0 text-sm;
+  }
+
+  .github-review-composer > div,
+  .inline-comment-composer > div {
+    @apply flex justify-end gap-2;
+  }
+
+  .github-review-composer button:nth-last-child(2) {
+    @apply border-emerald-700 bg-emerald-700 text-white;
+  }
+
+  .full-file-diff {
+    @apply max-h-[75vh] overflow-auto;
+  }
+
+  .commits-view {
+    @apply mx-auto min-h-[calc(100vh-118px)] max-w-5xl p-6;
+  }
+
+  .commit-list {
+    @apply grid gap-2;
+  }
+
+  .commit-row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .commit-detail {
+    @apply rounded-xl border border-line bg-paper p-5;
+  }
+
+  .commit-detail h1 {
+    @apply font-mono text-lg;
+  }
+}
+
+@media (max-width: 1100px) {
+  .app-bar {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .brand-tagline,
+  .review-app-location,
+  .repository-identity {
+    display: none;
+  }
+
+  .repository-toolbar {
+    grid-template-columns: auto minmax(180px, 1fr);
+  }
+
+  .review-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .diff-options .filter-toggle:nth-of-type(n + 3) {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .app-bar {
+    position: static;
+    height: auto;
+    min-height: 60px;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    padding: 10px;
+  }
+
+  .brand-name,
+  .repository-toolbar,
+  .app-bar-button {
+    display: none;
+  }
+
+  .compact-review-toolbar {
+    top: 0;
+    overflow-x: auto;
+  }
+
+  .review-search {
+    min-width: 170px;
+  }
+
+  .diff-options {
+    display: none;
+  }
+
+  .workspace,
+  .workspace.sidebar-collapsed,
+  .repository-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .file-sidebar,
+  .repository-file-sidebar {
+    max-height: 260px;
+    border-right: 0;
+    border-bottom: 1px solid var(--color-line);
+  }
+
+  .workspace.sidebar-collapsed .file-sidebar {
+    height: 40px;
+  }
+
+  .review-diffs {
+    padding: 8px;
+  }
+
+  .split-row {
+    grid-template-columns: 1fr;
+  }
+
+  .split-cell.left {
+    border-right: 0;
+    border-bottom: 1px dashed var(--color-line);
+  }
+
+  .repository-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .home-heading,
+  .settings-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .home-heading input {
+    width: 100%;
+  }
+
+  .settings-field {
+    grid-template-columns: 1fr;
+  }
+}
+
+@keyframes refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

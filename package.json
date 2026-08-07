@@ -11,7 +11,7 @@
     "elm:build": "elm make elm/src/Main.elm --output=dist/elm.js",
     "elm:format": "elm-format elm/src tests --yes",
     "elm:format:check": "elm-format elm/src tests --validate",
-    "elm:test": "elm-test tests/MainProgramTest.elm",
+    "elm:test": "elm-test",
     "build": "bun run typecheck && vite build && cargo build --release -p hunker-server",
     "format": "oxfmt --write . && cargo fmt --all",
     "format:check": "oxfmt --check . && cargo fmt --all --check",
