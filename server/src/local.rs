@@ -547,7 +547,7 @@ impl Local {
     ) -> AppResult<Option<FilePair>> {
         let file = crate::types::FileChange {
             path: path.to_owned(),
-            previous_path: previous_path.to_owned(),
+            previous_path: (!previous_path.is_empty()).then(|| previous_path.to_owned()),
             status,
             additions: 0,
             deletions: 0,
@@ -596,14 +596,10 @@ impl Local {
         let mut positions = Vec::with_capacity(files.len());
         for file in files {
             validate_git_path(&file.path)?;
-            if !file.previous_path.is_empty() {
-                validate_git_path(&file.previous_path)?;
+            if let Some(previous_path) = &file.previous_path {
+                validate_git_path(previous_path)?;
             }
-            let old_path = if file.status == FileStatus::Renamed && !file.previous_path.is_empty() {
-                &file.previous_path
-            } else {
-                &file.path
-            };
+            let old_path = file.previous_path.as_deref().unwrap_or(&file.path);
             let old = if file.status == FileStatus::Added {
                 ContentSource::Empty
             } else if let Some(text) = gitlink_text(&file.patch, '-') {

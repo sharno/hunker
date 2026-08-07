@@ -46,7 +46,7 @@ listRepositories succeeded failed =
         failed
 
 
-fetchReview : String -> (Review.ReviewData -> msg) -> (String -> msg) -> Effect msg
+fetchReview : String -> (Review.ReviewDocument -> msg) -> (String -> msg) -> Effect msg
 fetchReview githubUrl succeeded failed =
     Effect.get
         ("/api/diff?url=" ++ encode githubUrl ++ "&refresh=" ++ encode githubUrl)
@@ -184,9 +184,9 @@ fetchAnalysis githubUrl backing ignoreWhitespace semantic inlineDiff succeeded f
         ("/api/analysis?url="
             ++ encode githubUrl
             ++ "&baseOid="
-            ++ encode backing.baseOid
+            ++ encode (Review.backingBaseOid backing)
             ++ "&headOid="
-            ++ encode backing.headOid
+            ++ encode (Review.backingHeadOid backing)
             ++ "&whitespace="
             ++ (if ignoreWhitespace then
                     "ignore"
@@ -279,10 +279,10 @@ fileQuery : String -> Review.FileChange -> Review.ReviewBacking -> String
 fileQuery githubUrl file backing =
     [ ( "url", githubUrl )
     , ( "path", file.path )
-    , ( "previousPath", file.previousPath )
-    , ( "status", file.status )
-    , ( "baseOid", backing.baseOid )
-    , ( "headOid", backing.headOid )
+    , ( "previousPath", Maybe.withDefault "" file.previousPath )
+    , ( "status", Review.fileStatusToString file.status )
+    , ( "baseOid", Review.backingBaseOid backing )
+    , ( "headOid", Review.backingHeadOid backing )
     ]
         |> List.map (\( key, value ) -> key ++ "=" ++ encode value)
         |> String.join "&"

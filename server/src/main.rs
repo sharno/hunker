@@ -25,7 +25,7 @@ use crate::{
     error::{AppError, AppResult},
     github::{GitHub, GitHubTarget, InlineCommentInput, parse_url},
     local::Local,
-    types::{FilePair, FileStatus, PinnedRefs, RepositoryId, ReviewBacking, ReviewData},
+    types::{FilePair, FileStatus, PinnedRefs, RepositoryId, ReviewBacking, ReviewDocument},
 };
 
 #[derive(Clone)]
@@ -109,22 +109,19 @@ struct UrlQuery {
 async fn get_diff(
     State(state): State<Arc<AppState>>,
     Query(query): Query<UrlQuery>,
-) -> AppResult<Json<ReviewData>> {
+) -> AppResult<Json<ReviewDocument>> {
     let target = parse_url(&query.url)?;
     let metadata = state.github.metadata(&target).await?;
     let local = state
         .local
         .load_diff(&target, &metadata.base_oid, &metadata.head_oid)
-        .await
-        .ok()
-        .flatten();
+        .await?;
     let (diff, backing) = if let Some((repository, diff)) = local {
         let kind = repository.kind;
         tracing::debug!(kind, path = %repository.path.display(), "reading review from local Git");
         (
             diff,
-            ReviewBacking {
-                source: "local",
+            ReviewBacking::Local {
                 base_oid: metadata.base_oid.clone(),
                 head_oid: metadata.head_oid.clone(),
                 head_ref: metadata.head_ref.clone(),
@@ -134,16 +131,15 @@ async fn get_diff(
     } else {
         (
             state.github.review_diff(&target).await?,
-            ReviewBacking {
-                source: "github",
+            ReviewBacking::GitHub {
                 base_oid: metadata.base_oid.clone(),
                 head_oid: metadata.head_oid.clone(),
                 head_ref: metadata.head_ref.clone(),
-                path: String::new(),
             },
         )
     };
-    Ok(Json(ReviewData {
+    let files = diff::parse_git_diff(&diff);
+    Ok(Json(ReviewDocument {
         title: metadata.title,
         repository: metadata.repository,
         number: metadata.number,
@@ -151,7 +147,7 @@ async fn get_diff(
         base: metadata.base,
         head: metadata.head,
         url: metadata.url,
-        diff,
+        files,
         backing,
     }))
 }
@@ -191,9 +187,9 @@ async fn get_commits(
         ));
     }
     let metadata = state.github.metadata(&target).await?;
-    let commits = match state.local.load_pull_commits(&target, &metadata).await {
-        Ok(Some(commits)) => commits,
-        _ => state.github.pull_commits(&target).await?,
+    let commits = match state.local.load_pull_commits(&target, &metadata).await? {
+        Some(commits) => commits,
+        None => state.github.pull_commits(&target).await?,
     };
     Ok(Json(serde_json::json!({"commits": commits})))
 }

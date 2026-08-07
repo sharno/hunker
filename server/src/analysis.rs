@@ -238,7 +238,7 @@ async fn load_github_pairs(
                     &key.base_oid,
                     &key.head_oid,
                     &file.path,
-                    &file.previous_path,
+                    file.previous_path.as_deref().unwrap_or(""),
                     file.status,
                 )
                 .await

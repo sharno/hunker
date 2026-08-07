@@ -29,23 +29,27 @@ const reviewResponse = {
   base: "main",
   head: "feature/greeting",
   url: reviewUrl,
-  diff: `diff --git a/src/long.ts b/src/long.ts
-index 1111111..2222222 100644
---- a/src/long.ts
-+++ b/src/long.ts
-@@ -1 +1 @@
--${longLine}
-+export const description = "short review text";
-diff --git a/src/other.ts b/src/other.ts
-index 3333333..4444444 100644
---- a/src/other.ts
-+++ b/src/other.ts
-@@ -1 +1 @@
--export const other = false;
-+export const other = true;
-`,
+  files: [
+    {
+      path: "src/long.ts",
+      previousPath: null,
+      status: "modified",
+      additions: 1,
+      deletions: 1,
+      patch: `@@ -1 +1 @@\n-${longLine}\n+export const description = "short review text";`,
+    },
+    {
+      path: "src/other.ts",
+      previousPath: null,
+      status: "modified",
+      additions: 1,
+      deletions: 1,
+      patch:
+        "@@ -1 +1 @@\n-export const other = false;\n+export const other = true;",
+    },
+  ],
   backing: {
-    source: "github",
+    _tag: "GitHub",
     baseOid: "1111111111111111111111111111111111111111",
     headOid,
     headRef: "feature/greeting",

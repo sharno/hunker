@@ -21,7 +21,7 @@ pub enum FileStatus {
 #[serde(rename_all = "camelCase")]
 pub struct FileChange {
     pub path: String,
-    pub previous_path: String,
+    pub previous_path: Option<String>,
     pub status: FileStatus,
     pub additions: usize,
     pub deletions: usize,
@@ -31,25 +31,37 @@ pub struct FileChange {
 #[derive(Debug, Clone)]
 pub struct FilePair {
     pub path: String,
-    pub previous_path: String,
+    pub previous_path: Option<String>,
     pub status: FileStatus,
     pub old_text: String,
     pub new_text: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReviewBacking {
-    pub source: &'static str,
-    pub base_oid: String,
-    pub head_oid: String,
-    pub head_ref: String,
-    pub path: String,
+#[serde(tag = "_tag")]
+pub enum ReviewBacking {
+    Local {
+        #[serde(rename = "baseOid")]
+        base_oid: String,
+        #[serde(rename = "headOid")]
+        head_oid: String,
+        #[serde(rename = "headRef")]
+        head_ref: String,
+        path: String,
+    },
+    GitHub {
+        #[serde(rename = "baseOid")]
+        base_oid: String,
+        #[serde(rename = "headOid")]
+        head_oid: String,
+        #[serde(rename = "headRef")]
+        head_ref: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ReviewData {
+pub struct ReviewDocument {
     pub title: String,
     pub repository: String,
     pub number: String,
@@ -57,7 +69,7 @@ pub struct ReviewData {
     pub base: String,
     pub head: String,
     pub url: String,
-    pub diff: String,
+    pub files: Vec<FileChange>,
     pub backing: ReviewBacking,
 }
 

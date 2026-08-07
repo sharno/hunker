@@ -7,22 +7,27 @@ module Hunker.Domain.Review exposing
     , CharacterRange
     , CharacterRow
     , FileChange
+    , FileStatus(..)
     , FullFile
     , MovedBlock
     , PullCommit
     , ReviewBacking
     , ReviewComment
-    , ReviewData
+    , ReviewDocument
     , Revision
     , SemanticChange(..)
     , SemanticResult(..)
     , SourceRange
     , analysisSnapshotDecoder
+    , backingBaseOid
+    , backingHeadOid
+    , backingHeadRef
+    , backingLocalPath
     , characterDiffDecoder
     , commentDecoder
     , commentsDecoder
     , commitsDecoder
-    , fileChangesFromDiff
+    , fileStatusToString
     , fullFileDecoder
     , movedBlocksDecoder
     , reviewDecoder
@@ -36,24 +41,34 @@ import Json.Decode as Decode exposing (Decoder)
 
 type alias FileChange =
     { path : String
-    , previousPath : String
-    , status : String
+    , previousPath : Maybe String
+    , status : FileStatus
     , additions : Int
     , deletions : Int
     , patch : String
     }
 
 
-type alias ReviewBacking =
-    { source : String
-    , baseOid : String
+type FileStatus
+    = FileModified
+    | FileAdded
+    | FileDeleted
+    | FileRenamed
+
+
+type ReviewBacking
+    = LocalBacking BackingRevision String
+    | GitHubBacking BackingRevision
+
+
+type alias BackingRevision =
+    { baseOid : String
     , headOid : String
     , headRef : String
-    , path : String
     }
 
 
-type alias ReviewData =
+type alias ReviewDocument =
     { title : String
     , repository : String
     , number : String
@@ -61,7 +76,7 @@ type alias ReviewData =
     , base : String
     , head : String
     , url : String
-    , diff : String
+    , files : List FileChange
     , backing : ReviewBacking
     }
 
@@ -193,10 +208,10 @@ type alias Revision =
     }
 
 
-reviewDecoder : Decoder ReviewData
+reviewDecoder : Decoder ReviewDocument
 reviewDecoder =
     Decode.map8
-        (\title repository number author base head url diff ->
+        (\title repository number author base head url files ->
             { title = title
             , repository = repository
             , number = number
@@ -204,8 +219,8 @@ reviewDecoder =
             , base = base
             , head = head
             , url = url
-            , diff = diff
-            , backing = emptyBacking
+            , files = files
+            , backing = GitHubBacking { baseOid = "", headOid = "", headRef = "" }
             }
         )
         (Decode.field "title" Decode.string)
@@ -215,7 +230,7 @@ reviewDecoder =
         (Decode.field "base" Decode.string)
         (Decode.field "head" Decode.string)
         (Decode.field "url" Decode.string)
-        (Decode.field "diff" Decode.string)
+        (Decode.field "files" (Decode.list fileChangeDecoder))
         |> Decode.andThen
             (\partial ->
                 Decode.map (\backing -> { partial | backing = backing })
@@ -223,19 +238,113 @@ reviewDecoder =
             )
 
 
-emptyBacking : ReviewBacking
-emptyBacking =
-    { source = "github", baseOid = "", headOid = "", headRef = "", path = "" }
-
-
 backingDecoder : Decoder ReviewBacking
 backingDecoder =
-    Decode.map5 ReviewBacking
-        (Decode.field "source" Decode.string)
-        (Decode.field "baseOid" Decode.string)
-        (Decode.field "headOid" Decode.string)
-        (Decode.field "headRef" Decode.string)
+    Decode.field "_tag" Decode.string
+        |> Decode.andThen
+            (\tag ->
+                let
+                    revision =
+                        Decode.map3 BackingRevision
+                            (Decode.field "baseOid" Decode.string)
+                            (Decode.field "headOid" Decode.string)
+                            (Decode.field "headRef" Decode.string)
+                in
+                case tag of
+                    "Local" ->
+                        Decode.map2 LocalBacking revision (Decode.field "path" Decode.string)
+
+                    "GitHub" ->
+                        Decode.map GitHubBacking revision
+
+                    _ ->
+                        Decode.fail ("Unknown review backing: " ++ tag)
+            )
+
+
+fileChangeDecoder : Decoder FileChange
+fileChangeDecoder =
+    Decode.map6 FileChange
         (Decode.field "path" Decode.string)
+        (Decode.field "previousPath" (Decode.nullable Decode.string))
+        (Decode.field "status" fileStatusDecoder)
+        (Decode.field "additions" Decode.int)
+        (Decode.field "deletions" Decode.int)
+        (Decode.field "patch" Decode.string)
+
+
+fileStatusDecoder : Decoder FileStatus
+fileStatusDecoder =
+    Decode.string
+        |> Decode.andThen
+            (\value ->
+                case value of
+                    "modified" ->
+                        Decode.succeed FileModified
+
+                    "added" ->
+                        Decode.succeed FileAdded
+
+                    "deleted" ->
+                        Decode.succeed FileDeleted
+
+                    "renamed" ->
+                        Decode.succeed FileRenamed
+
+                    _ ->
+                        Decode.fail ("Unknown file status: " ++ value)
+            )
+
+
+fileStatusToString : FileStatus -> String
+fileStatusToString status =
+    case status of
+        FileModified ->
+            "modified"
+
+        FileAdded ->
+            "added"
+
+        FileDeleted ->
+            "deleted"
+
+        FileRenamed ->
+            "renamed"
+
+
+backingRevision : ReviewBacking -> BackingRevision
+backingRevision backing =
+    case backing of
+        LocalBacking revision _ ->
+            revision
+
+        GitHubBacking revision ->
+            revision
+
+
+backingBaseOid : ReviewBacking -> String
+backingBaseOid =
+    backingRevision >> .baseOid
+
+
+backingHeadOid : ReviewBacking -> String
+backingHeadOid =
+    backingRevision >> .headOid
+
+
+backingHeadRef : ReviewBacking -> String
+backingHeadRef =
+    backingRevision >> .headRef
+
+
+backingLocalPath : ReviewBacking -> Maybe String
+backingLocalPath backing =
+    case backing of
+        LocalBacking _ path ->
+            Just path
+
+        GitHubBacking _ ->
+            Nothing
 
 
 commitsDecoder : Decoder (List PullCommit)
@@ -515,139 +624,3 @@ revisionDecoder =
                         , current = True
                         }
             )
-
-
-fileChangesFromDiff : String -> List FileChange
-fileChangesFromDiff diff =
-    diffChunks diff
-        |> List.map parseFileChunk
-
-
-diffChunks : String -> List String
-diffChunks diff =
-    let
-        finish currentLines completedChunks =
-            if List.isEmpty currentLines then
-                completedChunks
-
-            else
-                (currentLines |> List.reverse |> String.join "\n") :: completedChunks
-
-        step line ( current, completed ) =
-            if String.startsWith "diff --git " line then
-                ( [ String.dropLeft (String.length "diff --git ") line ]
-                , finish current completed
-                )
-
-            else if List.isEmpty current then
-                ( current, completed )
-
-            else
-                ( line :: current, completed )
-
-        ( finalLines, finalChunks ) =
-            List.foldl step ( [], [] ) (String.lines diff)
-    in
-    finish finalLines finalChunks |> List.reverse
-
-
-parseFileChunk : String -> FileChange
-parseFileChunk chunk =
-    let
-        lines =
-            String.lines chunk
-
-        metadata =
-            lines |> takeUntil (String.startsWith "@@")
-
-        headerPath =
-            lines
-                |> List.head
-                |> Maybe.andThen
-                    (\line ->
-                        case String.split " b/" line of
-                            _ :: path :: _ ->
-                                Just path
-
-                            _ ->
-                                Nothing
-                    )
-                |> Maybe.withDefault "unknown"
-
-        renameFrom =
-            prefixedLine "rename from " metadata
-
-        renameTo =
-            prefixedLine "rename to " metadata
-
-        patch =
-            lines
-                |> dropUntil (String.startsWith "@@")
-                |> String.join "\n"
-
-        additions =
-            patch
-                |> String.lines
-                |> List.filter (\line -> String.startsWith "+" line && not (String.startsWith "+++" line))
-                |> List.length
-
-        deletions =
-            patch
-                |> String.lines
-                |> List.filter (\line -> String.startsWith "-" line && not (String.startsWith "---" line))
-                |> List.length
-    in
-    { path = Maybe.withDefault headerPath renameTo
-    , previousPath = Maybe.withDefault "" renameFrom
-    , status =
-        if List.any (String.startsWith "new file mode") metadata then
-            "added"
-
-        else if List.any (String.startsWith "deleted file mode") metadata then
-            "deleted"
-
-        else if renameFrom /= Nothing then
-            "renamed"
-
-        else
-            "modified"
-    , additions = additions
-    , deletions = deletions
-    , patch = patch
-    }
-
-
-prefixedLine : String -> List String -> Maybe String
-prefixedLine prefix lines =
-    lines
-        |> List.filter (String.startsWith prefix)
-        |> List.head
-        |> Maybe.map (String.dropLeft (String.length prefix))
-
-
-dropUntil : (value -> Bool) -> List value -> List value
-dropUntil predicate values =
-    case values of
-        [] ->
-            []
-
-        first :: rest ->
-            if predicate first then
-                values
-
-            else
-                dropUntil predicate rest
-
-
-takeUntil : (value -> Bool) -> List value -> List value
-takeUntil predicate values =
-    case values of
-        [] ->
-            []
-
-        first :: rest ->
-            if predicate first then
-                []
-
-            else
-                first :: takeUntil predicate rest

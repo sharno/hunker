@@ -369,7 +369,7 @@ impl GitHub {
         };
         Ok(FilePair {
             path: path.to_owned(),
-            previous_path: previous_path.to_owned(),
+            previous_path: (!previous_path.is_empty()).then(|| previous_path.to_owned()),
             status,
             old_text,
             new_text,

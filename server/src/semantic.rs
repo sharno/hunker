@@ -460,12 +460,13 @@ fn located_units(files: &[FilePair], old: bool) -> Vec<LocatedUnit> {
             if parsed.parse_failed {
                 return Vec::new();
             }
-            let path =
-                if old && file.status == FileStatus::Renamed && !file.previous_path.is_empty() {
-                    file.previous_path.clone()
-                } else {
-                    file.path.clone()
-                };
+            let path = if old && file.status == FileStatus::Renamed {
+                file.previous_path
+                    .clone()
+                    .unwrap_or_else(|| file.path.clone())
+            } else {
+                file.path.clone()
+            };
             parsed
                 .units
                 .into_iter()
@@ -729,7 +730,7 @@ mod tests {
     fn pair(path: &str, old: &str, new: &str) -> FilePair {
         FilePair {
             path: path.to_owned(),
-            previous_path: String::new(),
+            previous_path: None,
             status: FileStatus::Modified,
             old_text: old.to_owned(),
             new_text: new.to_owned(),

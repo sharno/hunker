@@ -119,11 +119,6 @@ suite =
                             , ( Nothing, Just ( Just 3, "inserted", Addition ) )
                             , ( Just ( Just 3, "tail", Context ), Just ( Just 4, "tail", Context ) )
                             ]
-            , test "does not split a diff header embedded in changed source" <|
-                \() ->
-                    Review.fileChangesFromDiff "diff --git a/test.ts b/test.ts\n--- a/test.ts\n+++ b/test.ts\n@@ -1 +1 @@\n-const fixture = `diff --git a/a b/a`;\n+const fixture = `new file mode`;"
-                        |> List.map (\file -> ( file.path, file.status ))
-                        |> Expect.equal [ ( "test.ts", "modified" ) ]
             ]
         , test "builds a directory-first nested file tree" <|
             \() ->

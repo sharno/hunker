@@ -284,20 +284,21 @@ reviewJson =
             , ( "base", Encode.string "main" )
             , ( "head", Encode.string "feature/greeting" )
             , ( "url", Encode.string "https://github.com/example/hunker/pull/42" )
-            , ( "diff"
-              , Encode.string
-                    """diff --git a/src/greet.ts b/src/greet.ts
-index 1111111..2222222 100644
---- a/src/greet.ts
-+++ b/src/greet.ts
-@@ -1 +1 @@
--const greeting = "hi";
-+const greeting = "hello";
-"""
+            , ( "files"
+              , Encode.list identity
+                    [ Encode.object
+                        [ ( "path", Encode.string "src/greet.ts" )
+                        , ( "previousPath", Encode.null )
+                        , ( "status", Encode.string "modified" )
+                        , ( "additions", Encode.int 1 )
+                        , ( "deletions", Encode.int 1 )
+                        , ( "patch", Encode.string "@@ -1 +1 @@\n-const greeting = \"hi\";\n+const greeting = \"hello\";" )
+                        ]
+                    ]
               )
             , ( "backing"
               , Encode.object
-                    [ ( "source", Encode.string "github" )
+                    [ ( "_tag", Encode.string "GitHub" )
                     , ( "baseOid", Encode.string "1111111111111111111111111111111111111111" )
                     , ( "headOid", Encode.string "2222222222222222222222222222222222222222" )
                     , ( "headRef", Encode.string "feature/greeting" )

@@ -23,7 +23,7 @@ pub fn parse_git_diff(diff: &str) -> Vec<FileChange> {
             let previous_path = rename_from
                 .captures(&metadata)
                 .and_then(|captures| captures.get(1))
-                .map_or_else(String::new, |value| value.as_str().to_owned());
+                .map(|value| value.as_str().to_owned());
             let path = rename_to
                 .captures(&metadata)
                 .and_then(|captures| captures.get(1))
@@ -32,7 +32,7 @@ pub fn parse_git_diff(diff: &str) -> Vec<FileChange> {
                 FileStatus::Added
             } else if metadata.contains("deleted file mode") {
                 FileStatus::Deleted
-            } else if previous_path.is_empty() {
+            } else if previous_path.is_none() {
                 FileStatus::Modified
             } else {
                 FileStatus::Renamed

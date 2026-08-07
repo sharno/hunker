@@ -16,7 +16,7 @@ import Html.Attributes exposing (attribute, checked, class, disabled, href, id, 
 import Html.Events exposing (onCheck, onClick, onInput, onSubmit)
 import Hunker.Api as Api
 import Hunker.Diff as Diff exposing (DiffLine, Hunk, Kind(..), SideLine, SplitRow)
-import Hunker.Domain.Review as Review exposing (AnalysisSnapshot, CharacterRange, FileChange, FullFile, MovedBlock, PullCommit, ReviewComment, ReviewData, Revision, SemanticChange(..), SemanticResult(..))
+import Hunker.Domain.Review as Review exposing (AnalysisSnapshot, CharacterRange, FileChange, FileStatus(..), FullFile, MovedBlock, PullCommit, ReviewComment, ReviewDocument, Revision, SemanticChange(..), SemanticResult(..))
 import Hunker.Domain.Settings as Settings exposing (InlineDiffMode(..), ReviewScope(..), Settings, ViewMode(..))
 import Hunker.Effect as Effect exposing (Effect)
 import Hunker.FileTree as FileTree exposing (Tree(..))
@@ -36,7 +36,7 @@ type alias Model =
     { location : Route.ReviewLocation
     , requestUrl : String
     , pullUrl : String
-    , review : Remote String String ReviewData
+    , review : Remote String String ReviewDocument
     , files : List FileChange
     , preparedFiles : Dict String PreparedFile
     , pullRequestFiles : List FileChange
@@ -86,7 +86,7 @@ type alias InlineComposer =
 
 
 type Msg
-    = ReviewLoaded String ReviewData
+    = ReviewLoaded String ReviewDocument
     | ReviewFailed String String
     | Refreshed
     | CommitsLoaded String (List PullCommit)
@@ -558,7 +558,7 @@ update msg model =
                         ( { model | inlineSubmission = Loading composer.path }
                         , Api.postInlineComment
                             { pullUrl = model.pullUrl
-                            , commitId = reviewData.backing.headOid
+                            , commitId = Review.backingHeadOid reviewData.backing
                             , path = composer.path
                             , line = composer.line
                             , side = composer.side
@@ -604,14 +604,14 @@ update msg model =
             revisionCheck model
 
 
-reviewReady : ReviewData -> Model -> ( Model, Effect Msg )
+reviewReady : ReviewDocument -> Model -> ( Model, Effect Msg )
 reviewReady reviewData model =
     let
         currentLocation =
             model.location
 
         files =
-            Review.fileChangesFromDiff reviewData.diff
+            reviewData.files
 
         selected =
             case model.location.path |> Maybe.andThen (\path -> List.filter (.path >> (==) path) files |> List.head) of
@@ -717,11 +717,11 @@ beginAnalysisAndSave model =
     saveSettingsWith effect updated
 
 
-analysisIdentity : Model -> ReviewData -> AnalysisIdentity
+analysisIdentity : Model -> ReviewDocument -> AnalysisIdentity
 analysisIdentity model reviewData =
     { requestUrl = model.requestUrl
-    , baseOid = reviewData.backing.baseOid
-    , headOid = reviewData.backing.headOid
+    , baseOid = Review.backingBaseOid reviewData.backing
+    , headOid = Review.backingHeadOid reviewData.backing
     , ignoreWhitespace = model.settings.ignoreWhitespace
     , semantic = model.settings.semantic
     , inlineDiff = Settings.inlineDiffModeToString model.settings.inlineDiffMode
@@ -756,7 +756,7 @@ revisionEffect : Model -> Effect Msg
 revisionEffect model =
     case ( model.location.target, readyReview model ) of
         ( PullRequest _ _ _, Just reviewData ) ->
-            Api.checkRevision model.requestUrl reviewData.backing.headOid (RevisionLoaded model.requestUrl) (RevisionFailed model.requestUrl)
+            Api.checkRevision model.requestUrl (Review.backingHeadOid reviewData.backing) (RevisionLoaded model.requestUrl) (RevisionFailed model.requestUrl)
 
         _ ->
             Effect.none
@@ -792,7 +792,7 @@ mapSettings transform model =
     transform model.settings
 
 
-readyReview : Model -> Maybe ReviewData
+readyReview : Model -> Maybe ReviewDocument
 readyReview model =
     case model.review of
         Success requested reviewData ->
@@ -888,7 +888,7 @@ loadingView url =
         ]
 
 
-readyView : Model -> ReviewData -> Html Msg
+readyView : Model -> ReviewDocument -> Html Msg
 readyView model reviewData =
     main_ [ class "review-page review-grid" ]
         [ reviewHeader model reviewData
@@ -918,7 +918,7 @@ readyView model reviewData =
         ]
 
 
-reviewHeader : Model -> ReviewData -> Html Msg
+reviewHeader : Model -> ReviewDocument -> Html Msg
 reviewHeader model reviewData =
     header [ class "review-header" ]
         [ div [ class "review-header-copy" ]
@@ -940,17 +940,14 @@ reviewHeader model reviewData =
         ]
 
 
-backingBadge : ReviewData -> Html Msg
+backingBadge : ReviewDocument -> Html Msg
 backingBadge reviewData =
-    span [ class "backing-badge" ]
-        [ text
-            (if reviewData.backing.source == "local" then
-                "local · " ++ String.left 8 reviewData.backing.headOid
+    case Review.backingLocalPath reviewData.backing of
+        Just _ ->
+            span [ class "backing-badge is-local" ] [ text ("local · " ++ String.left 8 (Review.backingHeadOid reviewData.backing)) ]
 
-             else
-                "GitHub"
-            )
-        ]
+        Nothing ->
+            span [ class "backing-badge is-github" ] [ text "GitHub" ]
 
 
 metric : String -> String -> String -> Html msg
@@ -1155,7 +1152,7 @@ reviewTreeNode model depth tree =
                 , attribute "style" ("padding-left:" ++ String.fromInt (depth * 14 + 20) ++ "px")
                 , onClick (SelectedFile file.path)
                 ]
-                [ span [ class ("file-status status-" ++ file.status) ]
+                [ span [ class ("file-status status-" ++ Review.fileStatusToString file.status) ]
                     [ text
                         (if reviewed then
                             "✓"
@@ -1190,13 +1187,11 @@ fileDiff model file =
                             "⌄"
                         )
                     ]
-                , span [ class ("file-status status-" ++ file.status) ] [ text (statusGlyph file.status) ]
+                , span [ class ("file-status status-" ++ Review.fileStatusToString file.status) ] [ text (statusGlyph file.status) ]
                 , strong [] [ text file.path ]
-                , if file.previousPath /= "" then
-                    span [ class "previous-path" ] [ text ("from " ++ file.previousPath) ]
-
-                  else
-                    text ""
+                , file.previousPath
+                    |> Maybe.map (\path -> span [ class "previous-path" ] [ text ("from " ++ path) ])
+                    |> Maybe.withDefault (text "")
                 ]
             , div [ class "file-actions", attribute "data-ignore-file-collapse" "true" ]
                 [ button [ type_ "button", onClick (ToggledFullFile file) ]
@@ -1792,7 +1787,7 @@ githubFileUrl : Model -> FileChange -> String
 githubFileUrl model file =
     case readyReview model of
         Just reviewData ->
-            "https://github.com/" ++ reviewData.repository ++ "/blob/" ++ reviewData.backing.headOid ++ "/" ++ file.path
+            "https://github.com/" ++ reviewData.repository ++ "/blob/" ++ Review.backingHeadOid reviewData.backing ++ "/" ++ file.path
 
         Nothing ->
             "#"
@@ -1814,19 +1809,19 @@ lastNewLine model path =
         |> Maybe.withDefault 1
 
 
-statusGlyph : String -> String
+statusGlyph : FileStatus -> String
 statusGlyph status =
     case status of
-        "added" ->
+        FileAdded ->
             "A"
 
-        "deleted" ->
+        FileDeleted ->
             "D"
 
-        "renamed" ->
+        FileRenamed ->
             "R"
 
-        _ ->
+        FileModified ->
             "M"
 
 
