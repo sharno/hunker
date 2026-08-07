@@ -17,7 +17,7 @@ import Html.Attributes exposing (attribute, checked, class, disabled, href, id, 
 import Html.Events exposing (onCheck, onClick, onInput, onSubmit)
 import Hunker.Api as Api
 import Hunker.Diff as Diff exposing (DiffLine, Hunk, Kind(..), SideLine, SplitRow)
-import Hunker.Domain.Review as Review exposing (AnalysisSnapshot, CharacterRange, FileChange, FileStatus(..), FullFile, MovedBlock, PullCommit, ReviewComment, ReviewDocument, Revision, SemanticChange(..), SemanticResult(..))
+import Hunker.Domain.Review as Review exposing (AnalysisFeature(..), AnalysisSnapshot, CharacterRange, CommentSide(..), FileChange, FileStatus(..), FullFile, MovedBlock, PullCommit, ReviewComment, ReviewDocument, Revision(..), SemanticChange(..), SemanticResult(..))
 import Hunker.Domain.Settings as Settings exposing (InlineDiffMode(..), ReviewScope(..), Settings, ViewMode(..))
 import Hunker.Effect as Effect exposing (Effect)
 import Hunker.FileTree as FileTree exposing (Tree(..))
@@ -100,14 +100,14 @@ type alias AnalysisIdentity =
     , headOid : String
     , ignoreWhitespace : Bool
     , semantic : Bool
-    , inlineDiff : String
+    , inlineDiff : InlineDiffMode
     }
 
 
 type alias InlineComposer =
     { path : String
     , line : Int
-    , side : String
+    , side : CommentSide
     , body : String
     }
 
@@ -152,7 +152,7 @@ type Msg
     | SubmittedReview String
     | ReviewSubmitted String String
     | ReviewSubmitFailed String String
-    | OpenedInlineComposer String Int String
+    | OpenedInlineComposer String Int CommentSide
     | ChangedInlineBody String
     | CancelledInlineComposer
     | SubmittedInlineComment
@@ -813,7 +813,7 @@ analysisIdentity settings model reviewData =
     , headOid = Review.backingHeadOid reviewData.backing
     , ignoreWhitespace = settings.ignoreWhitespace
     , semantic = settings.semantic
-    , inlineDiff = Settings.inlineDiffModeToString settings.inlineDiffMode
+    , inlineDiff = settings.inlineDiffMode
     }
 
 
@@ -1061,14 +1061,19 @@ revisionNotice : Remote String String Revision -> Html Msg
 revisionNotice revision =
     case revision of
         Success _ value ->
-            if value.current then
-                text ""
+            case value of
+                GitHubRevision ->
+                    text ""
 
-            else
-                div [ class "revision-notice" ]
-                    [ span [] [ text "A newer revision is available." ]
-                    , button [ type_ "button", onClick Refreshed ] [ text "Load latest" ]
-                    ]
+                LocalRevision details ->
+                    if details.current then
+                        text ""
+
+                    else
+                        div [ class "revision-notice" ]
+                            [ span [] [ text "A newer revision is available." ]
+                            , button [ type_ "button", onClick Refreshed ] [ text "Load latest" ]
+                            ]
 
         Failure _ error ->
             div [ class "revision-notice is-error" ] [ text error ]
@@ -1349,7 +1354,7 @@ fileDiff settings model file =
                 , footer [ class "diff-footer" ]
                     [ span [] [ text "End of patch" ]
                     , if Route.isPullRequest (reviewRequest model).location.target then
-                        button [ type_ "button", onClick (OpenedInlineComposer file.path (lastNewLine model file.path) "RIGHT") ] [ text "+ Add a review comment" ]
+                        button [ type_ "button", onClick (OpenedInlineComposer file.path (lastNewLine model file.path) RightSide) ] [ text "+ Add a review comment" ]
 
                       else
                         text ""
@@ -1374,12 +1379,24 @@ semanticSummary settings model file =
             AnalysisComplete _ snapshot ->
                 snapshot.files
                     |> Dict.get file.path
-                    |> Maybe.andThen .semantic
-                    |> Maybe.map semanticResultView
+                    |> Maybe.map (.semantic >> semanticFeatureView)
                     |> Maybe.withDefault (text "")
 
             AnalysisDisabled ->
                 text ""
+
+
+semanticFeatureView : AnalysisFeature SemanticResult -> Html msg
+semanticFeatureView feature =
+    case feature of
+        FeatureDisabled ->
+            text ""
+
+        FeatureSkipped reason ->
+            div [ class "semantic-banner is-muted" ] [ strong [] [ text "Syntax analysis skipped" ], span [] [ text reason ] ]
+
+        FeatureComplete result ->
+            semanticResultView result
 
 
 semanticResultView : SemanticResult -> Html msg
@@ -1493,12 +1510,12 @@ keepLine _ _ =
 splitRowView : Settings -> Model -> FileChange -> SplitRow -> Html Msg
 splitRowView settings model file row =
     div [ class "split-row" ]
-        [ splitCell settings model file "LEFT" "left" row.left
-        , splitCell settings model file "RIGHT" "right" row.right
+        [ splitCell settings model file LeftSide "left" row.left
+        , splitCell settings model file RightSide "right" row.right
         ]
 
 
-splitCell : Settings -> Model -> FileChange -> String -> String -> Maybe SideLine -> Html Msg
+splitCell : Settings -> Model -> FileChange -> CommentSide -> String -> Maybe SideLine -> Html Msg
 splitCell settings model file side sideClass maybeLine =
     case maybeLine of
         Nothing ->
@@ -1529,17 +1546,18 @@ unifiedLineView settings model file line =
     let
         side =
             if line.kind == Deletion then
-                "LEFT"
+                LeftSide
 
             else
-                "RIGHT"
+                RightSide
 
         number =
-            if side == "LEFT" then
-                Maybe.withDefault 0 line.oldLine
+            case side of
+                LeftSide ->
+                    Maybe.withDefault 0 line.oldLine
 
-            else
-                Maybe.withDefault 0 line.newLine
+                RightSide ->
+                    Maybe.withDefault 0 line.newLine
 
         decoration =
             moveDecoration model file.path side number
@@ -1561,15 +1579,16 @@ type alias MoveDecoration =
     }
 
 
-moveDecoration : Model -> String -> String -> Int -> MoveDecoration
+moveDecoration : Model -> String -> CommentSide -> Int -> MoveDecoration
 moveDecoration model path side lineNumber =
     let
         endpoint =
-            if side == "LEFT" then
-                Source
+            case side of
+                LeftSide ->
+                    Source
 
-            else
-                Destination
+                RightSide ->
+                    Destination
 
         move =
             case reviewAnalysis model of
@@ -1625,7 +1644,7 @@ moveDecoration model path side lineNumber =
             }
 
 
-lineNumberButton : Model -> String -> String -> Int -> Maybe Int -> Html Msg
+lineNumberButton : Model -> String -> CommentSide -> Int -> Maybe Int -> Html Msg
 lineNumberButton model path side number maybeNumberValue =
     if Route.isPullRequest (reviewRequest model).location.target && maybeNumberValue /= Nothing then
         button [ type_ "button", class "line-number comment-trigger", attribute "title" "Add a GitHub review comment", onClick (OpenedInlineComposer path number side) ] [ text (maybeNumber maybeNumberValue) ]
@@ -1634,7 +1653,7 @@ lineNumberButton model path side number maybeNumberValue =
         span [ class "line-number" ] [ text (maybeNumber maybeNumberValue) ]
 
 
-highlightedLine : Settings -> Model -> String -> String -> Int -> String -> List (Html Msg)
+highlightedLine : Settings -> Model -> String -> CommentSide -> Int -> String -> List (Html Msg)
 highlightedLine settings model path side number source =
     case readyState model |> Maybe.andThen (.files >> FileIndex.get path) of
         Just prepared ->
@@ -1675,7 +1694,7 @@ rangesToSegments offset source ranges =
                 ++ rangesToSegments safeEnd source remaining
 
 
-lineThreads : Model -> String -> String -> Int -> Html Msg
+lineThreads : Model -> String -> CommentSide -> Int -> Html Msg
 lineThreads model path side lineNumber =
     case reviewComments model of
         Success _ comments ->
@@ -1787,7 +1806,7 @@ inlineComposerFor model path =
 
             else
                 form [ class "inline-comment-composer", onSubmit SubmittedInlineComment ]
-                    [ header [] [ strong [] [ text ("Comment on " ++ path ++ ":" ++ String.fromInt composer.line) ], span [] [ text composer.side ] ]
+                    [ header [] [ strong [] [ text ("Comment on " ++ path ++ ":" ++ String.fromInt composer.line) ], span [] [ text (Review.commentSideToString composer.side) ] ]
                     , textarea [ id ("inline-comment-" ++ fileAnchor path), placeholder "Leave a review comment on GitHub…", value composer.body, onInput ChangedInlineBody ] []
                     , div []
                         [ button [ type_ "button", onClick CancelledInlineComposer ] [ text "Cancel" ]

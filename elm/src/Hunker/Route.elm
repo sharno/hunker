@@ -1,15 +1,19 @@
 module Hunker.Route exposing
-    ( RepositoryLocation
+    ( PullRequestState(..)
+    , RepositoryLocation
     , RepositoryTab(..)
     , ReviewLocation
     , ReviewTab(..)
     , ReviewTarget(..)
     , Route(..)
+    , SearchMode(..)
     , fromGithubString
     , fromUrl
     , githubUrl
     , isPullRequest
+    , pullRequestStateToString
     , repositoryName
+    , searchModeToString
     , toPath
     )
 
@@ -37,9 +41,21 @@ type alias RepositoryLocation =
     , ref : Maybe String
     , path : Maybe String
     , query : String
-    , searchMode : String
-    , pullState : String
+    , searchMode : SearchMode
+    , pullState : PullRequestState
     }
+
+
+type SearchMode
+    = LiteralSearch
+    | RegexSearch
+    | FuzzySearch
+
+
+type PullRequestState
+    = OpenPulls
+    | ClosedPulls
+    | AllPulls
 
 
 type ReviewTab
@@ -268,13 +284,13 @@ repositoryQuery location =
 
       else
         Nothing
-    , if location.tab == RepositoryFiles && location.searchMode /= "literal" then
-        Just ("search=" ++ encode location.searchMode)
+    , if location.tab == RepositoryFiles && location.searchMode /= LiteralSearch then
+        Just ("search=" ++ encode (searchModeToString location.searchMode))
 
       else
         Nothing
-    , if location.tab == RepositoryPulls && location.pullState /= "open" then
-        Just ("state=" ++ encode location.pullState)
+    , if location.tab == RepositoryPulls && location.pullState /= OpenPulls then
+        Just ("state=" ++ encode (pullRequestStateToString location.pullState))
 
       else
         Nothing
@@ -395,8 +411,8 @@ nonEmpty value =
 
 type alias QueryOptions =
     { query : String
-    , searchMode : String
-    , pullState : String
+    , searchMode : SearchMode
+    , pullState : PullRequestState
     , file : String
     }
 
@@ -435,17 +451,59 @@ queryOptions query =
             find "state" "open"
     in
     { query = find "q" ""
-    , searchMode =
-        if List.member mode [ "literal", "regex", "fuzzy" ] then
-            mode
-
-        else
-            "literal"
-    , pullState =
-        if List.member state [ "open", "closed", "all" ] then
-            state
-
-        else
-            "open"
+    , searchMode = searchModeFromString mode
+    , pullState = pullRequestStateFromString state
     , file = find "file" ""
     }
+
+
+searchModeToString : SearchMode -> String
+searchModeToString mode =
+    case mode of
+        LiteralSearch ->
+            "literal"
+
+        RegexSearch ->
+            "regex"
+
+        FuzzySearch ->
+            "fuzzy"
+
+
+searchModeFromString : String -> SearchMode
+searchModeFromString value =
+    case value of
+        "regex" ->
+            RegexSearch
+
+        "fuzzy" ->
+            FuzzySearch
+
+        _ ->
+            LiteralSearch
+
+
+pullRequestStateToString : PullRequestState -> String
+pullRequestStateToString state =
+    case state of
+        OpenPulls ->
+            "open"
+
+        ClosedPulls ->
+            "closed"
+
+        AllPulls ->
+            "all"
+
+
+pullRequestStateFromString : String -> PullRequestState
+pullRequestStateFromString value =
+    case value of
+        "closed" ->
+            ClosedPulls
+
+        "all" ->
+            AllPulls
+
+        _ ->
+            OpenPulls

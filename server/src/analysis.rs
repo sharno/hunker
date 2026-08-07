@@ -10,12 +10,12 @@ use tokio::sync::{Mutex, OnceCell};
 
 use crate::{
     character_diff::{self, CharacterDiffResult, DiffMode},
-    diff,
     error::{AppError, AppResult},
-    github::{GitHub, GitHubTarget},
+    github::GitHub,
     local::Local,
-    semantic::{self, MovedBlock, SemanticResult},
-    types::{FilePair, RepositoryId},
+    revision::RevisionSnapshot,
+    semantic::{MovedBlock, SemanticResult},
+    types::{FilePair, RepositorySlug},
 };
 
 const SNAPSHOT_CACHE_SIZE: usize = 16;
@@ -69,7 +69,7 @@ pub struct AnalysisSnapshotKey {
 
 impl AnalysisSnapshotKey {
     pub fn new(
-        repository: &RepositoryId,
+        repository: &RepositorySlug,
         base_oid: String,
         head_oid: String,
         options: AnalysisOptions,
@@ -87,8 +87,16 @@ impl AnalysisSnapshotKey {
 #[serde(rename_all = "camelCase")]
 pub struct FileAnalysis {
     pub path: String,
-    pub semantic: Option<SemanticResult>,
+    pub semantic: AnalysisFeature<SemanticResult>,
     pub word_diff: Option<CharacterDiffResult>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "_tag")]
+pub enum AnalysisFeature<T> {
+    Disabled,
+    Skipped { reason: String },
+    Complete { value: T },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -152,50 +160,30 @@ impl AnalysisCache {
 pub async fn build(
     local: &Local,
     github: &GitHub,
-    target: &GitHubTarget,
+    revision: Arc<RevisionSnapshot>,
     key: AnalysisSnapshotKey,
 ) -> AppResult<AnalysisSnapshot> {
-    let local_diff = local
-        .load_diff(target, &key.base_oid, &key.head_oid)
-        .await?;
-    let (diff_text, local_repository) = match local_diff {
-        Some((repository, text)) => (text, Some(repository)),
-        None => (
-            github
-                .revision_diff(target, &key.base_oid, &key.head_oid)
-                .await?,
-            None,
-        ),
-    };
-    let files = diff::parse_git_diff(&diff_text);
+    let files = Arc::clone(&revision.files);
     if !key.options.semantic && key.options.inline_diff == InlineDiff::Off {
         return Ok(AnalysisSnapshot {
             key,
             files: files
-                .into_iter()
+                .iter()
                 .map(|file| FileAnalysis {
-                    path: file.path,
-                    semantic: None,
+                    path: file.path.clone(),
+                    semantic: AnalysisFeature::Disabled,
                     word_diff: None,
                 })
                 .collect(),
             moves: Vec::new(),
         });
     }
-    let analyzable_files = files
-        .iter()
-        .filter(|file| file.patch.lines().any(|line| line.starts_with("@@")))
-        .cloned()
-        .collect::<Vec<_>>();
-    let pairs = if let Some(repository) = local_repository {
-        local
-            .load_file_pairs_at(&repository, &key.base_oid, &key.head_oid, &analyzable_files)
-            .await?
-    } else {
-        load_github_pairs(github, target, &key, &analyzable_files).await?
-    };
-    let pairs = Arc::new(pairs);
-    let semantic = semantic_analysis(Arc::clone(&pairs), key.options.semantic);
+    let pairs = revision.file_pairs(local, github).await?;
+    let semantic = semantic_analysis(
+        Arc::clone(&revision),
+        Arc::clone(&pairs),
+        key.options.semantic,
+    );
     let word_diffs = word_analysis(
         Arc::clone(&pairs),
         key.options.ignore_whitespace,
@@ -210,60 +198,42 @@ pub async fn build(
         .into_iter()
         .map(|result| (result.path.clone(), result))
         .collect::<HashMap<_, _>>();
+    let semantic_enabled = key.options.semantic;
     Ok(AnalysisSnapshot {
         key,
         files: files
-            .into_iter()
+            .iter()
             .map(|file| FileAnalysis {
-                semantic: semantic_by_path.get(&file.path).cloned(),
+                semantic: if semantic_enabled {
+                    semantic_by_path.get(&file.path).cloned().map_or_else(
+                        || AnalysisFeature::Skipped {
+                            reason: "This file has no analyzable textual hunk.".to_owned(),
+                        },
+                        |value| AnalysisFeature::Complete { value },
+                    )
+                } else {
+                    AnalysisFeature::Disabled
+                },
                 word_diff: word_by_path.get(&file.path).cloned(),
-                path: file.path,
+                path: file.path.clone(),
             })
             .collect(),
         moves,
     })
 }
 
-async fn load_github_pairs(
-    github: &GitHub,
-    target: &GitHubTarget,
-    key: &AnalysisSnapshotKey,
-    files: &[crate::types::FileChange],
-) -> AppResult<Vec<FilePair>> {
-    stream::iter(files.iter().cloned())
-        .map(|file| async move {
-            github
-                .file_pair(
-                    target,
-                    &key.base_oid,
-                    &key.head_oid,
-                    &file.path,
-                    file.previous_path.as_deref().unwrap_or(""),
-                    file.status,
-                )
-                .await
-        })
-        .buffered(FILE_ANALYSIS_CONCURRENCY)
-        .collect::<Vec<_>>()
-        .await
-        .into_iter()
-        .collect()
-}
-
 async fn semantic_analysis(
+    revision: Arc<RevisionSnapshot>,
     pairs: Arc<Vec<FilePair>>,
     enabled: bool,
 ) -> AppResult<(Vec<SemanticResult>, Vec<MovedBlock>)> {
     if !enabled {
         return Ok((Vec::new(), Vec::new()));
     }
-    tokio::task::spawn_blocking(move || {
-        let results = pairs.iter().map(semantic::analyze_file).collect();
-        let moves = semantic::analyze_review(&pairs);
-        (results, moves)
-    })
-    .await
-    .map_err(|error| AppError::internal(format!("Semantic analysis stopped: {error}")))
+    let prepared = revision.semantic_forest(pairs).await?;
+    tokio::task::spawn_blocking(move || (prepared.file_results(), prepared.moves()))
+        .await
+        .map_err(|error| AppError::internal(format!("Semantic analysis stopped: {error}")))
 }
 
 async fn word_analysis(
@@ -313,7 +283,7 @@ mod tests {
     async fn concurrent_callers_share_one_immutable_snapshot() {
         let cache = AnalysisCache::default();
         let key = AnalysisSnapshotKey::new(
-            &RepositoryId {
+            &RepositorySlug {
                 owner: "acme".to_owned(),
                 name: "demo".to_owned(),
             },

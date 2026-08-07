@@ -18,7 +18,7 @@ import Hunker.Domain.Repository as Repository exposing (Checkout(..), Commit, Fi
 import Hunker.Effect as Effect exposing (Effect)
 import Hunker.FileTree as FileTree exposing (Tree(..))
 import Hunker.Remote exposing (Remote(..))
-import Hunker.Route as Route exposing (RepositoryTab(..))
+import Hunker.Route as Route exposing (PullRequestState(..), RepositoryTab(..), SearchMode(..))
 import Hunker.Syntax as Syntax
 import Set exposing (Set)
 import Time
@@ -29,16 +29,16 @@ type alias Model =
     { location : Route.RepositoryLocation
     , files : Remote String String (List File)
     , selectedFile : Remote ( String, String ) String FileContent
-    , search : Remote ( String, String, String ) String SearchResults
+    , search : Remote ( String, String, SearchMode ) String SearchResults
     , commits : Remote String String Repository.Commits
-    , pulls : Remote ( String, String, Int ) String PullRequestsPage
+    , pulls : Remote ( String, PullRequestState, Int ) String PullRequestsPage
     , pullRows : List PullRequest
     , pullHasMore : Bool
     , sourceControl : SourceControl
     , clone : Remote ( String, String ) String String
     , collapsedFolders : Set String
     , searchDraft : String
-    , searchMode : String
+    , searchMode : SearchMode
     }
 
 
@@ -69,12 +69,12 @@ type Msg
     | FilesFailed String String
     | FileLoaded ( String, String ) FileContent
     | FileFailed ( String, String ) String
-    | SearchLoaded ( String, String, String ) SearchResults
-    | SearchFailed ( String, String, String ) String
+    | SearchLoaded ( String, String, SearchMode ) SearchResults
+    | SearchFailed ( String, String, SearchMode ) String
     | CommitsLoaded String Repository.Commits
     | CommitsFailed String String
-    | PullsLoaded ( String, String, Int ) PullRequestsPage
-    | PullsFailed ( String, String, Int ) String
+    | PullsLoaded ( String, PullRequestState, Int ) PullRequestsPage
+    | PullsFailed ( String, PullRequestState, Int ) String
     | SourceLoaded String SourceControlStatus
     | PullCompleted String Int
     | PullStatusLoaded String Int SourceControlStatus
@@ -83,13 +83,13 @@ type Msg
     | CloneLoaded ( String, String ) String
     | CloneFailed ( String, String ) String
     | ChangedSearch String
-    | SelectedSearchMode String
+    | SelectedSearchMode SearchMode
     | SubmittedSearch
     | SelectedTab RepositoryTab
     | SelectedFile String
     | ClosedFile
     | ToggledFolder String
-    | SelectedPullState String
+    | SelectedPullState PullRequestState
     | RequestedMorePulls
     | SelectedBranch String
     | RequestedSourceRefresh
@@ -157,7 +157,7 @@ init location =
               else
                 Api.searchRepository name
                     location.query
-                    location.searchMode
+                    (Route.searchModeToString location.searchMode)
                     (SearchLoaded ( name, location.query, location.searchMode ))
                     (SearchFailed ( name, location.query, location.searchMode ))
             , if location.tab == RepositoryCommits then
@@ -167,7 +167,7 @@ init location =
                 Effect.none
             , if location.tab == RepositoryPulls then
                 Api.fetchRepositoryPulls name
-                    location.pullState
+                    (Route.pullRequestStateToString location.pullState)
                     1
                     (PullsLoaded ( name, location.pullState, 1 ))
                     (PullsFailed ( name, location.pullState, 1 ))
@@ -312,7 +312,7 @@ navigateWithinRepository nextLocation model =
             , if searchChanged && nextLocation.query /= "" then
                 Api.searchRepository name
                     nextLocation.query
-                    nextLocation.searchMode
+                    (Route.searchModeToString nextLocation.searchMode)
                     (SearchLoaded ( name, nextLocation.query, nextLocation.searchMode ))
                     (SearchFailed ( name, nextLocation.query, nextLocation.searchMode ))
 
@@ -325,7 +325,7 @@ navigateWithinRepository nextLocation model =
                 Effect.none
             , if loadPulls then
                 Api.fetchRepositoryPulls name
-                    nextLocation.pullState
+                    (Route.pullRequestStateToString nextLocation.pullState)
                     1
                     (PullsLoaded pullRequest)
                     (PullsFailed pullRequest)
@@ -566,7 +566,7 @@ update msg model =
             ( model, Effect.PushUrl (repositoryPath model RepositoryFiles Nothing model.searchDraft model.searchMode model.location.pullState) )
 
         SelectedTab tab ->
-            ( model, Effect.PushUrl (repositoryPath model tab Nothing "" "literal" model.location.pullState) )
+            ( model, Effect.PushUrl (repositoryPath model tab Nothing "" LiteralSearch model.location.pullState) )
 
         SelectedFile path ->
             ( model, Effect.PushUrl (repositoryPath model RepositoryFiles (Just path) model.location.query model.location.searchMode model.location.pullState) )
@@ -587,7 +587,7 @@ update msg model =
             )
 
         SelectedPullState state ->
-            ( model, Effect.PushUrl (repositoryPath model RepositoryPulls Nothing "" "literal" state) )
+            ( model, Effect.PushUrl (repositoryPath model RepositoryPulls Nothing "" LiteralSearch state) )
 
         RequestedMorePulls ->
             let
@@ -607,7 +607,7 @@ update msg model =
             in
             ( { model | pulls = Loading request }
             , Api.fetchRepositoryPulls (repositoryName model)
-                model.location.pullState
+                (Route.pullRequestStateToString model.location.pullState)
                 page
                 (PullsLoaded request)
                 (PullsFailed request)
@@ -759,7 +759,7 @@ unchanged model =
     ( model, Effect.none )
 
 
-repositoryPath : Model -> RepositoryTab -> Maybe String -> String -> String -> String -> String
+repositoryPath : Model -> RepositoryTab -> Maybe String -> String -> SearchMode -> PullRequestState -> String
 repositoryPath model tab path query mode pullState =
     Route.toPath
         (Route.Repository
@@ -811,9 +811,9 @@ searchForm model =
         , onSubmit SubmittedSearch
         ]
         [ div [ class "search-mode-picker", attribute "role" "group", attribute "aria-label" "Search mode" ]
-            [ searchModeButton "T" "Text" "literal" model.searchMode
-            , searchModeButton ".*" "Regex" "regex" model.searchMode
-            , searchModeButton "F" "Fuzzy · FFF" "fuzzy" model.searchMode
+            [ searchModeButton "T" "Text" LiteralSearch model.searchMode
+            , searchModeButton ".*" "Regex" RegexSearch model.searchMode
+            , searchModeButton "F" "Fuzzy · FFF" FuzzySearch model.searchMode
             ]
         , input
             [ type_ "search"
@@ -827,7 +827,7 @@ searchForm model =
         ]
 
 
-searchModeButton : String -> String -> String -> String -> Html Msg
+searchModeButton : String -> String -> SearchMode -> SearchMode -> Html Msg
 searchModeButton short labelText mode active =
     button
         [ type_ "button"
@@ -1236,7 +1236,7 @@ pullsView model =
                 , p [] [ text "Open a pull request directly in Hunker’s diff view." ]
                 ]
             , div [ class "segmented repository-pull-filters" ]
-                (List.map (pullFilter model.location.pullState) [ "open", "closed", "all" ])
+                (List.map (pullFilter model.location.pullState) [ OpenPulls, ClosedPulls, AllPulls ])
             ]
         , case model.pulls of
             Loading _ ->
@@ -1261,18 +1261,19 @@ pullsView model =
         ]
 
 
-pullFilter : String -> String -> Html Msg
+pullFilter : PullRequestState -> PullRequestState -> Html Msg
 pullFilter active state =
     button [ type_ "button", class ("segmented-button" ++ activeClass (active == state)), onClick (SelectedPullState state) ]
         [ text
-            (if state == "all" then
-                "All"
+            (case state of
+                AllPulls ->
+                    "All"
 
-             else if state == "closed" then
-                "Closed"
+                ClosedPulls ->
+                    "Closed"
 
-             else
-                "Open"
+                OpenPulls ->
+                    "Open"
             )
         ]
 
@@ -1403,16 +1404,17 @@ formatSize size =
         String.fromInt size ++ " B"
 
 
-searchDescription : String -> String
+searchDescription : SearchMode -> String
 searchDescription mode =
-    if mode == "fuzzy" then
-        "Ranking filenames with FFF and scanning nearby content."
+    case mode of
+        FuzzySearch ->
+            "Ranking filenames with FFF and scanning nearby content."
 
-    else if mode == "regex" then
-        "Matching a regular expression with ripgrep."
+        RegexSearch ->
+            "Matching a regular expression with ripgrep."
 
-    else
-        "Matching literal text with ripgrep."
+        LiteralSearch ->
+            "Matching literal text with ripgrep."
 
 
 activeClass : Bool -> String

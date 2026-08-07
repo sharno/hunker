@@ -24,6 +24,11 @@
   `Hunker.SemanticMove`.
 - Prefer ADTs and exhaustive pattern matching. If two fields can disagree,
   replace them with one type that makes the invalid combination unrepresentable.
+- A ready review owns one opaque ordered file index. Do not keep parallel file
+  lists, prepared-patch dictionaries, or sentinel copies in the page model.
+- Main exclusively owns settings and serializes/coalesces persistence. Pages
+  emit settings-change intents; they do not issue `/api/settings` requests or
+  cache an independent settings document.
 
 ## Elm UI and tests
 
@@ -71,6 +76,14 @@
   local blobs with one `git cat-file --batch` process and reuse the resulting
   file pairs for word diff, AST analysis, and whole-review move detection. Do
   not introduce per-file analysis endpoint fan-out.
+- Keep revision preparation and option-dependent analysis as separate immutable
+  caches. The revision cache owns the Rust-parsed file changes and lazily loaded
+  file pairs; all analysis-option snapshots reuse it. Prepare each syntax tree
+  once per revision and use the same forest for per-file semantics and moves.
+- Rust is the sole Git diff parser. `/api/diff` returns a typed review document;
+  Elm must never reinterpret raw Git patch boundaries into file changes.
+- Fall back from local Git to GitHub only on `Ok(None)`. A local `Err` is a real
+  backing failure and must remain visible instead of silently changing sources.
 - Parse Git diff boundaries only at line-start `diff --git` headers and infer
   status/rename metadata only before the first hunk. Changed source can itself
   contain diff headers and mode strings.

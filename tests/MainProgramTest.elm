@@ -1,8 +1,10 @@
 module MainProgramTest exposing (suite)
 
+import Expect
 import Http
 import Hunker.Effect as AppEffect
 import Hunker.Page.Repository as Repository
+import Hunker.Page.Review as Review
 import Json.Decode as Decode
 import Json.Encode as Encode
 import Main
@@ -62,6 +64,18 @@ suite =
                     |> ProgramTest.simulateHttpOk "GET" reviewRequest reviewJson
                     |> ProgramTest.simulateHttpOk "GET" "/api/reviews?url=https%3A%2F%2Fgithub.com%2Fexample%2Fhunker%2Fpull%2F42" resolvedCommentsJson
                     |> ProgramTest.expectViewHas [ text "Resolved", text "reviewer" ]
+        , test "serializes rapid review setting changes and coalesces the latest document" <|
+            \() ->
+                startedAt "/example/hunker/pull/42/files/src/greet.ts"
+                    |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
+                    |> ProgramTest.simulateHttpOk "GET" reviewRequest reviewJson
+                    |> ProgramTest.update (Main.ReviewMsg (Review.ToggledSemantic False))
+                    |> ProgramTest.update (Main.ReviewMsg (Review.ToggledWhitespace False))
+                    |> ProgramTest.ensureHttpRequests "PUT" "/api/settings" (List.length >> Expect.equal 1)
+                    |> ProgramTest.simulateHttpOk "PUT" "/api/settings" settingsSemanticOffJson
+                    |> ProgramTest.ensureHttpRequests "PUT" "/api/settings" (List.length >> Expect.equal 1)
+                    |> ProgramTest.simulateHttpOk "PUT" "/api/settings" settingsSemanticAndWhitespaceOffJson
+                    |> ProgramTest.expectViewHas [ text "Improve the greeting" ]
         , test "keeps pull disabled until a separate Git status refresh replaces the stale count" <|
             \() ->
                 startedAt "/mohamed-rdr/hunker"
@@ -196,6 +210,16 @@ decodeResponse decoder onError response =
 settingsJson : String
 settingsJson =
     """{"settings":{"repositoriesRoot":"~/src","cacheRoot":"/tmp/hunker/repositories","reviewScope":"file","viewMode":"split","ignoreWhitespace":true,"semantic":true,"inlineDiffMode":"token","syntaxHighlighting":true,"sidebarCollapsed":false,"showGitHubReviews":true},"configPath":"/tmp/hunker/settings.json"}"""
+
+
+settingsSemanticOffJson : String
+settingsSemanticOffJson =
+    """{"settings":{"repositoriesRoot":"~/src","cacheRoot":"/tmp/hunker/repositories","reviewScope":"file","viewMode":"split","ignoreWhitespace":true,"semantic":false,"inlineDiffMode":"token","syntaxHighlighting":true,"sidebarCollapsed":false,"showGitHubReviews":true},"configPath":"/tmp/hunker/settings.json"}"""
+
+
+settingsSemanticAndWhitespaceOffJson : String
+settingsSemanticAndWhitespaceOffJson =
+    """{"settings":{"repositoriesRoot":"~/src","cacheRoot":"/tmp/hunker/repositories","reviewScope":"file","viewMode":"split","ignoreWhitespace":false,"semantic":false,"inlineDiffMode":"token","syntaxHighlighting":true,"sidebarCollapsed":false,"showGitHubReviews":true},"configPath":"/tmp/hunker/settings.json"}"""
 
 
 repositoriesJson : String

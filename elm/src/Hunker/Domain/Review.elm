@@ -1,11 +1,13 @@
 module Hunker.Domain.Review exposing
-    ( AnalysisFile
+    ( AnalysisFeature(..)
+    , AnalysisFile
     , AnalysisOptions
     , AnalysisSnapshot
     , AnalysisSnapshotKey
     , CharacterDiff
     , CharacterRange
     , CharacterRow
+    , CommentSide(..)
     , FileChange
     , FileStatus(..)
     , FullFile
@@ -14,7 +16,7 @@ module Hunker.Domain.Review exposing
     , ReviewBacking
     , ReviewComment
     , ReviewDocument
-    , Revision
+    , Revision(..)
     , SemanticChange(..)
     , SemanticResult(..)
     , SourceRange
@@ -25,6 +27,7 @@ module Hunker.Domain.Review exposing
     , backingLocalPath
     , characterDiffDecoder
     , commentDecoder
+    , commentSideToString
     , commentsDecoder
     , commitsDecoder
     , fileStatusToString
@@ -36,6 +39,7 @@ module Hunker.Domain.Review exposing
     )
 
 import Dict exposing (Dict)
+import Hunker.Domain.Settings as Settings exposing (InlineDiffMode)
 import Json.Decode as Decode exposing (Decoder)
 
 
@@ -144,7 +148,7 @@ type alias CharacterRow =
 type alias CharacterDiff =
     { path : String
     , ignoreWhitespace : Bool
-    , mode : String
+    , mode : InlineDiffMode
     , rows : List CharacterRow
     }
 
@@ -152,7 +156,7 @@ type alias CharacterDiff =
 type alias AnalysisOptions =
     { ignoreWhitespace : Bool
     , semantic : Bool
-    , inlineDiff : String
+    , inlineDiff : InlineDiffMode
     }
 
 
@@ -166,9 +170,15 @@ type alias AnalysisSnapshotKey =
 
 type alias AnalysisFile =
     { path : String
-    , semantic : Maybe SemanticResult
+    , semantic : AnalysisFeature SemanticResult
     , wordDiff : Maybe CharacterDiff
     }
+
+
+type AnalysisFeature value
+    = FeatureDisabled
+    | FeatureSkipped String
+    | FeatureComplete value
 
 
 type alias AnalysisSnapshot =
@@ -193,14 +203,33 @@ type alias ReviewComment =
     , htmlUrl : String
     , createdAt : String
     , line : Maybe Int
-    , side : String
+    , side : CommentSide
     , resolved : Bool
     }
 
 
-type alias Revision =
-    { source : String
-    , path : String
+type CommentSide
+    = LeftSide
+    | RightSide
+
+
+commentSideToString : CommentSide -> String
+commentSideToString side =
+    case side of
+        LeftSide ->
+            "LEFT"
+
+        RightSide ->
+            "RIGHT"
+
+
+type Revision
+    = GitHubRevision
+    | LocalRevision LocalRevisionDetails
+
+
+type alias LocalRevisionDetails =
+    { path : String
     , pinnedHeadOid : String
     , latestHeadOid : String
     , checkedAt : Int
@@ -490,7 +519,7 @@ characterDiffDecoder =
     Decode.map4 CharacterDiff
         (Decode.field "path" Decode.string)
         (Decode.field "ignoreWhitespace" Decode.bool)
-        (Decode.field "mode" Decode.string)
+        (Decode.field "mode" inlineDiffModeDecoder)
         (Decode.field "rows" (Decode.list characterRowDecoder))
 
 
@@ -520,15 +549,55 @@ analysisOptionsDecoder =
     Decode.map3 AnalysisOptions
         (Decode.field "ignoreWhitespace" Decode.bool)
         (Decode.field "semantic" Decode.bool)
-        (Decode.field "inlineDiff" Decode.string)
+        (Decode.field "inlineDiff" inlineDiffModeDecoder)
+
+
+inlineDiffModeDecoder : Decoder InlineDiffMode
+inlineDiffModeDecoder =
+    Decode.string
+        |> Decode.andThen
+            (\value ->
+                case value of
+                    "token" ->
+                        Decode.succeed Settings.Token
+
+                    "character" ->
+                        Decode.succeed Settings.Character
+
+                    "off" ->
+                        Decode.succeed Settings.InlineOff
+
+                    _ ->
+                        Decode.fail ("Unknown inline diff mode: " ++ value)
+            )
 
 
 analysisFileDecoder : Decoder AnalysisFile
 analysisFileDecoder =
     Decode.map3 AnalysisFile
         (Decode.field "path" Decode.string)
-        (Decode.field "semantic" (Decode.nullable semanticDecoder))
+        (Decode.field "semantic" (analysisFeatureDecoder semanticDecoder))
         (Decode.field "wordDiff" (Decode.nullable characterDiffDecoder))
+
+
+analysisFeatureDecoder : Decoder value -> Decoder (AnalysisFeature value)
+analysisFeatureDecoder valueDecoder =
+    Decode.field "_tag" Decode.string
+        |> Decode.andThen
+            (\tag ->
+                case tag of
+                    "Disabled" ->
+                        Decode.succeed FeatureDisabled
+
+                    "Skipped" ->
+                        Decode.map FeatureSkipped (Decode.field "reason" Decode.string)
+
+                    "Complete" ->
+                        Decode.map FeatureComplete (Decode.field "value" valueDecoder)
+
+                    _ ->
+                        Decode.fail ("Unknown analysis feature: " ++ tag)
+            )
 
 
 characterRowDecoder : Decoder CharacterRow
@@ -571,7 +640,7 @@ commentDecoder =
             , htmlUrl = htmlUrl
             , createdAt = createdAt
             , line = line
-            , side = "RIGHT"
+            , side = RightSide
             , resolved = False
             }
         )
@@ -587,8 +656,25 @@ commentDecoder =
             (\partial ->
                 Decode.map2
                     (\side resolved -> { partial | side = side, resolved = resolved })
-                    (Decode.field "side" Decode.string)
+                    (Decode.field "side" commentSideDecoder)
                     (Decode.field "resolved" Decode.bool)
+            )
+
+
+commentSideDecoder : Decoder CommentSide
+commentSideDecoder =
+    Decode.string
+        |> Decode.andThen
+            (\value ->
+                case value of
+                    "LEFT" ->
+                        Decode.succeed LeftSide
+
+                    "RIGHT" ->
+                        Decode.succeed RightSide
+
+                    _ ->
+                        Decode.fail ("Unknown review comment side: " ++ value)
             )
 
 
@@ -597,30 +683,27 @@ revisionDecoder =
     Decode.field "source" Decode.string
         |> Decode.andThen
             (\source ->
-                if source == "local" then
-                    Decode.map5
-                        (\path pinned latest checked current ->
-                            { source = source
-                            , path = path
-                            , pinnedHeadOid = pinned
-                            , latestHeadOid = latest
-                            , checkedAt = checked
-                            , current = current
-                            }
-                        )
-                        (Decode.field "path" Decode.string)
-                        (Decode.field "pinnedHeadOid" Decode.string)
-                        (Decode.field "latestHeadOid" Decode.string)
-                        (Decode.field "checkedAt" Decode.int)
-                        (Decode.field "current" Decode.bool)
+                case source of
+                    "local" ->
+                        Decode.map5
+                            (\path pinned latest checked current ->
+                                LocalRevision
+                                    { path = path
+                                    , pinnedHeadOid = pinned
+                                    , latestHeadOid = latest
+                                    , checkedAt = checked
+                                    , current = current
+                                    }
+                            )
+                            (Decode.field "path" Decode.string)
+                            (Decode.field "pinnedHeadOid" Decode.string)
+                            (Decode.field "latestHeadOid" Decode.string)
+                            (Decode.field "checkedAt" Decode.int)
+                            (Decode.field "current" Decode.bool)
 
-                else
-                    Decode.succeed
-                        { source = source
-                        , path = ""
-                        , pinnedHeadOid = ""
-                        , latestHeadOid = ""
-                        , checkedAt = 0
-                        , current = True
-                        }
+                    "github" ->
+                        Decode.succeed GitHubRevision
+
+                    _ ->
+                        Decode.fail ("Unknown revision source: " ++ source)
             )

@@ -178,7 +178,7 @@ saveSettings settings succeeded failed =
         failed
 
 
-fetchAnalysis : String -> Review.ReviewBacking -> Bool -> Bool -> String -> (Review.AnalysisSnapshot -> msg) -> (String -> msg) -> Effect msg
+fetchAnalysis : String -> Review.ReviewBacking -> Bool -> Bool -> Settings.InlineDiffMode -> (Review.AnalysisSnapshot -> msg) -> (String -> msg) -> Effect msg
 fetchAnalysis githubUrl backing ignoreWhitespace semantic inlineDiff succeeded failed =
     Effect.get
         ("/api/analysis?url="
@@ -202,7 +202,7 @@ fetchAnalysis githubUrl backing ignoreWhitespace semantic inlineDiff succeeded f
                     "false"
                )
             ++ "&mode="
-            ++ encode inlineDiff
+            ++ encode (Settings.inlineDiffModeToString inlineDiff)
         )
         (Decode.map succeeded Review.analysisSnapshotDecoder)
         failed
@@ -224,7 +224,7 @@ fetchReviewComments githubUrl succeeded failed =
         failed
 
 
-postInlineComment : { pullUrl : String, commitId : String, path : String, line : Int, side : String, body : String } -> (Review.ReviewComment -> msg) -> (String -> msg) -> Effect msg
+postInlineComment : { pullUrl : String, commitId : String, path : String, line : Int, side : Review.CommentSide, body : String } -> (Review.ReviewComment -> msg) -> (String -> msg) -> Effect msg
 postInlineComment comment succeeded failed =
     Effect.send "POST"
         "/api/reviews/comment"
@@ -234,7 +234,7 @@ postInlineComment comment succeeded failed =
                 , ( "commitId", Encode.string comment.commitId )
                 , ( "path", Encode.string comment.path )
                 , ( "line", Encode.int comment.line )
-                , ( "side", Encode.string comment.side )
+                , ( "side", Encode.string (Review.commentSideToString comment.side) )
                 , ( "body", Encode.string comment.body )
                 ]
             )

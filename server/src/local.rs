@@ -21,7 +21,7 @@ use crate::{
     error::{AppError, AppResult},
     github::{GitHubTarget, ReviewMetadata},
     settings,
-    types::{FilePair, FileStatus, LocalGitRepository, PullCommit, RepositoryId},
+    types::{FilePair, FileStatus, LocalGitRepository, PullCommit, RepositorySlug},
 };
 
 const MAX_FILE_CHARACTERS: usize = 500_000;
@@ -82,7 +82,7 @@ async fn git_action(path: &Path, args: &[&str]) -> AppResult<String> {
 }
 
 impl Local {
-    pub async fn repository_path(&self, repository: &RepositoryId) -> AppResult<PathBuf> {
+    pub async fn repository_path(&self, repository: &RepositorySlug) -> AppResult<PathBuf> {
         if !valid_segment(&repository.owner) || !valid_segment(&repository.name) {
             return Err(AppError::bad_request("That repository name is not valid."));
         }
@@ -107,7 +107,7 @@ impl Local {
         )))
     }
 
-    pub async fn find(&self, repository: &RepositoryId) -> AppResult<Option<LocalGitRepository>> {
+    pub async fn find(&self, repository: &RepositorySlug) -> AppResult<Option<LocalGitRepository>> {
         let document = settings::load().await?;
         let configured = settings::resolve_path(&document.settings.repositories_root);
         let cache = settings::resolve_path(&document.settings.cache_root);
@@ -173,7 +173,7 @@ impl Local {
         })
     }
 
-    pub async fn list_files(&self, repository: &RepositoryId) -> AppResult<Vec<RepositoryFile>> {
+    pub async fn list_files(&self, repository: &RepositorySlug) -> AppResult<Vec<RepositoryFile>> {
         let root = self.repository_path(repository).await?;
         let raw = command::git(&root, &["ls-files", "-co", "--exclude-standard", "-z"]).await?;
         let statuses = file_statuses(&root).await.unwrap_or_default();
@@ -200,7 +200,7 @@ impl Local {
 
     pub async fn read_file(
         &self,
-        repository: &RepositoryId,
+        repository: &RepositorySlug,
         relative: &str,
     ) -> AppResult<RepositoryFileContent> {
         let root = self.repository_path(repository).await?;
@@ -218,7 +218,7 @@ impl Local {
 
     pub async fn search(
         &self,
-        repository: &RepositoryId,
+        repository: &RepositorySlug,
         query: &str,
         mode: &str,
     ) -> AppResult<SearchResults> {
@@ -256,7 +256,7 @@ impl Local {
         Ok(picker)
     }
 
-    pub async fn list_commits(&self, repository: &RepositoryId) -> AppResult<RepositoryCommits> {
+    pub async fn list_commits(&self, repository: &RepositorySlug) -> AppResult<RepositoryCommits> {
         let root = self.repository_path(repository).await?;
         let raw = command::git(
             &root,
@@ -286,7 +286,7 @@ impl Local {
 
     pub async fn clone_repository(
         &self,
-        repository: &RepositoryId,
+        repository: &RepositorySlug,
         destination: &str,
     ) -> AppResult<PathBuf> {
         if !valid_segment(&repository.owner) || !valid_segment(&repository.name) {
@@ -331,7 +331,7 @@ impl Local {
         Ok(target)
     }
 
-    async fn lock_for(&self, repository: &RepositoryId) -> AppResult<(PathBuf, Arc<Mutex<()>>)> {
+    async fn lock_for(&self, repository: &RepositorySlug) -> AppResult<(PathBuf, Arc<Mutex<()>>)> {
         let root = self.repository_path(repository).await?;
         let lock = {
             let mut locks = self.repository_locks.lock().await;
@@ -345,7 +345,7 @@ impl Local {
 
     pub async fn source_control(
         &self,
-        repository: &RepositoryId,
+        repository: &RepositorySlug,
     ) -> AppResult<SourceControlStatus> {
         let (root, lock) = self.lock_for(repository).await?;
         let _guard = lock.lock().await;
@@ -354,7 +354,7 @@ impl Local {
 
     pub async fn switch_branch(
         &self,
-        repository: &RepositoryId,
+        repository: &RepositorySlug,
         branch: &str,
     ) -> AppResult<SourceControlStatus> {
         let (root, lock) = self.lock_for(repository).await?;
@@ -385,7 +385,7 @@ impl Local {
         inspect_source_control(&root, false).await
     }
 
-    pub async fn pull(&self, repository: &RepositoryId) -> AppResult<PullResult> {
+    pub async fn pull(&self, repository: &RepositorySlug) -> AppResult<PullResult> {
         let (root, lock) = self.lock_for(repository).await?;
         let _guard = lock.lock().await;
         let current = inspect_source_control(&root, true).await?;
@@ -470,7 +470,7 @@ impl Local {
 
     async fn prepare(
         &self,
-        repository_id: &RepositoryId,
+        repository_id: &RepositorySlug,
         base: &str,
         head: &str,
         pull: Option<&str>,

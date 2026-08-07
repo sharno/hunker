@@ -6,6 +6,7 @@ mod error;
 mod frontend;
 mod github;
 mod local;
+mod revision;
 mod semantic;
 mod settings;
 mod types;
@@ -25,7 +26,10 @@ use crate::{
     error::{AppError, AppResult},
     github::{GitHub, GitHubTarget, InlineCommentInput, parse_url},
     local::Local,
-    types::{FilePair, FileStatus, PinnedRefs, RepositoryId, ReviewBacking, ReviewDocument},
+    types::{
+        FilePair, FileStatus, Oid, PinnedRefs, RelativePath, RepositorySlug, ReviewBacking,
+        ReviewDocument,
+    },
 };
 
 #[derive(Clone)]
@@ -33,6 +37,7 @@ struct AppState {
     analysis: analysis::AnalysisCache,
     github: GitHub,
     local: Local,
+    revisions: revision::RevisionCache,
     settings: settings::SettingsStore,
 }
 
@@ -48,6 +53,7 @@ async fn main() -> AppResult<()> {
         analysis: analysis::AnalysisCache::default(),
         github: GitHub::new().await?,
         local: Local::default(),
+        revisions: revision::RevisionCache::default(),
         settings: settings::SettingsStore::default(),
     });
     let app = router(state);
@@ -114,33 +120,37 @@ async fn get_diff(
 ) -> AppResult<Json<ReviewDocument>> {
     let target = parse_url(&query.url)?;
     let metadata = state.github.metadata(&target).await?;
-    let local = state
-        .local
-        .load_diff(&target, &metadata.base_oid, &metadata.head_oid)
+    let revision_key = revision::RevisionKey::new(
+        target.repository(),
+        Oid::parse(metadata.base_oid.clone()).map_err(AppError::bad_request)?,
+        Oid::parse(metadata.head_oid.clone()).map_err(AppError::bad_request)?,
+    );
+    let build_key = revision_key.clone();
+    let build_target = target.clone();
+    let local = state.local.clone();
+    let github = state.github.clone();
+    let revision = state
+        .revisions
+        .get_or_build(revision_key, || async move {
+            revision::load(&local, &github, build_target, build_key).await
+        })
         .await?;
-    let (diff, backing) = if let Some((repository, diff)) = local {
+    let backing = if let Some(repository) = revision.local_repository() {
         let kind = repository.kind;
         tracing::debug!(kind, path = %repository.path.display(), "reading review from local Git");
-        (
-            diff,
-            ReviewBacking::Local {
-                base_oid: metadata.base_oid.clone(),
-                head_oid: metadata.head_oid.clone(),
-                head_ref: metadata.head_ref.clone(),
-                path: repository.path.to_string_lossy().into_owned(),
-            },
-        )
+        ReviewBacking::Local {
+            base_oid: metadata.base_oid.clone(),
+            head_oid: metadata.head_oid.clone(),
+            head_ref: metadata.head_ref.clone(),
+            path: repository.path.to_string_lossy().into_owned(),
+        }
     } else {
-        (
-            state.github.review_diff(&target).await?,
-            ReviewBacking::GitHub {
-                base_oid: metadata.base_oid.clone(),
-                head_oid: metadata.head_oid.clone(),
-                head_ref: metadata.head_ref.clone(),
-            },
-        )
+        ReviewBacking::GitHub {
+            base_oid: metadata.base_oid.clone(),
+            head_oid: metadata.head_oid.clone(),
+            head_ref: metadata.head_ref.clone(),
+        }
     };
-    let files = diff::parse_git_diff(&diff);
     Ok(Json(ReviewDocument {
         title: metadata.title,
         repository: metadata.repository,
@@ -149,7 +159,7 @@ async fn get_diff(
         base: metadata.base,
         head: metadata.head,
         url: metadata.url,
-        files,
+        files: revision.files.as_ref().clone(),
         backing,
     }))
 }
@@ -158,19 +168,18 @@ async fn get_diff(
 #[serde(rename_all = "camelCase")]
 struct RevisionQuery {
     url: String,
-    head_oid: String,
+    head_oid: Oid,
 }
 async fn get_revision(
     State(state): State<Arc<AppState>>,
     Query(query): Query<RevisionQuery>,
 ) -> AppResult<Json<serde_json::Value>> {
-    if !local::valid_oid(&query.head_oid) {
-        return Err(AppError::bad_request(
-            "A pinned pull request revision is required.",
-        ));
-    }
     let target = parse_url(&query.url)?;
-    let Some(revision) = state.local.revision(&target, &query.head_oid).await? else {
+    let Some(revision) = state
+        .local
+        .revision(&target, query.head_oid.as_str())
+        .await?
+    else {
         return Ok(Json(serde_json::json!({"source": "github"})));
     };
     Ok(Json(
@@ -206,21 +215,8 @@ async fn get_repositories(
 struct RepositoryQuery {
     repository: String,
 }
-fn repository(value: &str) -> AppResult<RepositoryId> {
-    let Some((owner, name)) = value.split_once('/') else {
-        return Err(AppError::bad_request(
-            "Choose a repository in owner/name format.",
-        ));
-    };
-    if owner.is_empty() || name.is_empty() || name.contains('/') {
-        return Err(AppError::bad_request(
-            "Choose a repository in owner/name format.",
-        ));
-    }
-    Ok(RepositoryId {
-        owner: owner.to_owned(),
-        name: name.to_owned(),
-    })
+fn repository(value: &str) -> AppResult<RepositorySlug> {
+    RepositorySlug::parse(value).map_err(AppError::bad_request)
 }
 
 async fn get_repository_files(
@@ -254,17 +250,32 @@ async fn get_source_control(
 #[derive(Deserialize)]
 struct PullsQuery {
     repository: String,
-    state: Option<String>,
+    state: Option<PullRequestState>,
     page: Option<usize>,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum PullRequestState {
+    Open,
+    Closed,
+    All,
+}
+
+impl PullRequestState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Closed => "closed",
+            Self::All => "all",
+        }
+    }
 }
 async fn get_repository_pulls(
     State(state): State<Arc<AppState>>,
     Query(query): Query<PullsQuery>,
 ) -> AppResult<Json<github::RepositoryPullsPage>> {
-    let filter = query.state.unwrap_or_else(|| "open".to_owned());
-    if !matches!(filter.as_str(), "open" | "closed" | "all") {
-        return Err(AppError::bad_request("Choose a valid pull request state."));
-    }
+    let filter = query.state.unwrap_or(PullRequestState::Open);
     let page = query.page.unwrap_or(1);
     if !(1..=1_000).contains(&page) {
         return Err(AppError::bad_request(
@@ -274,7 +285,7 @@ async fn get_repository_pulls(
     Ok(Json(
         state
             .github
-            .repository_pulls(&repository(&query.repository)?, &filter, page)
+            .repository_pulls(&repository(&query.repository)?, filter.as_str(), page)
             .await?,
     ))
 }
@@ -283,20 +294,35 @@ async fn get_repository_pulls(
 struct SearchQuery {
     repository: String,
     query: String,
-    mode: Option<String>,
+    mode: Option<SearchMode>,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum SearchMode {
+    Literal,
+    Regex,
+    Fuzzy,
+}
+
+impl SearchMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Literal => "literal",
+            Self::Regex => "regex",
+            Self::Fuzzy => "fuzzy",
+        }
+    }
 }
 async fn get_repository_search(
     State(state): State<Arc<AppState>>,
     Query(query): Query<SearchQuery>,
 ) -> AppResult<Json<local::SearchResults>> {
-    let mode = query.mode.unwrap_or_else(|| "literal".to_owned());
-    if !matches!(mode.as_str(), "literal" | "regex" | "fuzzy") {
-        return Err(AppError::bad_request("Choose a valid search mode."));
-    }
+    let mode = query.mode.unwrap_or(SearchMode::Literal);
     Ok(Json(
         state
             .local
-            .search(&repository(&query.repository)?, &query.query, &mode)
+            .search(&repository(&query.repository)?, &query.query, mode.as_str())
             .await?,
     ))
 }
@@ -304,7 +330,7 @@ async fn get_repository_search(
 #[derive(Deserialize)]
 struct RepositoryFileQuery {
     repository: String,
-    path: String,
+    path: RelativePath,
 }
 async fn get_repository_file(
     State(state): State<Arc<AppState>>,
@@ -313,7 +339,7 @@ async fn get_repository_file(
     Ok(Json(
         state
             .local
-            .read_file(&repository(&query.repository)?, &query.path)
+            .read_file(&repository(&query.repository)?, query.path.as_str())
             .await?,
     ))
 }
@@ -387,18 +413,19 @@ async fn save_settings(
 #[serde(rename_all = "camelCase")]
 struct FileQuery {
     url: String,
-    path: String,
-    previous_path: Option<String>,
+    path: RelativePath,
+    previous_path: Option<RelativePath>,
     status: FileStatus,
-    base_oid: Option<String>,
-    head_oid: Option<String>,
+    base_oid: Option<Oid>,
+    head_oid: Option<Oid>,
 }
 impl FileQuery {
     fn pinned(&self) -> Option<PinnedRefs<'_>> {
         match (&self.base_oid, &self.head_oid) {
-            (Some(base), Some(head)) if local::valid_oid(base) && local::valid_oid(head) => {
-                Some(PinnedRefs { base, head })
-            }
+            (Some(base), Some(head)) => Some(PinnedRefs {
+                base: base.as_str(),
+                head: head.as_str(),
+            }),
             _ => None,
         }
     }
@@ -409,24 +436,22 @@ async fn file_pair(
     target: &GitHubTarget,
     query: &FileQuery,
 ) -> AppResult<FilePair> {
-    if query.path.is_empty() {
-        return Err(AppError::bad_request(
-            "Choose a reviewable file before loading its revisions.",
-        ));
-    }
-    let previous = query.previous_path.as_deref().unwrap_or("");
+    let previous = query
+        .previous_path
+        .as_ref()
+        .map_or("", RelativePath::as_str);
     if let Some(refs) = query.pinned() {
-        if let Ok(Some(pair)) = state
+        if let Some(pair) = state
             .local
             .load_file_pair(
                 target,
                 refs.base,
                 refs.head,
-                &query.path,
+                query.path.as_str(),
                 previous,
                 query.status,
             )
-            .await
+            .await?
         {
             return Ok(pair);
         }
@@ -436,7 +461,7 @@ async fn file_pair(
                 target,
                 refs.base,
                 refs.head,
-                &query.path,
+                query.path.as_str(),
                 previous,
                 query.status,
             )
@@ -449,7 +474,7 @@ async fn file_pair(
                 target,
                 &metadata.base_oid,
                 &metadata.head_oid,
-                &query.path,
+                query.path.as_str(),
                 previous,
                 query.status,
             )
@@ -472,8 +497,8 @@ async fn get_file(
 #[serde(rename_all = "camelCase")]
 struct AnalysisQuery {
     url: String,
-    base_oid: String,
-    head_oid: String,
+    base_oid: Oid,
+    head_oid: Oid,
     whitespace: String,
     semantic: bool,
     mode: String,
@@ -483,11 +508,6 @@ async fn get_analysis(
     Query(query): Query<AnalysisQuery>,
 ) -> AppResult<Json<analysis::AnalysisSnapshot>> {
     let target = parse_url(&query.url)?;
-    if !local::valid_oid(&query.base_oid) || !local::valid_oid(&query.head_oid) {
-        return Err(AppError::bad_request(
-            "Analysis requires immutable base and head OIDs.",
-        ));
-    }
     let ignore_whitespace = match query.whitespace.as_str() {
         "ignore" => true,
         "show" => false,
@@ -499,8 +519,8 @@ async fn get_analysis(
     };
     let key = analysis::AnalysisSnapshotKey::new(
         &target.repository(),
-        query.base_oid,
-        query.head_oid,
+        query.base_oid.as_str().to_owned(),
+        query.head_oid.as_str().to_owned(),
         analysis::AnalysisOptions {
             ignore_whitespace,
             semantic: query.semantic,
@@ -508,12 +528,32 @@ async fn get_analysis(
         },
     );
     let build_key = key.clone();
+    let revision_key =
+        revision::RevisionKey::new(target.repository(), query.base_oid, query.head_oid);
+    let revision_build_key = revision_key.clone();
+    let revision_target = target.clone();
     let local = state.local.clone();
     let github = state.github.clone();
+    let revision = state
+        .revisions
+        .get_or_build(revision_key, || {
+            let local = local.clone();
+            let github = github.clone();
+            async move {
+                revision::load(
+                    &local,
+                    &github,
+                    revision_target,
+                    revision_build_key,
+                )
+                .await
+            }
+        })
+        .await?;
     let snapshot = state
         .analysis
         .get_or_build(key, || async move {
-            analysis::build(&local, &github, &target, build_key).await
+            analysis::build(&local, &github, revision, build_key).await
         })
         .await?;
     Ok(Json(snapshot.as_ref().clone()))
@@ -537,7 +577,7 @@ async fn post_review_comment(
     if body.body.is_empty() {
         return Err(AppError::bad_request("Write a comment before posting."));
     }
-    if body.line == 0 || !matches!(body.side.as_str(), "LEFT" | "RIGHT") {
+    if body.line == 0 {
         return Err(AppError::bad_request("The review request body is invalid."));
     }
     let target = parse_url(&body.pull_url)?;
@@ -610,6 +650,7 @@ mod tests {
             analysis: analysis::AnalysisCache::default(),
             github: GitHub::new().await.unwrap(),
             local: Local::default(),
+            revisions: revision::RevisionCache::default(),
             settings: settings::SettingsStore::default(),
         }));
     }

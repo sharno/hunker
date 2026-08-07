@@ -8,7 +8,7 @@ module Hunker.PreparedDiff exposing
 
 import Dict exposing (Dict)
 import Hunker.Diff as Diff exposing (Hunk)
-import Hunker.Domain.Review exposing (CharacterDiff, CharacterRange, FileChange)
+import Hunker.Domain.Review exposing (CharacterDiff, CharacterRange, CommentSide(..), FileChange)
 
 
 type alias PreparedFile =
@@ -47,14 +47,15 @@ withWordDiff wordDiff prepared =
     { prepared | oldRanges = indexed.old, newRanges = indexed.new }
 
 
-rangesFor : String -> Int -> PreparedFile -> List CharacterRange
+rangesFor : CommentSide -> Int -> PreparedFile -> List CharacterRange
 rangesFor side line prepared =
     Dict.get line
-        (if side == "LEFT" then
-            prepared.oldRanges
+        (case side of
+            LeftSide ->
+                prepared.oldRanges
 
-         else
-            prepared.newRanges
+            RightSide ->
+                prepared.newRanges
         )
         |> Maybe.withDefault []
 

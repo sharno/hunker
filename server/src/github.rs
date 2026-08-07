@@ -10,7 +10,7 @@ use url::Url;
 use crate::{
     command,
     error::{AppError, AppResult},
-    types::{FilePair, FileStatus, PullCommit, RepositoryId},
+    types::{FilePair, FileStatus, PullCommit, RepositorySlug},
 };
 
 const API_VERSION: &str = "2022-11-28";
@@ -51,8 +51,8 @@ impl GitHubTarget {
         }
     }
 
-    pub fn repository(&self) -> RepositoryId {
-        RepositoryId {
+    pub fn repository(&self) -> RepositorySlug {
+        RepositorySlug {
             owner: self.owner().to_owned(),
             name: self.repo().to_owned(),
         }
@@ -319,11 +319,6 @@ impl GitHub {
         }
     }
 
-    pub async fn review_diff(&self, target: &GitHubTarget) -> AppResult<String> {
-        self.text(&target.api_url(), "application/vnd.github.diff")
-            .await
-    }
-
     pub async fn revision_diff(
         &self,
         target: &GitHubTarget,
@@ -427,7 +422,7 @@ impl GitHub {
 
     pub async fn repository_pulls(
         &self,
-        repository: &RepositoryId,
+        repository: &RepositorySlug,
         state: &str,
         page: usize,
     ) -> AppResult<RepositoryPullsPage> {
@@ -453,7 +448,7 @@ impl GitHub {
                 target.repo()
             ))
             .await?;
-        let resolutions = self.resolutions(target, number).await.unwrap_or_default();
+        let resolutions = self.resolutions(target, number).await?;
         Ok(values
             .into_iter()
             .map(|value| {
@@ -736,7 +731,7 @@ pub struct ReviewComment {
     pub html_url: String,
     pub created_at: String,
     pub line: Option<usize>,
-    pub side: String,
+    pub side: CommentSide,
     pub resolved: bool,
 }
 impl From<ReviewCommentResponse> for ReviewComment {
@@ -745,7 +740,7 @@ impl From<ReviewCommentResponse> for ReviewComment {
             .side
             .or(value.original_side)
             .filter(|side| side == "LEFT")
-            .unwrap_or_else(|| "RIGHT".to_owned());
+            .map_or(CommentSide::Right, |_| CommentSide::Left);
         Self {
             id: value.id,
             root_id: value.in_reply_to_id.unwrap_or(value.id),
@@ -770,8 +765,15 @@ pub struct InlineCommentInput {
     pub commit_id: String,
     pub path: String,
     pub line: usize,
-    pub side: String,
+    pub side: CommentSide,
     pub body: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum CommentSide {
+    Left,
+    Right,
 }
 
 const REVIEW_THREADS_QUERY: &str = "query HunkerReviewThreads($owner: String!, $repo: String!, $number: Int!, $cursor: String) { repository(owner: $owner, name: $repo) { pullRequest(number: $number) { reviewThreads(first: 100, after: $cursor) { nodes { isResolved comments(first: 1) { nodes { fullDatabaseId } } } pageInfo { hasNextPage endCursor } } } } }";

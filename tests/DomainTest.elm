@@ -4,7 +4,7 @@ import Expect
 import Hunker.Diff as Diff exposing (Kind(..))
 import Hunker.Domain.Review as Review exposing (MovedBlock)
 import Hunker.FileTree as FileTree exposing (Tree(..))
-import Hunker.Route as Route exposing (RepositoryTab(..), ReviewTab(..), ReviewTarget(..), Route(..))
+import Hunker.Route as Route exposing (PullRequestState(..), RepositoryTab(..), ReviewTab(..), ReviewTarget(..), Route(..), SearchMode(..))
 import Hunker.SemanticMove as SemanticMove exposing (Endpoint(..))
 import Test exposing (Test, describe, test)
 import Url
@@ -35,8 +35,8 @@ suite =
                             , ref = Just "feature/elm"
                             , path = Nothing
                             , query = ""
-                            , searchMode = "literal"
-                            , pullState = "open"
+                            , searchMode = LiteralSearch
+                            , pullState = OpenPulls
                             }
                         )
                         |> Expect.equal "/mohamed-rdr/hunker/commits/feature/elm"

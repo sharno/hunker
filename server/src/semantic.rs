@@ -59,12 +59,58 @@ struct AstUnit {
     preview: String,
     text: String,
     order: usize,
+    primary: bool,
 }
 
+#[derive(Debug)]
 struct Parsed {
     parse_failed: bool,
     fingerprint: String,
     units: Vec<AstUnit>,
+}
+
+#[derive(Debug)]
+struct PreparedFile {
+    path: String,
+    previous_path: Option<String>,
+    status: FileStatus,
+    language: Option<SupportedLanguage>,
+    before: Option<Parsed>,
+    after: Option<Parsed>,
+}
+
+#[derive(Debug)]
+pub struct PreparedReview {
+    files: Vec<PreparedFile>,
+}
+
+impl PreparedReview {
+    pub fn new(files: &[FilePair]) -> Self {
+        Self {
+            files: files
+                .iter()
+                .map(|file| {
+                    let language = language_for_path(&file.path);
+                    PreparedFile {
+                        path: file.path.clone(),
+                        previous_path: file.previous_path.clone(),
+                        status: file.status,
+                        before: language.map(|value| parse_units(value, &file.old_text)),
+                        after: language.map(|value| parse_units(value, &file.new_text)),
+                        language,
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    pub fn file_results(&self) -> Vec<SemanticResult> {
+        self.files.iter().map(analyze_prepared_file).collect()
+    }
+
+    pub fn moves(&self) -> Vec<MovedBlock> {
+        analyze_prepared_review(&self.files)
+    }
 }
 
 type SgNode<'a> = Node<'a, StrDoc<SupportLang>>;
@@ -238,15 +284,10 @@ fn source_range(node: &SgNode<'_>) -> SourceRange {
     }
 }
 
-fn collect_units(root: &SgNode<'_>, include_members: bool) -> Vec<AstUnit> {
-    fn visit(
-        node: &SgNode<'_>,
-        inside_container: bool,
-        include_members: bool,
-        units: &mut Vec<AstUnit>,
-    ) {
+fn collect_units(root: &SgNode<'_>) -> Vec<AstUnit> {
+    fn visit(node: &SgNode<'_>, inside_container: bool, units: &mut Vec<AstUnit>) {
         let kind = node.kind().into_owned();
-        if declaration(&kind) || (include_members && inside_container && member(&kind)) {
+        if declaration(&kind) || (inside_container && member(&kind)) {
             let mut exact = Vec::new();
             leaf_tokens(node, false, &mut exact);
             let mut shape = Vec::new();
@@ -262,26 +303,22 @@ fn collect_units(root: &SgNode<'_>, include_members: bool) -> Vec<AstUnit> {
                 preview: preview(node.clone()),
                 text: node.text().into_owned(),
                 order: units.len(),
+                primary: !inside_container,
             });
-            if !container(&kind) || !include_members {
+            if !container(&kind) {
                 return;
             }
         }
         for child in node.children() {
-            visit(
-                &child,
-                inside_container || container(&kind),
-                include_members,
-                units,
-            );
+            visit(&child, inside_container || container(&kind), units);
         }
     }
     let mut units = Vec::new();
-    visit(root, false, include_members, &mut units);
+    visit(root, false, &mut units);
     units
 }
 
-fn parse_units(language: SupportedLanguage, source: &str, include_members: bool) -> Parsed {
+fn parse_units(language: SupportedLanguage, source: &str) -> Parsed {
     let grep = language.language.ast_grep(source);
     let root = grep.root();
     let parse_failed = root
@@ -292,7 +329,7 @@ fn parse_units(language: SupportedLanguage, source: &str, include_members: bool)
     Parsed {
         parse_failed,
         fingerprint: fingerprint.join("|"),
-        units: collect_units(&root, include_members),
+        units: collect_units(&root),
     }
 }
 
@@ -314,12 +351,27 @@ where
         .collect()
 }
 
+#[cfg(test)]
 pub fn analyze_file(file: &FilePair) -> SemanticResult {
-    let Some(language) = language_for_path(&file.path) else {
+    PreparedReview::new(std::slice::from_ref(file))
+        .file_results()
+        .into_iter()
+        .next()
+        .expect("one prepared file produces one semantic result")
+}
+
+fn analyze_prepared_file(file: &PreparedFile) -> SemanticResult {
+    let Some(language) = file.language else {
         return SemanticResult::Unsupported { path: file.path.clone(), reason: "ast-grep semantic analysis currently supports JavaScript, TypeScript, Python, Rust, and OpenTofu/HCL.".to_owned() };
     };
-    let before = parse_units(language, &file.old_text, false);
-    let after = parse_units(language, &file.new_text, false);
+    let before = file
+        .before
+        .as_ref()
+        .expect("a supported language has a prepared old tree");
+    let after = file
+        .after
+        .as_ref()
+        .expect("a supported language has a prepared new tree");
     if before.parse_failed || after.parse_failed {
         return SemanticResult::ParseFailed {
             path: file.path.clone(),
@@ -328,12 +380,24 @@ pub fn analyze_file(file: &FilePair) -> SemanticResult {
                 .to_owned(),
         };
     }
-    let mut old_remaining = vec![true; before.units.len()];
-    let mut new_remaining = vec![true; after.units.len()];
+    let old_units = before
+        .units
+        .iter()
+        .filter(|unit| unit.primary)
+        .cloned()
+        .collect::<Vec<_>>();
+    let new_units = after
+        .units
+        .iter()
+        .filter(|unit| unit.primary)
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut old_remaining = vec![true; old_units.len()];
+    let mut new_remaining = vec![true; new_units.len()];
     let mut changes = Vec::new();
     consume(
-        &before.units,
-        &after.units,
+        &old_units,
+        &new_units,
         &mut old_remaining,
         &mut new_remaining,
         |unit| &unit.exact_fingerprint,
@@ -341,8 +405,8 @@ pub fn analyze_file(file: &FilePair) -> SemanticResult {
         &mut changes,
     );
     consume(
-        &before.units,
-        &after.units,
+        &old_units,
+        &new_units,
         &mut old_remaining,
         &mut new_remaining,
         |unit| &unit.label_fingerprint,
@@ -358,8 +422,8 @@ pub fn analyze_file(file: &FilePair) -> SemanticResult {
         &mut changes,
     );
     consume(
-        &before.units,
-        &after.units,
+        &old_units,
+        &new_units,
         &mut old_remaining,
         &mut new_remaining,
         |unit| &unit.shape_fingerprint,
@@ -376,8 +440,7 @@ pub fn analyze_file(file: &FilePair) -> SemanticResult {
         &mut changes,
     );
     changes.extend(
-        before
-            .units
+        old_units
             .iter()
             .enumerate()
             .filter(|(index, _)| old_remaining[*index])
@@ -389,8 +452,7 @@ pub fn analyze_file(file: &FilePair) -> SemanticResult {
             }),
     );
     changes.extend(
-        after
-            .units
+        new_units
             .iter()
             .enumerate()
             .filter(|(index, _)| new_remaining[*index])
@@ -443,20 +505,15 @@ struct LocatedUnit {
     path: String,
     pair_index: usize,
 }
-fn located_units(files: &[FilePair], old: bool) -> Vec<LocatedUnit> {
+fn located_units(files: &[PreparedFile], old: bool) -> Vec<LocatedUnit> {
     files
         .iter()
         .enumerate()
         .filter(|(_, file)| !crate::diff::generated(&file.path))
         .flat_map(|(pair_index, file)| {
-            let Some(language) = language_for_path(&file.path) else {
+            let Some(parsed) = (if old { &file.before } else { &file.after }) else {
                 return Vec::new();
             };
-            let source = if old { &file.old_text } else { &file.new_text };
-            if source.is_empty() {
-                return Vec::new();
-            }
-            let parsed = parse_units(language, source, true);
             if parsed.parse_failed {
                 return Vec::new();
             }
@@ -469,7 +526,8 @@ fn located_units(files: &[FilePair], old: bool) -> Vec<LocatedUnit> {
             };
             parsed
                 .units
-                .into_iter()
+                .iter()
+                .cloned()
                 .map(|unit| LocatedUnit {
                     unit,
                     path: path.clone(),
@@ -480,7 +538,12 @@ fn located_units(files: &[FilePair], old: bool) -> Vec<LocatedUnit> {
         .collect()
 }
 
+#[cfg(test)]
 pub fn analyze_review(files: &[FilePair]) -> Vec<MovedBlock> {
+    PreparedReview::new(files).moves()
+}
+
+fn analyze_prepared_review(files: &[PreparedFile]) -> Vec<MovedBlock> {
     let old = located_units(files, true);
     let new = located_units(files, false);
     let mut old_remaining = vec![true; old.len()];

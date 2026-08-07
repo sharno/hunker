@@ -1,11 +1,102 @@
-use std::path::PathBuf;
+use std::{fmt, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RepositoryId {
+pub struct RepositorySlug {
     pub owner: String,
     pub name: String,
+}
+
+impl RepositorySlug {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        let Some((owner, name)) = value.split_once('/') else {
+            return Err("Choose a repository in owner/name format.".to_owned());
+        };
+        if owner.is_empty() || name.is_empty() || name.contains('/') {
+            return Err("Choose a repository in owner/name format.".to_owned());
+        }
+        Ok(Self {
+            owner: owner.to_owned(),
+            name: name.to_owned(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct Oid(String);
+
+impl Oid {
+    pub fn parse(value: String) -> Result<Self, String> {
+        if value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            Ok(Self(value))
+        } else {
+            Err("A full 40-character Git object ID is required.".to_owned())
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for Oid {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::parse(value)
+    }
+}
+
+impl From<Oid> for String {
+    fn from(value: Oid) -> Self {
+        value.0
+    }
+}
+
+impl fmt::Display for Oid {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct RelativePath(String);
+
+impl RelativePath {
+    pub fn parse(value: String) -> Result<Self, String> {
+        let valid = !value.is_empty()
+            && !value.starts_with('/')
+            && !value.contains('\0')
+            && value
+                .split('/')
+                .all(|segment| !matches!(segment, "" | "." | ".."));
+        if valid {
+            Ok(Self(value))
+        } else {
+            Err("A repository-relative file path is required.".to_owned())
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for RelativePath {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::parse(value)
+    }
+}
+
+impl From<RelativePath> for String {
+    fn from(value: RelativePath) -> Self {
+        value.0
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
