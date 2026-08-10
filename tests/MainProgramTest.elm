@@ -136,7 +136,21 @@ suite =
                             , body = """{"code":"conflict","message":"Commit or stash staged changes before pulling.","retryable":false}"""
                             }
                         )
-                    |> ProgramTest.expectViewHas [ text "Commit or stash staged changes before pulling." ]
+                    |> ProgramTest.ensureViewHas [ text "Commit or stash staged changes before pulling." ]
+                    |> ProgramTest.expectViewHasNot [ text "Clone to /tmp" ]
+        , test "offers cloning only when the local repository is missing" <|
+            \() ->
+                startedAt "/example/missing"
+                    |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
+                    |> ProgramTest.simulateHttpResponse "GET"
+                        "/api/repository/files?repository=example%2Fmissing"
+                        (TestHttp.httpResponse
+                            { statusCode = 404
+                            , headers = []
+                            , body = """{"code":"not_found","message":"Local repository not found for example/missing.","retryable":false}"""
+                            }
+                        )
+                    |> ProgramTest.expectViewHas [ text "Clone to /tmp", text "Clone to repos root" ]
         , test "does not render a stale commits response after returning to files" <|
             \() ->
                 startedAt "/mohamed-rdr/hunker"

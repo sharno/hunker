@@ -24,7 +24,6 @@ import Hunker.Repository.Pulls as RepositoryPulls
 import Hunker.Repository.SourceControl as SourceControl
 import Hunker.Route as Route exposing (PullRequestState(..), RepositoryTab(..), SearchMode(..))
 import Hunker.Syntax as Syntax
-import Set exposing (Set)
 import Time
 import Url
 
@@ -32,16 +31,14 @@ import Url
 type alias Model =
     { location : Route.RepositoryLocation
     , repository : RepositoryState
-    , collapsedFolders : Set String
-    , searchDraft : String
-    , searchMode : SearchMode
     }
 
 
 type RepositoryState
-    = RepositoryLoading RepositoryRequest RepositoryView SourceControl.State
-    | RepositoryFailed RepositoryRequest ApiError RepositoryView SourceControl.State CloneState
-    | RepositoryReady ReadyRepository
+    = Resolving RepositoryRequest
+    | Missing MissingRepository
+    | Failed RepositoryRequest ApiError
+    | Ready ReadyRepository
 
 
 type RepositoryRequest
@@ -50,14 +47,21 @@ type RepositoryRequest
 
 type alias ReadyRepository =
     { request : RepositoryRequest
-    , files : List File
+    , files : RepositoryFiles.Model
     , view : RepositoryView
     , sourceControl : SourceControl.State
     }
 
 
+type alias MissingRepository =
+    { request : RepositoryRequest
+    , error : ApiError
+    , clone : CloneState
+    }
+
+
 type RepositoryView
-    = Files RepositoryFiles.Model
+    = Files
     | Commits (Remote RepositoryRequest ApiError Repository.Commits)
     | PullRequests RepositoryPulls.Model
 
@@ -116,31 +120,19 @@ init location =
         request =
             RepositoryRequest name
 
-        viewState =
-            initialView name location
-
         model =
             { location = location
-            , repository = RepositoryLoading request viewState (SourceControl.Loading name)
-            , collapsedFolders = Set.empty
-            , searchDraft = location.query
-            , searchMode = location.searchMode
+            , repository = Resolving request
             }
-
-        effects =
-            [ Api.fetchRepositoryFiles name (FilesLoaded name) (FilesFailed name)
-            , Api.refreshSourceControl name (SourceLoaded name) (SourceFailed name)
-            , loadView viewState
-            ]
     in
-    ( model, Effect.batch effects )
+    ( model, Api.fetchRepositoryFiles name (FilesLoaded name) (FilesFailed name) )
 
 
 initialView : String -> Route.RepositoryLocation -> RepositoryView
 initialView name location =
     case location.tab of
         RepositoryFiles ->
-            Files (RepositoryFiles.init name location.path location.query location.searchMode)
+            Files
 
         RepositoryCommits ->
             Commits (Loading (RepositoryRequest name))
@@ -149,10 +141,10 @@ initialView name location =
             PullRequests (RepositoryPulls.init name location.pullState)
 
 
-loadView : RepositoryView -> Effect Msg
-loadView viewState =
+loadView : RepositoryFiles.Model -> RepositoryView -> Effect Msg
+loadView files viewState =
     case viewState of
-        Files files ->
+        Files ->
             Effect.batch
                 [ case RepositoryFiles.selectedFile files of
                     Loading request ->
@@ -165,7 +157,7 @@ loadView viewState =
                         Api.searchRepository
                             (RepositoryFiles.searchRepository request)
                             (RepositoryFiles.searchQuery request)
-                            (Route.searchModeToString (RepositoryFiles.searchMode request))
+                            (Route.searchModeToString (RepositoryFiles.requestSearchMode request))
                             (SearchLoaded request)
                             (SearchFailed request)
 
@@ -221,29 +213,26 @@ navigateWithinRepository nextLocation model =
         let
             nextView =
                 initialView (repositoryName model) nextLocation
+
+            updated =
+                { model
+                    | location = nextLocation
+                    , repository =
+                        mapReady
+                            (\ready ->
+                                { ready
+                                    | files = RepositoryFiles.navigate nextLocation.path nextLocation.query nextLocation.searchMode ready.files
+                                    , view = nextView
+                                }
+                            )
+                            model.repository
+                }
         in
-        ( { model
-            | location = nextLocation
-            , repository = mapRepositoryView (always nextView) model.repository
-            , collapsedFolders = revealLocationPath nextLocation.path model
-            , searchDraft = nextLocation.query
-            , searchMode = nextLocation.searchMode
-          }
-        , loadView nextView
+        ( updated
+        , readyState updated
+            |> Maybe.map (\ready -> loadView ready.files ready.view)
+            |> Maybe.withDefault Effect.none
         )
-
-
-revealLocationPath : Maybe String -> Model -> Set String
-revealLocationPath maybePath model =
-    case ( maybePath, repositoryFiles model.repository ) of
-        ( Just path, Just files ) ->
-            model.collapsedFolders
-                |> Set.toList
-                |> FileTree.reveal path
-                |> Set.fromList
-
-        _ ->
-            model.collapsedFolders
 
 
 repositoryName : Model -> String
@@ -256,79 +245,59 @@ repositoryRequestName (RepositoryRequest name) =
     name
 
 
-repositoryFiles : RepositoryState -> Maybe (List File)
-repositoryFiles state =
-    case state of
-        RepositoryReady ready ->
-            Just ready.files
+readyState : Model -> Maybe ReadyRepository
+readyState model =
+    case model.repository of
+        Ready ready ->
+            Just ready
 
         _ ->
             Nothing
 
 
-repositoryView : RepositoryState -> RepositoryView
+mapReady : (ReadyRepository -> ReadyRepository) -> RepositoryState -> RepositoryState
+mapReady transform state =
+    case state of
+        Ready ready ->
+            Ready (transform ready)
+
+        _ ->
+            state
+
+
+repositoryView : RepositoryState -> Maybe RepositoryView
 repositoryView state =
     case state of
-        RepositoryLoading _ current _ ->
-            current
+        Ready ready ->
+            Just ready.view
 
-        RepositoryFailed _ _ current _ _ ->
-            current
-
-        RepositoryReady ready ->
-            ready.view
+        _ ->
+            Nothing
 
 
 mapRepositoryView : (RepositoryView -> RepositoryView) -> RepositoryState -> RepositoryState
 mapRepositoryView transform state =
-    case state of
-        RepositoryLoading request current source ->
-            RepositoryLoading request (transform current) source
-
-        RepositoryFailed request error current source clone ->
-            RepositoryFailed request error (transform current) source clone
-
-        RepositoryReady ready ->
-            RepositoryReady { ready | view = transform ready.view }
+    mapReady (\ready -> { ready | view = transform ready.view }) state
 
 
-repositorySourceControl : RepositoryState -> SourceControl.State
+repositorySourceControl : RepositoryState -> Maybe SourceControl.State
 repositorySourceControl state =
     case state of
-        RepositoryLoading _ _ source ->
-            source
+        Ready ready ->
+            Just ready.sourceControl
 
-        RepositoryFailed _ _ _ source _ ->
-            source
-
-        RepositoryReady ready ->
-            ready.sourceControl
+        _ ->
+            Nothing
 
 
 withSourceControl : SourceControl.State -> RepositoryState -> RepositoryState
 withSourceControl source state =
-    case state of
-        RepositoryLoading request current _ ->
-            RepositoryLoading request current source
-
-        RepositoryFailed request error current _ clone ->
-            RepositoryFailed request error current source clone
-
-        RepositoryReady ready ->
-            RepositoryReady { ready | sourceControl = source }
+    mapReady (\ready -> { ready | sourceControl = source }) state
 
 
 mapFilesView : (RepositoryFiles.Model -> RepositoryFiles.Model) -> RepositoryState -> RepositoryState
 mapFilesView transform =
-    mapRepositoryView
-        (\current ->
-            case current of
-                Files files ->
-                    Files (transform files)
-
-                _ ->
-                    current
-        )
+    mapReady (\ready -> { ready | files = transform ready.files })
 
 
 mapCommitsView : (Remote RepositoryRequest ApiError Repository.Commits -> Remote RepositoryRequest ApiError Repository.Commits) -> RepositoryState -> RepositoryState
@@ -376,57 +345,46 @@ update msg model =
 
             else
                 let
-                    tree =
-                        FileTree.build .path files
+                    request =
+                        RepositoryRequest requested
+
+                    fileBrowser =
+                        RepositoryFiles.init requested files model.location.path model.location.query model.location.searchMode
+
+                    viewState =
+                        initialView requested model.location
+
+                    updated =
+                        { model
+                            | repository =
+                                Ready
+                                    { request = request
+                                    , files = fileBrowser
+                                    , view = viewState
+                                    , sourceControl = SourceControl.Loading requested
+                                    }
+                        }
                 in
-                ( { model
-                    | repository =
-                        case model.repository of
-                            RepositoryLoading request current source ->
-                                RepositoryReady
-                                    { request = request
-                                    , files = files
-                                    , view = current
-                                    , sourceControl = source
-                                    }
-
-                            RepositoryReady ready ->
-                                RepositoryReady { ready | files = files }
-
-                            RepositoryFailed request _ current source _ ->
-                                RepositoryReady
-                                    { request = request
-                                    , files = files
-                                    , view = current
-                                    , sourceControl = source
-                                    }
-                    , collapsedFolders =
-                        case model.location.path of
-                            Nothing ->
-                                Set.fromList (FileTree.directoryPaths tree)
-
-                            Just path ->
-                                Set.fromList (FileTree.directoryPaths tree)
-                                    |> Set.toList
-                                    |> FileTree.reveal path
-                                    |> Set.fromList
-                  }
-                , Effect.none
+                ( updated
+                , Effect.batch
+                    [ Api.refreshSourceControl requested (SourceLoaded requested) (SourceFailed requested)
+                    , loadView fileBrowser viewState
+                    ]
                 )
 
         FilesFailed requested error ->
             if requested == repositoryName model then
                 ( { model
                     | repository =
-                        case model.repository of
-                            RepositoryLoading request current source ->
-                                RepositoryFailed request error current source CloneIdle
+                        if ApiError.isNotFound error then
+                            Missing
+                                { request = RepositoryRequest requested
+                                , error = error
+                                , clone = CloneIdle
+                                }
 
-                            RepositoryFailed request _ current source clone ->
-                                RepositoryFailed request error current source clone
-
-                            RepositoryReady ready ->
-                                RepositoryFailed ready.request error ready.view ready.sourceControl CloneIdle
+                        else
+                            Failed (RepositoryRequest requested) error
                   }
                 , Effect.none
                 )
@@ -549,29 +507,18 @@ update msg model =
                 let
                     name =
                         repositoryName model
-
-                    requestIdentity =
-                        RepositoryRequest name
-
-                    nextView =
-                        initialView name model.location
                 in
                 ( { model
-                    | repository =
-                        RepositoryLoading requestIdentity nextView (SourceControl.Loading name)
+                    | repository = Resolving (RepositoryRequest name)
                   }
-                , Effect.batch
-                    [ Api.fetchRepositoryFiles name (FilesLoaded name) (FilesFailed name)
-                    , Api.refreshSourceControl name (SourceLoaded name) (SourceFailed name)
-                    , loadView nextView
-                    ]
+                , Api.fetchRepositoryFiles name (FilesLoaded name) (FilesFailed name)
                 )
 
         CloneFailed request error ->
             if cloneRequestRepository request == repositoryName model then
                 case model.repository of
-                    RepositoryFailed repositoryRequest repositoryError current source _ ->
-                        ( { model | repository = RepositoryFailed repositoryRequest repositoryError current source (CloneFailure request error) }, Effect.none )
+                    Missing missing ->
+                        ( { model | repository = Missing { missing | clone = CloneFailure request error } }, Effect.none )
 
                     _ ->
                         unchanged model
@@ -580,13 +527,27 @@ update msg model =
                 unchanged model
 
         ChangedSearch query ->
-            ( { model | searchDraft = query }, Effect.none )
+            ( { model | repository = mapFilesView (RepositoryFiles.changeSearchDraft query) model.repository }, Effect.none )
 
         SelectedSearchMode mode ->
-            ( { model | searchMode = mode }, Effect.none )
+            ( { model | repository = mapFilesView (RepositoryFiles.selectSearchMode mode) model.repository }, Effect.none )
 
         SubmittedSearch ->
-            ( model, Effect.PushUrl (repositoryPath model RepositoryFiles Nothing model.searchDraft model.searchMode model.location.pullState) )
+            case readyState model of
+                Just ready ->
+                    ( model
+                    , Effect.PushUrl
+                        (repositoryPath model
+                            RepositoryFiles
+                            Nothing
+                            (RepositoryFiles.searchDraft ready.files)
+                            (RepositoryFiles.searchMode ready.files)
+                            model.location.pullState
+                        )
+                    )
+
+                Nothing ->
+                    unchanged model
 
         SelectedTab tab ->
             ( model, Effect.PushUrl (repositoryPath model tab Nothing "" LiteralSearch model.location.pullState) )
@@ -598,23 +559,14 @@ update msg model =
             ( model, Effect.PushUrl (repositoryPath model RepositoryFiles Nothing model.location.query model.location.searchMode model.location.pullState) )
 
         ToggledFolder path ->
-            ( { model
-                | collapsedFolders =
-                    if Set.member path model.collapsedFolders then
-                        Set.remove path model.collapsedFolders
-
-                    else
-                        Set.insert path model.collapsedFolders
-              }
-            , Effect.none
-            )
+            ( { model | repository = mapFilesView (RepositoryFiles.toggleFolder path) model.repository }, Effect.none )
 
         SelectedPullState state ->
             ( model, Effect.PushUrl (repositoryPath model RepositoryPulls Nothing "" LiteralSearch state) )
 
         RequestedMorePulls ->
             case repositoryView model.repository of
-                PullRequests pulls ->
+                Just (PullRequests pulls) ->
                     case RepositoryPulls.more pulls of
                         Just ( updated, request ) ->
                             ( { model | repository = mapPullsView (always updated) model.repository }
@@ -666,8 +618,8 @@ update msg model =
                     CloneRequest (repositoryName model) destination
             in
             case model.repository of
-                RepositoryFailed repositoryRequest error current source _ ->
-                    ( { model | repository = RepositoryFailed repositoryRequest error current source (CloneInFlight request) }
+                Missing missing ->
+                    ( { model | repository = Missing { missing | clone = CloneInFlight request } }
                     , Api.cloneRepository (repositoryName model) destination (CloneLoaded request) (CloneFailed request)
                     )
 
@@ -697,7 +649,7 @@ refreshSource model =
             repositoryName model
     in
     case repositorySourceControl model.repository of
-        SourceControl.Ready source ->
+        Just (SourceControl.Ready source) ->
             if SourceControl.busy source.activity then
                 unchanged model
 
@@ -706,19 +658,22 @@ refreshSource model =
                 , Api.refreshSourceControl name (SourceLoaded name) (SourceFailed name)
                 )
 
-        SourceControl.Unavailable requested _ ->
+        Just (SourceControl.Unavailable requested _) ->
             ( { model | repository = withSourceControl (SourceControl.Loading requested) model.repository }
             , Api.refreshSourceControl name (SourceLoaded name) (SourceFailed name)
             )
 
-        SourceControl.Loading _ ->
+        Just (SourceControl.Loading _) ->
+            unchanged model
+
+        Nothing ->
             unchanged model
 
 
 updateReadySource : String -> Model -> (SourceControl.Snapshot -> ( Model, Effect Msg )) -> ( Model, Effect Msg )
 updateReadySource requested model updateSource =
     case repositorySourceControl model.repository of
-        SourceControl.Ready source ->
+        Just (SourceControl.Ready source) ->
             if source.repository == requested then
                 updateSource source
 
@@ -781,25 +736,34 @@ tabButton label tab active =
 
 searchForm : Model -> Html Msg
 searchForm model =
-    form
-        [ class ("repository-search" ++ activeClass (model.location.tab /= RepositoryFiles))
-        , onSubmit SubmittedSearch
-        ]
-        [ div [ class "search-mode-picker", attribute "role" "group", attribute "aria-label" "Search mode" ]
-            [ searchModeButton "T" "Text" LiteralSearch model.searchMode
-            , searchModeButton ".*" "Regex" RegexSearch model.searchMode
-            , searchModeButton "F" "Fuzzy · FFF" FuzzySearch model.searchMode
-            ]
-        , input
-            [ type_ "search"
-            , attribute "aria-label" "Search repository"
-            , placeholder "Search repository"
-            , value model.searchDraft
-            , onInput ChangedSearch
-            ]
-            []
-        , button [ type_ "submit", class "repository-search-submit" ] [ text "Search" ]
-        ]
+    case readyState model of
+        Just ready ->
+            let
+                mode =
+                    RepositoryFiles.searchMode ready.files
+            in
+            form
+                [ class ("repository-search" ++ activeClass (model.location.tab /= RepositoryFiles))
+                , onSubmit SubmittedSearch
+                ]
+                [ div [ class "search-mode-picker", attribute "role" "group", attribute "aria-label" "Search mode" ]
+                    [ searchModeButton "T" "Text" LiteralSearch mode
+                    , searchModeButton ".*" "Regex" RegexSearch mode
+                    , searchModeButton "F" "Fuzzy · FFF" FuzzySearch mode
+                    ]
+                , input
+                    [ type_ "search"
+                    , attribute "aria-label" "Search repository"
+                    , placeholder "Search repository"
+                    , value (RepositoryFiles.searchDraft ready.files)
+                    , onInput ChangedSearch
+                    ]
+                    []
+                , button [ type_ "submit", class "repository-search-submit" ] [ text "Search" ]
+                ]
+
+        Nothing ->
+            text ""
 
 
 searchModeButton : String -> String -> SearchMode -> SearchMode -> Html Msg
@@ -838,18 +802,21 @@ view syntaxHighlighting model =
 sourceControlView : Model -> Html Msg
 sourceControlView model =
     case repositorySourceControl model.repository of
-        SourceControl.Loading _ ->
+        Just (SourceControl.Loading _) ->
             section [ class "repository-source-control", attribute "role" "status" ]
                 [ span [ class "source-control-loading" ] [ text "Reading Git state…" ] ]
 
-        SourceControl.Unavailable _ error ->
+        Just (SourceControl.Unavailable _ error) ->
             section [ class "repository-source-control" ]
                 [ span [ class "source-control-feedback is-error", attribute "role" "alert" ] [ text (ApiError.message error) ]
                 , button [ type_ "button", onClick RequestedSourceRefresh ] [ text "Retry" ]
                 ]
 
-        SourceControl.Ready source ->
+        Just (SourceControl.Ready source) ->
             sourceReady source
+
+        Nothing ->
+            text ""
 
 
 sourceReady : SourceControl.Snapshot -> Html Msg
@@ -957,28 +924,35 @@ sourceFeedback action path =
 filesView : Bool -> Model -> Html Msg
 filesView syntaxHighlighting model =
     case model.repository of
-        RepositoryFailed _ error _ _ clone ->
-            cloneOffer error clone
+        Missing missing ->
+            cloneOffer missing.error missing.clone
 
-        RepositoryLoading _ _ _ ->
+        Resolving _ ->
             pageState "Reading repository files…" "Using the current local checkout without switching other tabs."
 
-        RepositoryReady ready ->
+        Failed _ error ->
+            pageState "Could not read this repository" (ApiError.message error)
+
+        Ready ready ->
+            let
+                files =
+                    RepositoryFiles.catalog ready.files
+            in
             div [ class "repository-workspace" ]
                 [ aside [ class "repository-file-sidebar" ]
-                    [ header [] [ strong [] [ text "Files" ], span [ class "count-badge" ] [ text (String.fromInt (List.length ready.files)) ] ]
-                    , fileTree model (FileTree.build .path ready.files)
+                    [ header [] [ strong [] [ text "Files" ], span [ class "count-badge" ] [ text (String.fromInt (List.length files)) ] ]
+                    , fileTree model ready.files (FileTree.build .path files)
                     ]
                 , section [ class "repository-results" ]
                     [ case ready.view of
-                        Files files ->
+                        Files ->
                             case model.location.path of
                                 Just _ ->
-                                    repositoryFileView syntaxHighlighting model files
+                                    repositoryFileView syntaxHighlighting model ready.files
 
                                 Nothing ->
                                     if model.location.query /= "" then
-                                        repositorySearchView model files
+                                        repositorySearchView model ready.files
 
                                     else
                                         div [ class "repository-empty-selection" ]
@@ -992,18 +966,18 @@ filesView syntaxHighlighting model =
                 ]
 
 
-fileTree : Model -> List (Tree File) -> Html Msg
-fileTree model forest =
-    div [ class "file-tree" ] (List.map (fileTreeNode model 0) forest)
+fileTree : Model -> RepositoryFiles.Model -> List (Tree File) -> Html Msg
+fileTree model files forest =
+    div [ class "file-tree" ] (List.map (fileTreeNode model files 0) forest)
 
 
-fileTreeNode : Model -> Int -> Tree File -> Html Msg
-fileTreeNode model depth tree =
+fileTreeNode : Model -> RepositoryFiles.Model -> Int -> Tree File -> Html Msg
+fileTreeNode model files depth tree =
     case tree of
         Folder name path children ->
             let
                 collapsed =
-                    Set.member path model.collapsedFolders
+                    RepositoryFiles.isFolderCollapsed path files
             in
             div [ class "file-tree-folder" ]
                 [ button
@@ -1028,7 +1002,7 @@ fileTreeNode model depth tree =
                     text ""
 
                   else
-                    div [] (List.map (fileTreeNode model (depth + 1)) children)
+                    div [] (List.map (fileTreeNode model files (depth + 1)) children)
                 ]
 
         Leaf name file ->
@@ -1159,7 +1133,7 @@ searchMatchView match =
 commitsView : Model -> Html Msg
 commitsView model =
     case repositoryView model.repository of
-        Commits remote ->
+        Just (Commits remote) ->
             case remote of
                 Loading _ ->
                     pageState "Loading commits…" "Reading immutable OIDs from the local checkout."
@@ -1211,7 +1185,7 @@ commitRow commit =
 pullsView : Model -> Html Msg
 pullsView model =
     case repositoryView model.repository of
-        PullRequests pulls ->
+        Just (PullRequests pulls) ->
             section [ class "repository-pulls-browser" ]
                 [ header [ class "repository-pulls-heading" ]
                     [ div []

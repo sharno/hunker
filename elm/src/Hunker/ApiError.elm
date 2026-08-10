@@ -3,6 +3,7 @@ module Hunker.ApiError exposing
     , Code(..)
     , context
     , decoder
+    , isNotFound
     , message
     , retryable
     , transport
@@ -59,6 +60,11 @@ context prefix (ApiError details) =
 retryable : ApiError -> Bool
 retryable (ApiError details) =
     details.retryable
+
+
+isNotFound : ApiError -> Bool
+isNotFound (ApiError details) =
+    details.code == NotFound
 
 
 transport : String -> ApiError
