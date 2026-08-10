@@ -311,6 +311,14 @@ test("shows loading instead of stale review data and preserves a single fetched 
     .getByRole("button", { name: /other\.ts/ })
     .click();
   await expect(page).toHaveURL("/example/hunker/pull/42/files/src/other.ts");
+  await expect
+    .poll(async () => {
+      const target = await page.locator("#file-src-other-ts").boundingBox();
+      const stickyToolbar = await toolbar.boundingBox();
+      if (!target || !stickyToolbar) return Number.POSITIVE_INFINITY;
+      return Math.abs(target.y - (stickyToolbar.y + stickyToolbar.height + 12));
+    })
+    .toBeLessThan(20);
   await page.goBack();
   await expect(page).toHaveURL("/example/hunker/pull/42/files/src/long.ts");
   await page.goForward();

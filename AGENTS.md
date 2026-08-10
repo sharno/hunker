@@ -60,6 +60,10 @@
   route, diff, tree, and state behavior belongs in Elm tests.
 - URLs encode location (repository, tab, PR, commit, selected file), never
   display preferences. Save review preferences through `/api/settings`.
+- A canonical URL change does not move the browser viewport. When a location
+  selects an already-rendered full-diff file or semantic target, issue an
+  explicit scroll effect after the route transition and account for sticky
+  navigation. Cover the final panel position with a real-browser test.
 - Repository trees start collapsed; review trees start expanded. Selecting a
   nested file reveals its ancestors. Marking a review file reviewed also
   collapses it.

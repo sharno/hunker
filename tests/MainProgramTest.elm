@@ -217,6 +217,9 @@ simulateEffect effect =
         AppEffect.Focus _ message ->
             SimulatedTask.perform identity (SimulatedTask.succeed message)
 
+        AppEffect.ScrollIntoView _ message ->
+            SimulatedTask.perform identity (SimulatedTask.succeed message)
+
         AppEffect.After milliseconds message ->
             SimulatedTask.perform (always message) (SimulatedProcess.sleep milliseconds)
 

@@ -115,6 +115,7 @@ type Msg
     | RevisionLoaded Session.Id Revision
     | RevisionFailed Session.Id ApiError
     | PollRevision Time.Posix
+    | ScrolledToLocation
 
 
 init : Route.ReviewLocation -> ( Model, Effect Msg )
@@ -167,7 +168,11 @@ navigate nextLocation model =
         ( model, Effect.none )
 
     else
-        ( mapReviewRequest (\request -> { request | location = nextLocation }) model, Effect.none )
+        ( mapReviewRequest (\request -> { request | location = nextLocation }) model
+        , nextLocation.path
+            |> Maybe.map (DiffPanelView.fileAnchor >> (\anchor -> Effect.ScrollIntoView anchor ScrolledToLocation))
+            |> Maybe.withDefault Effect.none
+        )
 
 
 title : Model -> String
@@ -475,8 +480,11 @@ update settings msg model =
             ( model
                 |> mapReviewRequest (\request -> { request | location = next })
                 |> mapDiff (DiffView.revealFile path)
-            , Effect.batch [ navigation, Effect.Focus anchor CheckedRevision ]
+            , Effect.batch [ navigation, Effect.ScrollIntoView anchor ScrolledToLocation ]
             )
+
+        ScrolledToLocation ->
+            unchanged model
 
         CommentsLoaded requested comments ->
             ( mapCollaboration (Collaboration.commentsLoaded requested comments) model, Effect.none )

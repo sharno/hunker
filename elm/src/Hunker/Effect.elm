@@ -26,6 +26,7 @@ type Effect msg
     | ReplaceUrl String
     | LoadExternal String
     | Focus String msg
+    | ScrollIntoView String msg
     | After Float msg
 
 
@@ -120,6 +121,9 @@ map transform effect =
         Focus id message ->
             Focus id (transform message)
 
+        ScrollIntoView id message ->
+            ScrollIntoView id (transform message)
+
         After milliseconds message ->
             After milliseconds (transform message)
 
@@ -157,9 +161,34 @@ perform key effect =
             Browser.Dom.focus id
                 |> Task.attempt (always message)
 
+        ScrollIntoView id message ->
+            scrollIntoView id
+                |> Task.attempt (always message)
+
         After milliseconds message ->
             Process.sleep milliseconds
                 |> Task.perform (always message)
+
+
+scrollIntoView : String -> Task.Task Browser.Dom.Error ()
+scrollIntoView id =
+    let
+        align element =
+            let
+                stickyOffset =
+                    if element.viewport.width <= 760 then
+                        56
+
+                    else
+                        120
+            in
+            Browser.Dom.setViewport element.viewport.x (max 0 (element.element.y - stickyOffset))
+    in
+    Browser.Dom.getElement id
+        |> Task.andThen align
+        |> Task.andThen (\_ -> Process.sleep 0)
+        |> Task.andThen (\_ -> Browser.Dom.getElement id)
+        |> Task.andThen align
 
 
 expectJson : Decode.Decoder msg -> (ApiError -> msg) -> Http.Expect msg

@@ -1,4 +1,4 @@
-module Hunker.Review.View.DiffPanel exposing (Actions, Config, view)
+module Hunker.Review.View.DiffPanel exposing (Actions, Config, fileAnchor, view)
 
 import Dict
 import Html exposing (Html, a, article, button, code, div, footer, header, section, span, strong, text)
