@@ -24,7 +24,11 @@ import Hunker.Effect as Effect exposing (Effect)
 import Hunker.FileTree as FileTree exposing (Tree(..))
 import Hunker.PreparedDiff as PreparedDiff exposing (PreparedFile)
 import Hunker.Remote as Remote exposing (Remote(..))
+import Hunker.Review.Analysis as Analysis
+import Hunker.Review.Collaboration as Collaboration
+import Hunker.Review.DiffView as DiffView exposing (SearchMode(..))
 import Hunker.Review.FileIndex as FileIndex exposing (FileIndex)
+import Hunker.Review.Session as Session
 import Hunker.Route as Route exposing (ReviewTab(..), ReviewTarget(..))
 import Hunker.SemanticMove as SemanticMove exposing (Endpoint(..))
 import Hunker.Syntax as Syntax
@@ -36,22 +40,7 @@ import Url
 
 
 type alias Model =
-    { review : ReviewState
-    , fullFiles : Dict String (Remote String ApiError FullFile)
-    , filter : String
-    , filterMode : SearchMode
-    , collapsedFolders : Set String
-    , collapsedFiles : Set String
-    , collapsedHunks : Set String
-    , reviewedFiles : Set String
-    , collapsedThreads : Set Int
-    , replyDrafts : Dict Int String
-    , replyState : Remote Int ApiError ReviewComment
-    , reviewBody : String
-    , reviewSubmission : Remote String ApiError String
-    , inlineComposer : Maybe InlineComposer
-    , inlineSubmission : Remote String ApiError ReviewComment
-    }
+    { review : ReviewState }
 
 
 type ReviewState
@@ -69,47 +58,12 @@ type alias ReviewRequest =
 
 type alias ReadyReview =
     { request : ReviewRequest
+    , session : Session.Id
     , document : ReviewDocument
     , files : FileIndex
-    , analysis : AnalysisState
-    , collaboration : CollaborationState
-    }
-
-
-type AnalysisState
-    = AnalysisDisabled
-    | AnalysisInFlight AnalysisIdentity
-    | AnalysisFailure AnalysisIdentity ApiError
-    | AnalysisComplete AnalysisIdentity AnalysisSnapshot
-
-
-type alias CollaborationState =
-    { commits : Remote String ApiError (List PullCommit)
-    , comments : Remote String ApiError (List ReviewComment)
-    , revision : Remote String ApiError Revision
-    }
-
-
-type SearchMode
-    = Literal
-    | Regex
-
-
-type alias AnalysisIdentity =
-    { requestUrl : String
-    , baseOid : String
-    , headOid : String
-    , ignoreWhitespace : Bool
-    , semantic : Bool
-    , inlineDiff : InlineDiffMode
-    }
-
-
-type alias InlineComposer =
-    { path : String
-    , line : Int
-    , side : CommentSide
-    , body : String
+    , analysis : Analysis.State
+    , collaboration : Collaboration.Model
+    , diff : DiffView.Model
     }
 
 
@@ -117,8 +71,8 @@ type Msg
     = ReviewLoaded String ReviewDocument
     | ReviewFailed String ApiError
     | Refreshed
-    | CommitsLoaded String (List PullCommit)
-    | CommitsFailed String ApiError
+    | CommitsLoaded Session.Id (List PullCommit)
+    | CommitsFailed Session.Id ApiError
     | SelectedTab ReviewTab
     | SelectedCommit String
     | SelectedFile String
@@ -133,35 +87,35 @@ type Msg
     | SelectedInlineMode InlineDiffMode
     | ToggledSyntax Bool
     | ToggledReviews Bool
-    | AnalysisLoaded AnalysisIdentity AnalysisSnapshot
-    | AnalysisFailed AnalysisIdentity ApiError
-    | FullFileLoaded String String FullFile
-    | FullFileFailed String String ApiError
+    | AnalysisLoaded Analysis.Identity AnalysisSnapshot
+    | AnalysisFailed Analysis.Identity ApiError
+    | FullFileLoaded DiffView.FullFileRequest FullFile
+    | FullFileFailed DiffView.FullFileRequest ApiError
     | ToggledFullFile FileChange
     | ToggledFile String
     | ToggledHunk String String
     | ToggledReviewed String
     | SelectedMoveTarget String String
-    | CommentsLoaded String (List ReviewComment)
-    | CommentsFailed String ApiError
+    | CommentsLoaded Session.Id (List ReviewComment)
+    | CommentsFailed Session.Id ApiError
     | ToggledThread Int
     | ChangedReply Int String
     | SubmittedReply Int
-    | ReplyLoaded Int ReviewComment
-    | ReplyFailed Int ApiError
+    | ReplyLoaded Collaboration.ReplyRequest ReviewComment
+    | ReplyFailed Collaboration.ReplyRequest ApiError
     | ChangedReviewBody String
     | SubmittedReview String
-    | ReviewSubmitted String String
-    | ReviewSubmitFailed String ApiError
+    | ReviewSubmitted Collaboration.ReviewRequest String
+    | ReviewSubmitFailed Collaboration.ReviewRequest ApiError
     | OpenedInlineComposer String Int CommentSide
     | ChangedInlineBody String
     | CancelledInlineComposer
     | SubmittedInlineComment
-    | InlineCommentLoaded String ReviewComment
-    | InlineCommentFailed String ApiError
+    | InlineCommentLoaded Collaboration.InlineRequest ReviewComment
+    | InlineCommentFailed Collaboration.InlineRequest ApiError
     | CheckedRevision
-    | RevisionLoaded String Revision
-    | RevisionFailed String ApiError
+    | RevisionLoaded Session.Id Revision
+    | RevisionFailed Session.Id ApiError
     | PollRevision Time.Posix
 
 
@@ -186,22 +140,7 @@ init reviewLocation =
             }
 
         model =
-            { review = ReviewLoading request
-            , fullFiles = Dict.empty
-            , filter = ""
-            , filterMode = Literal
-            , collapsedFolders = Set.empty
-            , collapsedFiles = Set.empty
-            , collapsedHunks = Set.empty
-            , reviewedFiles = Set.empty
-            , collapsedThreads = Set.empty
-            , replyDrafts = Dict.empty
-            , replyState = NotAsked
-            , reviewBody = ""
-            , reviewSubmission = NotAsked
-            , inlineComposer = Nothing
-            , inlineSubmission = NotAsked
-            }
+            { review = ReviewLoading request }
     in
     ( model, Api.fetchReview githubUrl (ReviewLoaded githubUrl) (ReviewFailed githubUrl) )
 
@@ -309,51 +248,45 @@ reviewFiles model =
         |> Maybe.withDefault []
 
 
-reviewAnalysis : Model -> AnalysisState
+reviewAnalysis : Model -> Analysis.State
 reviewAnalysis model =
     readyState model
         |> Maybe.map .analysis
-        |> Maybe.withDefault AnalysisDisabled
+        |> Maybe.withDefault Analysis.disabled
 
 
-reviewCollaboration : Model -> Maybe CollaborationState
+reviewCollaboration : Model -> Maybe Collaboration.Model
 reviewCollaboration model =
     readyState model |> Maybe.map .collaboration
 
 
-reviewComments : Model -> Remote String ApiError (List ReviewComment)
+reviewComments : Model -> Remote Session.Id ApiError (List ReviewComment)
 reviewComments model =
     reviewCollaboration model
-        |> Maybe.map .comments
+        |> Maybe.map Collaboration.comments
         |> Maybe.withDefault NotAsked
 
 
-reviewCommits : Model -> Remote String ApiError (List PullCommit)
+reviewCommits : Model -> Remote Session.Id ApiError (List PullCommit)
 reviewCommits model =
     reviewCollaboration model
-        |> Maybe.map .commits
+        |> Maybe.map Collaboration.commits
         |> Maybe.withDefault NotAsked
 
 
-mapCollaboration : (CollaborationState -> CollaborationState) -> Model -> Model
+mapCollaboration : (Collaboration.Model -> Collaboration.Model) -> Model -> Model
 mapCollaboration transform =
     mapReady (\ready -> { ready | collaboration = transform ready.collaboration })
 
 
-analysisIdentityOf : AnalysisState -> Maybe AnalysisIdentity
-analysisIdentityOf state =
-    case state of
-        AnalysisInFlight identity ->
-            Just identity
+mapDiff : (DiffView.Model -> DiffView.Model) -> Model -> Model
+mapDiff transform =
+    mapReady (\ready -> { ready | diff = transform ready.diff })
 
-        AnalysisFailure identity _ ->
-            Just identity
 
-        AnalysisComplete identity _ ->
-            Just identity
-
-        AnalysisDisabled ->
-            Nothing
+reviewDiff : Model -> Maybe DiffView.Model
+reviewDiff model =
+    readyState model |> Maybe.map .diff
 
 
 update : Settings -> Msg -> Model -> ( Model, Effect Msg )
@@ -382,23 +315,15 @@ update settings msg model =
                 request =
                     reviewRequest model
             in
-            ( { model | review = ReviewLoading request, fullFiles = Dict.empty }
+            ( { model | review = ReviewLoading request }
             , Api.fetchReview request.requestUrl (ReviewLoaded request.requestUrl) (ReviewFailed request.requestUrl)
             )
 
         CommitsLoaded requested commits ->
-            if requested == (reviewRequest model).pullUrl then
-                ( mapCollaboration (\collaboration -> { collaboration | commits = Success requested commits }) model, Effect.none )
-
-            else
-                unchanged model
+            ( mapCollaboration (Collaboration.commitsLoaded requested commits) model, Effect.none )
 
         CommitsFailed requested error ->
-            if requested == (reviewRequest model).pullUrl then
-                ( mapCollaboration (\collaboration -> { collaboration | commits = Failure requested error }) model, Effect.none )
-
-            else
-                unchanged model
+            ( mapCollaboration (Collaboration.commitsFailed requested error) model, Effect.none )
 
         SelectedTab tab ->
             let
@@ -431,13 +356,13 @@ update settings msg model =
             ( model, Effect.PushUrl (Route.toPath (Route.Review next)) )
 
         ChangedFilter filter ->
-            ( { model | filter = filter }, Effect.none )
+            ( mapDiff (DiffView.changeFilter filter) model, Effect.none )
 
         SelectedSearchMode mode ->
-            ( { model | filterMode = mode }, Effect.none )
+            ( mapDiff (DiffView.selectSearchMode mode) model, Effect.none )
 
         ToggledFolder path ->
-            ( { model | collapsedFolders = toggleSet path model.collapsedFolders }, Effect.none )
+            ( mapDiff (DiffView.toggleFolder path) model, Effect.none )
 
         ToggledSidebar ->
             unchanged model
@@ -462,17 +387,21 @@ update settings msg model =
 
         ToggledReviews value ->
             if value then
-                ( model, commentsEffect settings model )
+                let
+                    updated =
+                        beginCommentsIfNeeded { settings | showGitHubReviews = True } model
+                in
+                ( updated, commentsEffect { settings | showGitHubReviews = True } updated )
 
             else
                 unchanged model
 
         AnalysisLoaded requested snapshot ->
-            if analysisIdentityOf (reviewAnalysis model) == Just requested then
+            if Analysis.matches requested (reviewAnalysis model) then
                 ( mapReady
                     (\ready ->
                         { ready
-                            | analysis = AnalysisComplete requested snapshot
+                            | analysis = Analysis.complete requested snapshot ready.analysis
                             , files = FileIndex.withAnalysis snapshot ready.files
                         }
                     )
@@ -484,70 +413,51 @@ update settings msg model =
                 unchanged model
 
         AnalysisFailed requested error ->
-            if analysisIdentityOf (reviewAnalysis model) == Just requested then
-                ( mapReady (\ready -> { ready | analysis = AnalysisFailure requested error }) model, Effect.none )
+            if Analysis.matches requested (reviewAnalysis model) then
+                ( mapReady (\ready -> { ready | analysis = Analysis.fail requested error ready.analysis }) model, Effect.none )
 
             else
                 unchanged model
 
-        FullFileLoaded requested path fullFile ->
-            if requested == (reviewRequest model).requestUrl then
-                ( { model | fullFiles = Dict.insert path (Success requested fullFile) model.fullFiles }, Effect.none )
+        FullFileLoaded requested fullFile ->
+            ( mapDiff (DiffView.fileLoaded requested fullFile) model, Effect.none )
 
-            else
-                unchanged model
-
-        FullFileFailed requested path error ->
-            if requested == (reviewRequest model).requestUrl then
-                ( { model | fullFiles = Dict.insert path (Failure requested error) model.fullFiles }, Effect.none )
-
-            else
-                unchanged model
+        FullFileFailed requested error ->
+            ( mapDiff (DiffView.fileFailed requested error) model, Effect.none )
 
         ToggledFullFile file ->
-            case Dict.get file.path model.fullFiles of
-                Just (Success _ _) ->
-                    ( { model | fullFiles = Dict.remove file.path model.fullFiles }, Effect.none )
-
-                Just (Loading _) ->
+            case readyState model of
+                Nothing ->
                     unchanged model
 
-                _ ->
-                    case readyReview model of
-                        Nothing ->
-                            unchanged model
+                Just ready ->
+                    let
+                        ( diff, request ) =
+                            DiffView.toggleFullFile file.path ready.diff
 
-                        Just reviewData ->
-                            let
-                                requestUrl =
-                                    (reviewRequest model).requestUrl
-                            in
-                            ( { model | fullFiles = Dict.insert file.path (Loading requestUrl) model.fullFiles }
-                            , Api.fetchFullFile requestUrl file reviewData.backing (FullFileLoaded requestUrl file.path) (FullFileFailed requestUrl file.path)
-                            )
+                        effect =
+                            request
+                                |> Maybe.map
+                                    (\current ->
+                                        Api.fetchFullFile
+                                            (DiffView.requestUrl current)
+                                            file
+                                            ready.document.backing
+                                            (FullFileLoaded current)
+                                            (FullFileFailed current)
+                                    )
+                                |> Maybe.withDefault Effect.none
+                    in
+                    ( mapReady (\current -> { current | diff = diff }) model, effect )
 
         ToggledFile path ->
-            ( { model | collapsedFiles = toggleSet path model.collapsedFiles }, Effect.none )
+            ( mapDiff (DiffView.toggleFile path) model, Effect.none )
 
         ToggledHunk path hunkId ->
-            ( { model | collapsedHunks = toggleSet (path ++ ":" ++ hunkId) model.collapsedHunks }, Effect.none )
+            ( mapDiff (DiffView.toggleHunk path hunkId) model, Effect.none )
 
         ToggledReviewed path ->
-            let
-                reviewed =
-                    Set.member path model.reviewedFiles
-            in
-            ( { model
-                | reviewedFiles = toggleSet path model.reviewedFiles
-                , collapsedFiles =
-                    if reviewed then
-                        Set.remove path model.collapsedFiles
-
-                    else
-                        Set.insert path model.collapsedFiles
-              }
-            , Effect.none
-            )
+            ( mapDiff (DiffView.toggleReviewed path) model, Effect.none )
 
         SelectedMoveTarget path anchor ->
             let
@@ -566,138 +476,123 @@ update settings msg model =
             in
             ( model
                 |> mapReviewRequest (\request -> { request | location = next })
-                |> (\updated -> { updated | collapsedFiles = Set.remove path model.collapsedFiles })
+                |> mapDiff (DiffView.revealFile path)
             , Effect.batch [ navigation, Effect.Focus anchor CheckedRevision ]
             )
 
         CommentsLoaded requested comments ->
-            if requested == (reviewRequest model).pullUrl then
-                let
-                    resolvedRoots =
-                        comments
-                            |> List.filter (\comment -> comment.id == comment.rootId && comment.resolved)
-                            |> List.map .rootId
-                            |> Set.fromList
-                in
-                ( mapCollaboration (\collaboration -> { collaboration | comments = Success requested comments }) model
-                    |> (\updated -> { updated | collapsedThreads = Set.union model.collapsedThreads resolvedRoots })
-                , Effect.none
-                )
-
-            else
-                unchanged model
+            ( mapCollaboration (Collaboration.commentsLoaded requested comments) model, Effect.none )
 
         CommentsFailed requested error ->
-            if requested == (reviewRequest model).pullUrl then
-                ( mapCollaboration (\collaboration -> { collaboration | comments = Failure requested error }) model, Effect.none )
-
-            else
-                unchanged model
+            ( mapCollaboration (Collaboration.commentsFailed requested error) model, Effect.none )
 
         ToggledThread threadId ->
-            ( { model | collapsedThreads = toggleSet threadId model.collapsedThreads }, Effect.none )
+            ( mapCollaboration (Collaboration.toggleThread threadId) model, Effect.none )
 
         ChangedReply commentId body ->
-            ( { model | replyDrafts = Dict.insert commentId body model.replyDrafts, replyState = NotAsked }, Effect.none )
+            ( mapCollaboration (Collaboration.changeReply commentId body) model, Effect.none )
 
         SubmittedReply commentId ->
-            let
-                body =
-                    Dict.get commentId model.replyDrafts |> Maybe.withDefault ""
-            in
-            if String.trim body == "" then
-                unchanged model
-
-            else
-                ( { model | replyState = Loading commentId }
-                , Api.postReply (reviewRequest model).pullUrl commentId body (ReplyLoaded commentId) (ReplyFailed commentId)
-                )
-
-        ReplyLoaded commentId comment ->
-            ( mapCollaboration (\collaboration -> { collaboration | comments = mapSuccess (\comments -> comments ++ [ comment ]) collaboration.comments }) model
-                |> (\updated ->
-                        { updated
-                            | replyDrafts = Dict.remove commentId model.replyDrafts
-                            , replyState = Success commentId comment
-                        }
-                   )
-            , Effect.none
-            )
-
-        ReplyFailed commentId error ->
-            ( { model | replyState = Failure commentId error }, Effect.none )
-
-        ChangedReviewBody body ->
-            ( { model | reviewBody = body, reviewSubmission = NotAsked }, Effect.none )
-
-        SubmittedReview event ->
-            ( { model | reviewSubmission = Loading event }
-            , Api.submitReview (reviewRequest model).pullUrl model.reviewBody event (ReviewSubmitted event) (ReviewSubmitFailed event)
-            )
-
-        ReviewSubmitted event response ->
-            ( { model | reviewSubmission = Success event response, reviewBody = "" }, Effect.none )
-
-        ReviewSubmitFailed event error ->
-            ( { model | reviewSubmission = Failure event error }, Effect.none )
-
-        OpenedInlineComposer path line side ->
-            ( { model | inlineComposer = Just { path = path, line = line, side = side, body = "" }, inlineSubmission = NotAsked }, Effect.none )
-
-        ChangedInlineBody body ->
-            ( { model | inlineComposer = Maybe.map (\composer -> { composer | body = body }) model.inlineComposer }, Effect.none )
-
-        CancelledInlineComposer ->
-            ( { model | inlineComposer = Nothing, inlineSubmission = NotAsked }, Effect.none )
-
-        SubmittedInlineComment ->
-            case ( readyReview model, model.inlineComposer ) of
-                ( Just reviewData, Just composer ) ->
-                    if String.trim composer.body == "" then
-                        unchanged model
-
-                    else
-                        ( { model | inlineSubmission = Loading composer.path }
-                        , Api.postInlineComment
-                            { pullUrl = (reviewRequest model).pullUrl
-                            , commitId = Review.backingHeadOid reviewData.backing
-                            , path = composer.path
-                            , line = composer.line
-                            , side = composer.side
-                            , body = composer.body
-                            }
-                            (InlineCommentLoaded composer.path)
-                            (InlineCommentFailed composer.path)
-                        )
-
-                _ ->
+            case reviewCollaboration model of
+                Nothing ->
                     unchanged model
 
-        InlineCommentLoaded path comment ->
-            ( mapCollaboration (\collaboration -> { collaboration | comments = mapSuccess (\comments -> comments ++ [ comment ]) collaboration.comments }) model
-                |> (\updated -> { updated | inlineComposer = Nothing, inlineSubmission = Success path comment })
-            , Effect.none
-            )
+                Just collaboration ->
+                    let
+                        ( updated, submission ) =
+                            Collaboration.beginReply commentId collaboration
 
-        InlineCommentFailed path error ->
-            ( { model | inlineSubmission = Failure path error }, Effect.none )
+                        effect =
+                            submission
+                                |> Maybe.map
+                                    (\current ->
+                                        Api.postReply current.pullUrl current.commentId current.body (ReplyLoaded current.request) (ReplyFailed current.request)
+                                    )
+                                |> Maybe.withDefault Effect.none
+                    in
+                    ( mapCollaboration (always updated) model, effect )
+
+        ReplyLoaded request comment ->
+            ( mapCollaboration (Collaboration.replyLoaded request comment) model, Effect.none )
+
+        ReplyFailed request error ->
+            ( mapCollaboration (Collaboration.replyFailed request error) model, Effect.none )
+
+        ChangedReviewBody body ->
+            ( mapCollaboration (Collaboration.changeReviewBody body) model, Effect.none )
+
+        SubmittedReview event ->
+            case reviewCollaboration model of
+                Nothing ->
+                    unchanged model
+
+                Just collaboration ->
+                    let
+                        ( updated, submission ) =
+                            Collaboration.beginReview event collaboration
+                    in
+                    ( mapCollaboration (always updated) model
+                    , Api.submitReview submission.pullUrl submission.body submission.event (ReviewSubmitted submission.request) (ReviewSubmitFailed submission.request)
+                    )
+
+        ReviewSubmitted request response ->
+            ( mapCollaboration (Collaboration.reviewLoaded request response) model, Effect.none )
+
+        ReviewSubmitFailed request error ->
+            ( mapCollaboration (Collaboration.reviewFailed request error) model, Effect.none )
+
+        OpenedInlineComposer path line side ->
+            ( mapCollaboration (Collaboration.openInline path line side) model, Effect.none )
+
+        ChangedInlineBody body ->
+            ( mapCollaboration (Collaboration.changeInlineBody body) model, Effect.none )
+
+        CancelledInlineComposer ->
+            ( mapCollaboration Collaboration.cancelInline model, Effect.none )
+
+        SubmittedInlineComment ->
+            case reviewCollaboration model of
+                Nothing ->
+                    unchanged model
+
+                Just collaboration ->
+                    let
+                        ( updated, submission ) =
+                            Collaboration.submitInline collaboration
+
+                        effect =
+                            submission
+                                |> Maybe.map
+                                    (\current ->
+                                        Api.postInlineComment
+                                            { pullUrl = current.pullUrl
+                                            , commitId = current.commitId
+                                            , path = current.path
+                                            , line = current.line
+                                            , side = current.side
+                                            , body = current.body
+                                            }
+                                            (InlineCommentLoaded current.request)
+                                            (InlineCommentFailed current.request)
+                                    )
+                                |> Maybe.withDefault Effect.none
+                    in
+                    ( mapCollaboration (always updated) model, effect )
+
+        InlineCommentLoaded request comment ->
+            ( mapCollaboration (Collaboration.inlineLoaded request comment) model, Effect.none )
+
+        InlineCommentFailed request error ->
+            ( mapCollaboration (Collaboration.inlineFailed request error) model, Effect.none )
 
         CheckedRevision ->
             revisionCheck model
 
         RevisionLoaded requested revision ->
-            if requested == (reviewRequest model).requestUrl then
-                ( mapCollaboration (\collaboration -> { collaboration | revision = Success requested revision }) model, Effect.none )
-
-            else
-                unchanged model
+            ( mapCollaboration (Collaboration.revisionLoaded requested revision) model, Effect.none )
 
         RevisionFailed requested error ->
-            if requested == (reviewRequest model).requestUrl then
-                ( mapCollaboration (\collaboration -> { collaboration | revision = Failure requested error }) model, Effect.none )
-
-            else
-                unchanged model
+            ( mapCollaboration (Collaboration.revisionFailed requested error) model, Effect.none )
 
         PollRevision _ ->
             revisionCheck model
@@ -729,24 +624,20 @@ reviewReady settings reviewData model =
         updatedLocation =
             { currentLocation | path = selectedPath }
 
+        sessionId =
+            Session.create request.requestUrl request.pullUrl (Review.backingHeadOid reviewData.backing)
+
         updated =
             { model
                 | review =
                     ReviewReady
                         { request = { request | location = updatedLocation }
+                        , session = sessionId
                         , document = reviewData
                         , files = FileIndex.fromChanges files
-                        , analysis = AnalysisDisabled
-                        , collaboration =
-                            { commits =
-                                if Route.isPullRequest request.location.target then
-                                    Loading request.pullUrl
-
-                                else
-                                    NotAsked
-                            , comments = NotAsked
-                            , revision = NotAsked
-                            }
+                        , analysis = Analysis.disabled
+                        , collaboration = Collaboration.init sessionId (Route.isPullRequest request.location.target)
+                        , diff = DiffView.init sessionId
                         }
             }
 
@@ -759,7 +650,7 @@ reviewReady settings reviewData model =
 
         commitsEffect =
             if Route.isPullRequest request.location.target then
-                Api.fetchCommits request.pullUrl (CommitsLoaded request.pullUrl) (CommitsFailed request.pullUrl)
+                Api.fetchCommits request.pullUrl (CommitsLoaded sessionId) (CommitsFailed sessionId)
 
             else
                 Effect.none
@@ -767,14 +658,19 @@ reviewReady settings reviewData model =
     let
         ( analyzing, analysisEffect ) =
             beginAnalysis settings updated
+
+        loadingCollaborativeData =
+            analyzing
+                |> beginCommentsIfNeeded settings
+                |> beginRevisionIfNeeded
     in
-    ( analyzing
+    ( loadingCollaborativeData
     , Effect.batch
         [ canonical
         , commitsEffect
         , analysisEffect
-        , commentsEffect settings analyzing
-        , revisionEffect analyzing
+        , commentsEffect settings loadingCollaborativeData
+        , revisionEffect loadingCollaborativeData
         ]
     )
 
@@ -787,76 +683,111 @@ beginAnalysis settings model =
 
         Just ready ->
             if not settings.semantic && settings.inlineDiffMode == InlineOff then
-                ( mapReady (\current -> { current | analysis = AnalysisDisabled, files = FileIndex.clearWordRanges current.files }) model
+                ( mapReady (\current -> { current | analysis = Analysis.disabled, files = FileIndex.clearWordRanges current.files }) model
                 , Effect.none
                 )
 
             else
                 let
                     identity =
-                        analysisIdentity settings model ready.document
+                        Analysis.identity
+                            ready.request.requestUrl
+                            (Review.backingBaseOid ready.document.backing)
+                            (Review.backingHeadOid ready.document.backing)
+                            settings.ignoreWhitespace
+                            settings.semantic
+                            settings.inlineDiffMode
                 in
-                ( mapReady (\current -> { current | analysis = AnalysisInFlight identity, files = FileIndex.clearWordRanges current.files }) model
+                ( mapReady (\current -> { current | analysis = Analysis.inFlight identity, files = FileIndex.clearWordRanges current.files }) model
                 , Api.fetchAnalysis ready.request.requestUrl
                     ready.document.backing
                     settings.ignoreWhitespace
                     settings.semantic
-                    identity.inlineDiff
+                    (Analysis.inlineDiff identity)
                     (AnalysisLoaded identity)
                     (AnalysisFailed identity)
                 )
 
 
-analysisIdentity : Settings -> Model -> ReviewDocument -> AnalysisIdentity
-analysisIdentity settings model reviewData =
-    { requestUrl = (reviewRequest model).requestUrl
-    , baseOid = Review.backingBaseOid reviewData.backing
-    , headOid = Review.backingHeadOid reviewData.backing
-    , ignoreWhitespace = settings.ignoreWhitespace
-    , semantic = settings.semantic
-    , inlineDiff = settings.inlineDiffMode
-    }
-
-
 commentsEffect : Settings -> Model -> Effect Msg
 commentsEffect settings model =
-    let
-        request =
-            reviewRequest model
-    in
-    if settings.showGitHubReviews && Route.isPullRequest request.location.target && request.location.commit == Nothing then
-        Api.fetchReviewComments request.pullUrl (CommentsLoaded request.pullUrl) (CommentsFailed request.pullUrl)
+    case readyState model of
+        Just ready ->
+            if shouldLoadComments settings ready.request then
+                Api.fetchReviewComments ready.request.pullUrl (CommentsLoaded ready.session) (CommentsFailed ready.session)
 
-    else
-        Effect.none
+            else
+                Effect.none
+
+        Nothing ->
+            Effect.none
 
 
 revisionEffect : Model -> Effect Msg
 revisionEffect model =
-    let
-        request =
-            reviewRequest model
-    in
-    case ( request.location.target, readyReview model ) of
-        ( PullRequest _ _ _, Just reviewData ) ->
-            Api.checkRevision request.requestUrl (Review.backingHeadOid reviewData.backing) (RevisionLoaded request.requestUrl) (RevisionFailed request.requestUrl)
+    case readyState model of
+        Just ready ->
+            case ready.request.location.target of
+                PullRequest _ _ _ ->
+                    Api.checkRevision ready.request.requestUrl (Review.backingHeadOid ready.document.backing) (RevisionLoaded ready.session) (RevisionFailed ready.session)
 
-        _ ->
+                _ ->
+                    Effect.none
+
+        Nothing ->
             Effect.none
 
 
 revisionCheck : Model -> ( Model, Effect Msg )
 revisionCheck model =
-    let
-        request =
-            reviewRequest model
-    in
-    case ( request.location.target, readyReview model ) of
-        ( PullRequest _ _ _, Just _ ) ->
-            ( mapCollaboration (\collaboration -> { collaboration | revision = Loading request.requestUrl }) model, revisionEffect model )
+    case readyState model of
+        Just ready ->
+            case ready.request.location.target of
+                PullRequest _ _ _ ->
+                    let
+                        updated =
+                            mapCollaboration Collaboration.beginRevision model
+                    in
+                    ( updated, revisionEffect updated )
 
-        _ ->
+                _ ->
+                    unchanged model
+
+        Nothing ->
             unchanged model
+
+
+shouldLoadComments : Settings -> ReviewRequest -> Bool
+shouldLoadComments settings request =
+    settings.showGitHubReviews && Route.isPullRequest request.location.target && request.location.commit == Nothing
+
+
+beginCommentsIfNeeded : Settings -> Model -> Model
+beginCommentsIfNeeded settings model =
+    case readyState model of
+        Just ready ->
+            if shouldLoadComments settings ready.request then
+                mapCollaboration Collaboration.beginComments model
+
+            else
+                model
+
+        Nothing ->
+            model
+
+
+beginRevisionIfNeeded : Model -> Model
+beginRevisionIfNeeded model =
+    case readyState model of
+        Just ready ->
+            if Route.isPullRequest ready.request.location.target then
+                mapCollaboration Collaboration.beginRevision model
+
+            else
+                model
+
+        Nothing ->
+            model
 
 
 settingsIntent : Settings -> Msg -> Maybe Settings
@@ -925,8 +856,14 @@ visibleFiles settings model =
 matchesFilter : Model -> FileChange -> Bool
 matchesFilter model file =
     let
+        diff =
+            reviewDiff model
+
+        filter =
+            diff |> Maybe.map DiffView.filter |> Maybe.withDefault ""
+
         query =
-            String.toLower (String.trim model.filter)
+            String.toLower (String.trim filter)
 
         haystack =
             String.toLower (file.path ++ "\n" ++ file.patch)
@@ -935,14 +872,14 @@ matchesFilter model file =
         True
 
     else
-        case model.filterMode of
+        case diff |> Maybe.map DiffView.filterMode |> Maybe.withDefault Literal of
             Literal ->
                 String.contains query haystack
 
             Regex ->
                 -- Invalid regular expressions intentionally match nothing; the
                 -- search control remains a pure view of this typed branch.
-                Regex.fromString model.filter
+                Regex.fromString filter
                     |> Maybe.map (\expression -> Regex.contains expression (file.path ++ "\n" ++ file.patch))
                     |> Maybe.withDefault False
 
@@ -1020,7 +957,7 @@ reviewHeader model reviewData =
 
         revision =
             reviewCollaboration model
-                |> Maybe.map .revision
+                |> Maybe.map Collaboration.revision
                 |> Maybe.withDefault NotAsked
     in
     header [ class "review-header" ]
@@ -1058,7 +995,7 @@ metric amount description extra =
     div [ class ("review-metric " ++ extra) ] [ strong [] [ text amount ], span [] [ text description ] ]
 
 
-revisionNotice : Remote String ApiError Revision -> Html Msg
+revisionNotice : Remote Session.Id ApiError Revision -> Html Msg
 revisionNotice revision =
     case revision of
         Success _ value ->
@@ -1088,6 +1025,15 @@ reviewToolbar settings model =
     let
         currentLocation =
             (reviewRequest model).location
+
+        diff =
+            reviewDiff model
+
+        filterMode =
+            diff |> Maybe.map DiffView.filterMode |> Maybe.withDefault Literal
+
+        filter =
+            diff |> Maybe.map DiffView.filter |> Maybe.withDefault ""
     in
     section
         [ class "compact-review-toolbar" ]
@@ -1102,10 +1048,10 @@ reviewToolbar settings model =
         , label [ class "review-search" ]
             [ span [] [ text "⌕" ]
             , select [ onInput (searchModeFromString >> SelectedSearchMode) ]
-                [ option [ value "literal", selected (model.filterMode == Literal) ] [ text "Text" ]
-                , option [ value "regex", selected (model.filterMode == Regex) ] [ text "Regex" ]
+                [ option [ value "literal", selected (filterMode == Literal) ] [ text "Text" ]
+                , option [ value "regex", selected (filterMode == Regex) ] [ text "Regex" ]
                 ]
-            , input [ type_ "search", attribute "aria-label" "Search this change", placeholder "Search this change", value model.filter, onInput ChangedFilter ] []
+            , input [ type_ "search", attribute "aria-label" "Search this change", placeholder "Search this change", value filter, onInput ChangedFilter ] []
             ]
         , div [ class "diff-options" ]
             [ select [ attribute "aria-label" "Diff scope", onInput (scopeFromString >> SelectedScope) ]
@@ -1225,7 +1171,9 @@ reviewTreeNode model depth tree =
         Folder name path children ->
             let
                 collapsed =
-                    Set.member path model.collapsedFolders
+                    reviewDiff model
+                        |> Maybe.map (DiffView.isFolderCollapsed path)
+                        |> Maybe.withDefault False
             in
             div [ class "file-tree-folder" ]
                 [ button
@@ -1260,7 +1208,9 @@ reviewTreeNode model depth tree =
                     Maybe.withDefault "" (reviewRequest model).location.path
 
                 reviewed =
-                    Set.member file.path model.reviewedFiles
+                    reviewDiff model
+                        |> Maybe.map (DiffView.isReviewed file.path)
+                        |> Maybe.withDefault False
             in
             button
                 [ type_ "button"
@@ -1286,12 +1236,19 @@ fileDiff : Settings -> Model -> FileChange -> Html Msg
 fileDiff settings model file =
     let
         collapsed =
-            Set.member file.path model.collapsedFiles
+            reviewDiff model
+                |> Maybe.map (DiffView.isFileCollapsed file.path)
+                |> Maybe.withDefault False
 
         fullFile =
-            Dict.get file.path model.fullFiles
+            reviewDiff model |> Maybe.andThen (DiffView.fullFile file.path)
+
+        reviewed =
+            reviewDiff model
+                |> Maybe.map (DiffView.isReviewed file.path)
+                |> Maybe.withDefault False
     in
-    article [ class ("diff-panel" ++ activeClass (Set.member file.path model.reviewedFiles)), id (fileAnchor file.path) ]
+    article [ class ("diff-panel" ++ activeClass reviewed), id (fileAnchor file.path) ]
         [ header [ class "diff-file-header" ]
             [ button [ type_ "button", class "file-header-main", onClick (ToggledFile file.path) ]
                 [ span [ class "file-collapse" ]
@@ -1326,7 +1283,7 @@ fileDiff settings model file =
                 , a [ href (githubFileUrl model file), attribute "title" "Open on GitHub" ] [ text "↗" ]
                 , button [ type_ "button", onClick (ToggledReviewed file.path) ]
                     [ text
-                        (if Set.member file.path model.reviewedFiles then
+                        (if reviewed then
                             "Reviewed"
 
                          else
@@ -1371,19 +1328,19 @@ semanticSummary settings model file =
 
     else
         case reviewAnalysis model of
-            AnalysisInFlight _ ->
+            Analysis.InFlight _ ->
                 div [ class "semantic-banner is-loading" ] [ span [ class "loading-spinner" ] [], text "Analyzing syntax tree…" ]
 
-            AnalysisFailure _ error ->
+            Analysis.Failure _ error ->
                 div [ class "semantic-banner is-error" ] [ text (ApiError.message error) ]
 
-            AnalysisComplete _ snapshot ->
+            Analysis.Complete _ snapshot ->
                 snapshot.files
                     |> Dict.get file.path
                     |> Maybe.map (.semantic >> semanticFeatureView)
                     |> Maybe.withDefault (text "")
 
-            AnalysisDisabled ->
+            Analysis.Disabled ->
                 text ""
 
 
@@ -1473,11 +1430,10 @@ patchDiff settings model file =
 hunkView : Settings -> Model -> FileChange -> Hunk -> Html Msg
 hunkView settings model file hunk =
     let
-        key =
-            file.path ++ ":" ++ hunk.id
-
         collapsed =
-            Set.member key model.collapsedHunks
+            reviewDiff model
+                |> Maybe.map (DiffView.isHunkCollapsed file.path hunk.id)
+                |> Maybe.withDefault False
     in
     section [ class "diff-hunk" ]
         [ button [ type_ "button", class "hunk-header", onClick (ToggledHunk file.path hunk.id) ]
@@ -1593,7 +1549,7 @@ moveDecoration model path side lineNumber =
 
         move =
             case reviewAnalysis model of
-                AnalysisComplete _ snapshot ->
+                Analysis.Complete _ snapshot ->
                     List.filter (SemanticMove.containsLine path lineNumber endpoint) snapshot.moves |> List.head
 
                 _ ->
@@ -1735,7 +1691,9 @@ threadView : Model -> List ReviewComment -> ReviewComment -> Html Msg
 threadView model comments root =
     let
         collapsed =
-            Set.member root.rootId model.collapsedThreads
+            reviewCollaboration model
+                |> Maybe.map (Collaboration.isThreadCollapsed root.rootId)
+                |> Maybe.withDefault False
 
         replies =
             List.filter (\comment -> comment.rootId == root.rootId && comment.id /= root.id) comments
@@ -1791,16 +1749,43 @@ commentBody _ comment =
 
 replyComposer : Model -> Int -> Html Msg
 replyComposer model commentId =
+    let
+        collaboration =
+            reviewCollaboration model
+
+        draft =
+            collaboration
+                |> Maybe.map (Collaboration.replyDraft commentId)
+                |> Maybe.withDefault ""
+
+        loading =
+            collaboration
+                |> Maybe.map (Collaboration.replyLoading commentId)
+                |> Maybe.withDefault False
+
+        error =
+            collaboration |> Maybe.andThen (Collaboration.replyError commentId)
+    in
     form [ class "review-reply-composer", onSubmit (SubmittedReply commentId) ]
-        [ textarea [ placeholder "Reply on GitHub…", value (Dict.get commentId model.replyDrafts |> Maybe.withDefault ""), onInput (ChangedReply commentId) ] []
-        , button [ type_ "submit", disabled (isRemoteLoading commentId model.replyState) ] [ text "Reply" ]
-        , remoteError commentId model.replyState
+        [ textarea [ placeholder "Reply on GitHub…", value draft, onInput (ChangedReply commentId) ] []
+        , button [ type_ "submit", disabled loading ] [ text "Reply" ]
+        , apiErrorView error
         ]
 
 
 inlineComposerFor : Model -> String -> Html Msg
 inlineComposerFor model path =
-    case model.inlineComposer of
+    case reviewCollaboration model of
+        Nothing ->
+            text ""
+
+        Just collaboration ->
+            inlineComposerView collaboration path
+
+
+inlineComposerView : Collaboration.Model -> String -> Html Msg
+inlineComposerView collaboration path =
+    case Collaboration.inlineComposer collaboration of
         Just composer ->
             if composer.path /= path then
                 text ""
@@ -1811,9 +1796,9 @@ inlineComposerFor model path =
                     , textarea [ id ("inline-comment-" ++ fileAnchor path), placeholder "Leave a review comment on GitHub…", value composer.body, onInput ChangedInlineBody ] []
                     , div []
                         [ button [ type_ "button", onClick CancelledInlineComposer ] [ text "Cancel" ]
-                        , button [ type_ "submit", disabled (remoteIsLoading model.inlineSubmission) ] [ text "Add comment" ]
+                        , button [ type_ "submit", disabled (Collaboration.inlineLoading collaboration) ] [ text "Add comment" ]
                         ]
-                    , remoteAnyError model.inlineSubmission
+                    , apiErrorView (Collaboration.inlineError collaboration)
                     ]
 
         Nothing ->
@@ -1862,16 +1847,21 @@ commitRow commit =
 
 reviewComposer : Model -> Html Msg
 reviewComposer model =
-    form [ class "github-review-composer" ]
-        [ h2 [] [ text "Submit review" ]
-        , textarea [ placeholder "Leave an overall review…", value model.reviewBody, onInput ChangedReviewBody ] []
-        , div []
-            [ button [ type_ "button", onClick (SubmittedReview "COMMENT") ] [ text "Comment" ]
-            , button [ type_ "button", onClick (SubmittedReview "APPROVE") ] [ text "Approve" ]
-            , button [ type_ "button", onClick (SubmittedReview "REQUEST_CHANGES") ] [ text "Request changes" ]
-            ]
-        , remoteAnyError model.reviewSubmission
-        ]
+    case reviewCollaboration model of
+        Nothing ->
+            text ""
+
+        Just collaboration ->
+            form [ class "github-review-composer" ]
+                [ h2 [] [ text "Submit review" ]
+                , textarea [ placeholder "Leave an overall review…", value (Collaboration.reviewBody collaboration), onInput ChangedReviewBody ] []
+                , div []
+                    [ button [ type_ "button", onClick (SubmittedReview "COMMENT") ] [ text "Comment" ]
+                    , button [ type_ "button", onClick (SubmittedReview "APPROVE") ] [ text "Approve" ]
+                    , button [ type_ "button", onClick (SubmittedReview "REQUEST_CHANGES") ] [ text "Request changes" ]
+                    ]
+                , apiErrorView (Collaboration.reviewError collaboration)
+                ]
 
 
 fullFileDiff : Settings -> Model -> FileChange -> FullFile -> Html Msg
@@ -2027,67 +2017,11 @@ activeClass active =
         ""
 
 
-toggleSet : comparable -> Set comparable -> Set comparable
-toggleSet item set =
-    if Set.member item set then
-        Set.remove item set
-
-    else
-        Set.insert item set
-
-
-mapSuccess : (value -> value) -> Remote identity error value -> Remote identity error value
-mapSuccess transform remote =
-    case remote of
-        Success identity value ->
-            Success identity (transform value)
-
-        _ ->
-            remote
-
-
-remoteIsLoading : Remote identity error value -> Bool
-remoteIsLoading remote =
-    case remote of
-        Loading _ ->
-            True
-
-        _ ->
-            False
-
-
-isRemoteLoading : comparable -> Remote comparable error value -> Bool
-isRemoteLoading identity remote =
-    case remote of
-        Loading current ->
-            current == identity
-
-        _ ->
-            False
-
-
-remoteError : comparable -> Remote comparable ApiError value -> Html msg
-remoteError identity remote =
-    case remote of
-        Failure current error ->
-            if current == identity then
-                span [ class "form-error" ] [ text (ApiError.message error) ]
-
-            else
-                text ""
-
-        _ ->
-            text ""
-
-
-remoteAnyError : Remote identity ApiError value -> Html msg
-remoteAnyError remote =
-    case remote of
-        Failure _ error ->
-            span [ class "form-error" ] [ text (ApiError.message error) ]
-
-        _ ->
-            text ""
+apiErrorView : Maybe ApiError -> Html msg
+apiErrorView maybeError =
+    maybeError
+        |> Maybe.map (ApiError.message >> text >> List.singleton >> span [ class "form-error" ])
+        |> Maybe.withDefault (text "")
 
 
 pageState : String -> Html msg
