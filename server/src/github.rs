@@ -160,11 +160,16 @@ impl GitHub {
     pub async fn new() -> AppResult<Self> {
         let token = match env::var("GITHUB_TOKEN").or_else(|_| env::var("GH_TOKEN")) {
             Ok(value) if !value.trim().is_empty() => Some(value.trim().to_owned()),
-            _ => command::checked("gh", &["auth", "token"], None)
-                .await
-                .ok()
-                .map(|value| value.trim().to_owned())
-                .filter(|value| !value.is_empty()),
+            _ => match command::checked("gh", &["auth", "token"], None).await {
+                Ok(value) => Some(value.trim().to_owned()).filter(|value| !value.is_empty()),
+                Err(error) => {
+                    tracing::warn!(
+                        reason = %error,
+                        "GitHub authentication is unavailable; public repositories remain accessible"
+                    );
+                    None
+                }
+            },
         };
         let client = reqwest::Client::builder()
             .user_agent("hunker-diff-reviewer")

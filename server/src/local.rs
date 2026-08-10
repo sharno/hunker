@@ -151,11 +151,11 @@ impl Local {
                     .and_then(|value| value.to_str())
                     .unwrap_or("local")
                     .to_owned();
-                let remote = command::git(&path, &["config", "--get", "remote.origin.url"])
-                    .await
-                    .unwrap_or_default();
-                let (owner, name) =
-                    parse_github_remote(&remote).unwrap_or((fallback_owner, fallback_name));
+                let remote = command::git_config(&path, &["--get", "remote.origin.url"]).await?;
+                let (owner, name) = remote
+                    .as_deref()
+                    .and_then(parse_github_remote)
+                    .unwrap_or((fallback_owner, fallback_name));
                 unique
                     .entry(format!("{owner}/{name}").to_lowercase())
                     .or_insert(LocalRepositorySummary {
@@ -176,7 +176,7 @@ impl Local {
     pub async fn list_files(&self, repository: &RepositorySlug) -> AppResult<Vec<RepositoryFile>> {
         let root = self.repository_path(repository).await?;
         let raw = command::git(&root, &["ls-files", "-co", "--exclude-standard", "-z"]).await?;
-        let statuses = file_statuses(&root).await.unwrap_or_default();
+        let statuses = file_statuses(&root).await?;
         let mut files = Vec::new();
         for relative in raw
             .split('\0')
@@ -371,8 +371,8 @@ impl Local {
             git_action(&root, &["switch", "--", branch]).await?;
         } else {
             let refspec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
-            let configured = command::git(&root, &["config", "--get-all", "remote.origin.fetch"])
-                .await
+            let configured = command::git_config(&root, &["--get-all", "remote.origin.fetch"])
+                .await?
                 .unwrap_or_default();
             if !configured.lines().any(|line| line == refspec) {
                 git_action(&root, &["config", "--add", "remote.origin.fetch", &refspec]).await?;
@@ -417,7 +417,7 @@ impl Local {
         .await?
         .trim()
         .parse()
-        .unwrap_or(0);
+        .map_err(|_| AppError::upstream("Git returned an invalid pulled commit count."))?;
         Ok(PullResult {
             pulled_commits: pulled,
         })
@@ -427,11 +427,19 @@ impl Local {
         if !valid_oid(oid) {
             return Ok(false);
         }
-        Ok(
-            git_result(path, &["cat-file", "-e", &format!("{oid}^{{commit}}")])
-                .await?
-                .0,
-        )
+        let (present, output, _) =
+            git_result(path, &["cat-file", "-e", &format!("{oid}^{{commit}}")]).await?;
+        if present {
+            Ok(true)
+        } else if output.contains("Not a valid object name") {
+            Ok(false)
+        } else {
+            Err(AppError::upstream(if output.trim().is_empty() {
+                format!("Git could not inspect object {oid}.")
+            } else {
+                output.trim().to_owned()
+            }))
+        }
     }
 
     async fn shallow(path: &Path) -> AppResult<bool> {
@@ -484,7 +492,7 @@ impl Local {
         let mut base_present = Self::has_object(&repository.path, base).await?;
         let mut head_present = Self::has_object(&repository.path, head).await?;
         if let Some(number) = pull.filter(|_| !base_present || !head_present) {
-            let _ = self.fetch_pull(&repository, number, true).await;
+            self.fetch_pull(&repository, number, true).await?;
         }
         base_present = Self::has_object(&repository.path, base).await?;
         head_present = Self::has_object(&repository.path, head).await?;
@@ -495,7 +503,7 @@ impl Local {
                     args.push("--depth=1");
                 }
                 args.extend(["origin", oid]);
-                let _ = command::git(&repository.path, &args).await;
+                command::git(&repository.path, &args).await?;
             }
         }
         if Self::has_object(&repository.path, base).await?
@@ -503,7 +511,9 @@ impl Local {
         {
             Ok(Some(repository))
         } else {
-            Ok(None)
+            Err(AppError::upstream(
+                "Local Git could not materialize the requested immutable revision.",
+            ))
         }
     }
 
@@ -956,8 +966,7 @@ async fn text_search(root: &Path, query: &str, mode: &str) -> AppResult<SearchRe
         &["--files", "--hidden", "--glob", "!.git"],
         Some(root),
     )
-    .await
-    .unwrap_or_default();
+    .await?;
     let mut files = Vec::new();
     for path in all_files
         .lines()
@@ -1176,6 +1185,22 @@ fn parse_repository_commits(raw: &str) -> Vec<RepositoryCommit> {
         .collect()
 }
 
+fn parse_ahead_behind(raw: &str) -> AppResult<(usize, usize)> {
+    let values = raw.split_whitespace().collect::<Vec<_>>();
+    let [ahead, behind] = values.as_slice() else {
+        return Err(AppError::upstream(
+            "Git returned an invalid ahead/behind count.",
+        ));
+    };
+    let ahead = ahead
+        .parse()
+        .map_err(|_| AppError::upstream("Git returned an invalid ahead count."))?;
+    let behind = behind
+        .parse()
+        .map_err(|_| AppError::upstream("Git returned an invalid behind count."))?;
+    Ok((ahead, behind))
+}
+
 async fn inspect_source_control(root: &Path, refresh: bool) -> AppResult<SourceControlStatus> {
     let checked_at = now_ms();
     let remote = if refresh {
@@ -1217,8 +1242,7 @@ async fn inspect_source_control(root: &Path, refresh: bool) -> AppResult<SourceC
             "refs/remotes/origin",
         ],
     )
-    .await
-    .unwrap_or_default();
+    .await?;
     let remote_names = remote_raw
         .lines()
         .filter_map(|line| line.strip_prefix("origin/"))
@@ -1248,8 +1272,7 @@ async fn inspect_source_control(root: &Path, refresh: bool) -> AppResult<SourceC
                 &format!("refs/heads/{name}"),
             ],
         )
-        .await
-        .unwrap_or_default()
+        .await?
         .trim()
         .to_owned();
         if upstream.is_empty() {
@@ -1259,17 +1282,14 @@ async fn inspect_source_control(root: &Path, refresh: bool) -> AppResult<SourceC
                 root,
                 &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
             )
-            .await
-            .unwrap_or_default();
-            let mut values = counts
-                .split_whitespace()
-                .filter_map(|value| value.parse::<usize>().ok());
+            .await?;
+            let (ahead, behind) = parse_ahead_behind(&counts)?;
             Checkout::TrackingBranch {
                 name,
                 oid,
                 upstream,
-                ahead: values.next().unwrap_or(0),
-                behind: values.next().unwrap_or(0),
+                ahead,
+                behind,
             }
         }
     } else {
@@ -1486,5 +1506,14 @@ mod tests {
             ),
             Some("Subproject commit de2a9a69099993087e57c64df58537c765ac0224\n".to_owned())
         );
+    }
+
+    #[test]
+    fn rejects_missing_or_malformed_ahead_behind_counts() {
+        assert_eq!(parse_ahead_behind("2 7").unwrap(), (2, 7));
+        assert!(parse_ahead_behind("").is_err());
+        assert!(parse_ahead_behind("2").is_err());
+        assert!(parse_ahead_behind("two 7").is_err());
+        assert!(parse_ahead_behind("2 7 9").is_err());
     }
 }
