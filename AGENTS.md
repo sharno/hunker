@@ -26,6 +26,9 @@
   replace them with one type that makes the invalid combination unrepresentable.
 - A ready review owns one opaque ordered file index. Do not keep parallel file
   lists, prepared-patch dictionaries, or sentinel copies in the page model.
+- A ready review also owns one immutable `Hunker.Review.Session.Id`. Full-file,
+  collaboration, and analysis requests must carry that identity through their
+  opaque feature modules so a response started on one PR cannot mutate another.
 - Main exclusively owns settings and serializes/coalesces persistence. Pages
   emit settings-change intents; they do not issue `/api/settings` requests or
   cache an independent settings document.
@@ -39,6 +42,9 @@
 - A repository page owns exactly one active `RepositoryView`. Route changes and
   clone completion reconstruct that view with named request identities so late
   file, search, commit, or pull responses cannot populate a different tab.
+- Keep repository file/search, pull-list, and source-control transitions in
+  `Hunker.Repository.*`; the page coordinates effects and routing instead of
+  rebuilding those state machines as one flat record.
 
 ## Elm UI and tests
 
@@ -76,6 +82,10 @@
 
 - Keep the backend in `server/`, using typed Serde request/response structs and
   `AppError` at boundaries. Do not recover types with ad hoc JSON probing.
+- Group Axum transport handlers by feature under `server/src/api`. Keep local
+  object reads and checkout mutations in separate `local` modules; mutation
+  commands surface Git refusal as conflicts and never participate in review
+  rendering.
 - `server/build.rs` compiles optimized Elm and Tailwind into `OUT_DIR`;
   `server/src/frontend.rs` embeds them. `bun install` is a prerequisite for a
   Cargo build.

@@ -8,7 +8,6 @@ use std::{
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
-use tokio::{io::AsyncWriteExt, process::Command};
 use walkdir::WalkDir;
 
 use fff_search::{
@@ -27,6 +26,9 @@ use crate::{
 const MAX_FILE_CHARACTERS: usize = 500_000;
 const FETCH_INTERVAL_MS: u64 = 120_000;
 const DEEPEN_STEPS: [usize; 4] = [32, 128, 512, 2_048];
+
+mod mutations;
+mod objects;
 
 #[derive(Clone, Default)]
 pub struct Local {
@@ -63,22 +65,6 @@ async fn git_result(path: &Path, args: &[&str]) -> AppResult<(bool, String, i32)
         text,
         output.status.code().unwrap_or(-1),
     ))
-}
-
-async fn git_action(path: &Path, args: &[&str]) -> AppResult<String> {
-    let (succeeded, output, exit_code) = git_result(path, args).await?;
-    if succeeded {
-        Ok(output)
-    } else {
-        Err(AppError::conflict(if output.trim().is_empty() {
-            format!(
-                "Git {} refused the operation with status {exit_code}.",
-                args.first().copied().unwrap_or("command")
-            )
-        } else {
-            output.trim().to_owned()
-        }))
-    }
 }
 
 impl Local {
@@ -359,68 +345,13 @@ impl Local {
     ) -> AppResult<SourceControlStatus> {
         let (root, lock) = self.lock_for(repository).await?;
         let _guard = lock.lock().await;
-        git_action(&root, &["check-ref-format", "--branch", branch]).await?;
-        let current = inspect_source_control(&root, true).await?;
-        let target = current
-            .branches
-            .iter()
-            .find(|candidate| candidate.name == branch)
-            .cloned()
-            .ok_or_else(|| AppError::not_found(format!("Branch {branch} was not found.")))?;
-        if target.local {
-            git_action(&root, &["switch", "--", branch]).await?;
-        } else {
-            let refspec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
-            let configured = command::git_config(&root, &["--get-all", "remote.origin.fetch"])
-                .await?
-                .unwrap_or_default();
-            if !configured.lines().any(|line| line == refspec) {
-                git_action(&root, &["config", "--add", "remote.origin.fetch", &refspec]).await?;
-            }
-            let remote_ref = format!("refs/heads/{branch}:refs/remotes/origin/{branch}");
-            git_action(&root, &["fetch", "origin", &remote_ref, "--depth=1"]).await?;
-            let origin = format!("origin/{branch}");
-            git_action(&root, &["switch", "--track", "-c", branch, "--", &origin]).await?;
-        }
-        inspect_source_control(&root, false).await
+        mutations::switch_branch(&root, branch).await
     }
 
     pub async fn pull(&self, repository: &RepositorySlug) -> AppResult<PullResult> {
         let (root, lock) = self.lock_for(repository).await?;
         let _guard = lock.lock().await;
-        let current = inspect_source_control(&root, true).await?;
-        let (behind, before) = match &current.checkout {
-            Checkout::DetachedHead { .. } => {
-                return Err(AppError::conflict(
-                    "Cannot pull while HEAD is detached. Switch to a branch first.",
-                ));
-            }
-            Checkout::UntrackedBranch { name, .. } => {
-                return Err(AppError::conflict(format!(
-                    "Branch {name} does not track a remote branch."
-                )));
-            }
-            Checkout::TrackingBranch { behind, oid, .. } => (*behind, oid.clone()),
-        };
-        if behind == 0 {
-            return Ok(PullResult { pulled_commits: 0 });
-        }
-        git_action(&root, &["pull", "--ff-only"]).await?;
-        let after = command::git(&root, &["rev-parse", "HEAD"])
-            .await?
-            .trim()
-            .to_owned();
-        let pulled = command::git(
-            &root,
-            &["rev-list", "--count", &format!("{before}..{after}")],
-        )
-        .await?
-        .trim()
-        .parse()
-        .map_err(|_| AppError::upstream("Git returned an invalid pulled commit count."))?;
-        Ok(PullResult {
-            pulled_commits: pulled,
-        })
+        mutations::pull(&root).await
     }
 
     async fn has_object(path: &Path, oid: &str) -> AppResult<bool> {
@@ -605,14 +536,14 @@ impl Local {
         let mut objects = Vec::new();
         let mut positions = Vec::with_capacity(files.len());
         for file in files {
-            validate_git_path(&file.path)?;
+            objects::validate_git_path(&file.path)?;
             if let Some(previous_path) = &file.previous_path {
-                validate_git_path(previous_path)?;
+                objects::validate_git_path(previous_path)?;
             }
             let old_path = file.previous_path.as_deref().unwrap_or(&file.path);
             let old = if file.status == FileStatus::Added {
                 ContentSource::Empty
-            } else if let Some(text) = gitlink_text(&file.patch, '-') {
+            } else if let Some(text) = objects::gitlink_text(&file.patch, '-') {
                 ContentSource::Inline(text)
             } else {
                 let position = objects.len();
@@ -621,7 +552,7 @@ impl Local {
             };
             let new = if file.status == FileStatus::Deleted {
                 ContentSource::Empty
-            } else if let Some(text) = gitlink_text(&file.patch, '+') {
+            } else if let Some(text) = objects::gitlink_text(&file.patch, '+') {
                 ContentSource::Inline(text)
             } else {
                 let position = objects.len();
@@ -630,7 +561,7 @@ impl Local {
             };
             positions.push((old, new));
         }
-        let contents = cat_file_batch(&repository.path, &objects).await?;
+        let contents = objects::cat_file_batch(&repository.path, &objects).await?;
         let pairs = files
             .iter()
             .zip(positions)
@@ -778,106 +709,6 @@ impl Local {
             checked_at,
         }))
     }
-}
-
-fn gitlink_text(patch: &str, marker: char) -> Option<String> {
-    let prefix = format!("{marker}Subproject commit ");
-    patch
-        .lines()
-        .find_map(|line| line.strip_prefix(&prefix))
-        .map(|oid| format!("Subproject commit {oid}\n"))
-}
-
-fn validate_git_path(path: &str) -> AppResult<()> {
-    if path.is_empty()
-        || path.starts_with('/')
-        || path.contains(['\0', '\n', '\r'])
-        || Path::new(path)
-            .components()
-            .any(|component| matches!(component, Component::ParentDir))
-    {
-        Err(AppError::bad_request("That file path is not valid."))
-    } else {
-        Ok(())
-    }
-}
-
-async fn cat_file_batch(repository: &Path, objects: &[String]) -> AppResult<Vec<String>> {
-    if objects.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut child = Command::new("git")
-        .args(["cat-file", "--batch"])
-        .current_dir(repository)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|error| AppError::upstream(format!("Could not start git cat-file: {error}")))?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| AppError::internal("git cat-file did not expose stdin."))?;
-    for object in objects {
-        stdin
-            .write_all(object.as_bytes())
-            .await
-            .map_err(|error| AppError::upstream(format!("Could not query Git objects: {error}")))?;
-        stdin
-            .write_all(b"\n")
-            .await
-            .map_err(|error| AppError::upstream(format!("Could not query Git objects: {error}")))?;
-    }
-    drop(stdin);
-    let output = child
-        .wait_with_output()
-        .await
-        .map_err(|error| AppError::upstream(format!("Could not read Git objects: {error}")))?;
-    if !output.status.success() {
-        return Err(AppError::upstream(
-            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-        ));
-    }
-    parse_cat_file_batch(&output.stdout, objects)
-}
-
-fn parse_cat_file_batch(output: &[u8], objects: &[String]) -> AppResult<Vec<String>> {
-    let mut cursor = 0;
-    let mut values = Vec::with_capacity(objects.len());
-    for object in objects {
-        let header_end = output[cursor..]
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .map(|position| cursor + position)
-            .ok_or_else(|| AppError::upstream("git cat-file returned an incomplete header."))?;
-        let header = std::str::from_utf8(&output[cursor..header_end])
-            .map_err(|_| AppError::upstream("git cat-file returned an invalid header."))?;
-        if header.ends_with(" missing") {
-            return Err(AppError::not_found(format!(
-                "Git object {object} was not found."
-            )));
-        }
-        let size = header
-            .rsplit_once(' ')
-            .and_then(|(_, size)| size.parse::<usize>().ok())
-            .ok_or_else(|| AppError::upstream("git cat-file returned an invalid object size."))?;
-        let content_start = header_end + 1;
-        let content_end = content_start
-            .checked_add(size)
-            .filter(|end| *end < output.len())
-            .ok_or_else(|| AppError::upstream("git cat-file returned an incomplete object."))?;
-        if output[content_end] != b'\n' {
-            return Err(AppError::upstream(
-                "git cat-file returned an invalid object boundary.",
-            ));
-        }
-        values.push(
-            String::from_utf8(output[content_start..content_end].to_vec())
-                .map_err(|_| AppError::upstream("Git returned a non-text file."))?,
-        );
-        cursor = content_end + 1;
-    }
-    Ok(values)
 }
 
 fn repository_directories(root: &Path) -> Vec<PathBuf> {
@@ -1484,27 +1315,6 @@ mod tests {
         assert_eq!(
             parse_github_remote("https://github.com/acme/demo"),
             Some(("acme".to_owned(), "demo".to_owned()))
-        );
-    }
-
-    #[test]
-    fn parses_batched_git_objects_without_losing_embedded_newlines() {
-        let objects = vec!["base:a.txt".to_owned(), "head:a.txt".to_owned()];
-        let output = b"1111111111111111111111111111111111111111 blob 5\nhello\n2222222222222222222222222222222222222222 blob 6\nworld\n\n";
-        assert_eq!(
-            parse_cat_file_batch(output, &objects).unwrap(),
-            vec!["hello".to_owned(), "world\n".to_owned()]
-        );
-    }
-
-    #[test]
-    fn reads_gitlink_revisions_from_the_superproject_patch() {
-        assert_eq!(
-            gitlink_text(
-                "@@ -1 +0,0 @@\n-Subproject commit de2a9a69099993087e57c64df58537c765ac0224",
-                '-'
-            ),
-            Some("Subproject commit de2a9a69099993087e57c64df58537c765ac0224\n".to_owned())
         );
     }
 
