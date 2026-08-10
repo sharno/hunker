@@ -19,6 +19,9 @@ import Hunker.Domain.Repository as Repository exposing (Checkout(..), Commit, Fi
 import Hunker.Effect as Effect exposing (Effect)
 import Hunker.FileTree as FileTree exposing (Tree(..))
 import Hunker.Remote as Remote exposing (Remote(..))
+import Hunker.Repository.Files as RepositoryFiles
+import Hunker.Repository.Pulls as RepositoryPulls
+import Hunker.Repository.SourceControl as SourceControl
 import Hunker.Route as Route exposing (PullRequestState(..), RepositoryTab(..), SearchMode(..))
 import Hunker.Syntax as Syntax
 import Set exposing (Set)
@@ -36,8 +39,8 @@ type alias Model =
 
 
 type RepositoryState
-    = RepositoryLoading RepositoryRequest RepositoryView SourceControl
-    | RepositoryFailed RepositoryRequest ApiError RepositoryView SourceControl CloneState
+    = RepositoryLoading RepositoryRequest RepositoryView SourceControl.State
+    | RepositoryFailed RepositoryRequest ApiError RepositoryView SourceControl.State CloneState
     | RepositoryReady ReadyRepository
 
 
@@ -49,39 +52,14 @@ type alias ReadyRepository =
     { request : RepositoryRequest
     , files : List File
     , view : RepositoryView
-    , sourceControl : SourceControl
+    , sourceControl : SourceControl.State
     }
 
 
 type RepositoryView
-    = Files FilesState
+    = Files RepositoryFiles.Model
     | Commits (Remote RepositoryRequest ApiError Repository.Commits)
-    | PullRequests PullRequestsState
-
-
-type alias FilesState =
-    { selectedFile : Remote FileRequest ApiError FileContent
-    , search : Remote SearchRequest ApiError SearchResults
-    }
-
-
-type FileRequest
-    = FileRequest String String
-
-
-type SearchRequest
-    = SearchRequest String String SearchMode
-
-
-type PullRequestIdentity
-    = PullRequestIdentity String PullRequestState Int
-
-
-type alias PullRequestsState =
-    { request : Remote PullRequestIdentity ApiError PullRequestsPage
-    , rows : List Repository.PullRequest
-    , hasMore : Bool
-    }
+    | PullRequests RepositoryPulls.Model
 
 
 type CloneState
@@ -94,39 +72,17 @@ type CloneRequest
     = CloneRequest String String
 
 
-type SourceControl
-    = SourceLoading String
-    | SourceUnavailable String ApiError
-    | SourceReady SourceSnapshot
-
-
-type alias SourceSnapshot =
-    { repository : String
-    , status : SourceControlStatus
-    , activity : SourceActivity
-    }
-
-
-type SourceActivity
-    = SourceIdle
-    | SourceRefreshing
-    | BranchSwitching String
-    | PullInFlight
-    | PullSynchronizing Int
-    | SourceSucceeded String
-
-
 type Msg
     = FilesLoaded String (List File)
     | FilesFailed String ApiError
-    | FileLoaded FileRequest FileContent
-    | FileFailed FileRequest ApiError
-    | SearchLoaded SearchRequest SearchResults
-    | SearchFailed SearchRequest ApiError
+    | FileLoaded RepositoryFiles.FileRequest FileContent
+    | FileFailed RepositoryFiles.FileRequest ApiError
+    | SearchLoaded RepositoryFiles.SearchRequest SearchResults
+    | SearchFailed RepositoryFiles.SearchRequest ApiError
     | CommitsLoaded RepositoryRequest Repository.Commits
     | CommitsFailed RepositoryRequest ApiError
-    | PullsLoaded PullRequestIdentity PullRequestsPage
-    | PullsFailed PullRequestIdentity ApiError
+    | PullsLoaded RepositoryPulls.Identity PullRequestsPage
+    | PullsFailed RepositoryPulls.Identity ApiError
     | SourceLoaded String SourceControlStatus
     | PullCompleted String Int
     | PullStatusLoaded String Int SourceControlStatus
@@ -165,7 +121,7 @@ init location =
 
         model =
             { location = location
-            , repository = RepositoryLoading request viewState (SourceLoading name)
+            , repository = RepositoryLoading request viewState (SourceControl.Loading name)
             , collapsedFolders = Set.empty
             , searchDraft = location.query
             , searchMode = location.searchMode
@@ -184,31 +140,13 @@ initialView : String -> Route.RepositoryLocation -> RepositoryView
 initialView name location =
     case location.tab of
         RepositoryFiles ->
-            Files
-                { selectedFile =
-                    case location.path of
-                        Just path ->
-                            Loading (FileRequest name path)
-
-                        Nothing ->
-                            NotAsked
-                , search =
-                    if location.query == "" then
-                        NotAsked
-
-                    else
-                        Loading (SearchRequest name location.query location.searchMode)
-                }
+            Files (RepositoryFiles.init name location.path location.query location.searchMode)
 
         RepositoryCommits ->
             Commits (Loading (RepositoryRequest name))
 
         RepositoryPulls ->
-            PullRequests
-                { request = Loading (PullRequestIdentity name location.pullState 1)
-                , rows = []
-                , hasMore = False
-                }
+            PullRequests (RepositoryPulls.init name location.pullState)
 
 
 loadView : RepositoryView -> Effect Msg
@@ -216,15 +154,20 @@ loadView viewState =
     case viewState of
         Files files ->
             Effect.batch
-                [ case files.selectedFile of
-                    Loading (FileRequest name path) ->
-                        Api.fetchRepositoryFile name path (FileLoaded (FileRequest name path)) (FileFailed (FileRequest name path))
+                [ case RepositoryFiles.selectedFile files of
+                    Loading request ->
+                        Api.fetchRepositoryFile (RepositoryFiles.fileRepository request) (RepositoryFiles.filePath request) (FileLoaded request) (FileFailed request)
 
                     _ ->
                         Effect.none
-                , case files.search of
-                    Loading (SearchRequest name query mode) ->
-                        Api.searchRepository name query (Route.searchModeToString mode) (SearchLoaded (SearchRequest name query mode)) (SearchFailed (SearchRequest name query mode))
+                , case RepositoryFiles.search files of
+                    Loading request ->
+                        Api.searchRepository
+                            (RepositoryFiles.searchRepository request)
+                            (RepositoryFiles.searchQuery request)
+                            (Route.searchModeToString (RepositoryFiles.searchMode request))
+                            (SearchLoaded request)
+                            (SearchFailed request)
 
                     _ ->
                         Effect.none
@@ -237,7 +180,7 @@ loadView viewState =
             Effect.none
 
         PullRequests pulls ->
-            case pulls.request of
+            case RepositoryPulls.request pulls of
                 Loading request ->
                     loadPullRequests request
 
@@ -245,15 +188,14 @@ loadView viewState =
                     Effect.none
 
 
-loadPullRequests : PullRequestIdentity -> Effect Msg
+loadPullRequests : RepositoryPulls.Identity -> Effect Msg
 loadPullRequests request =
-    case request of
-        PullRequestIdentity name pullState page ->
-            Api.fetchRepositoryPulls name
-                (Route.pullRequestStateToString pullState)
-                page
-                (PullsLoaded request)
-                (PullsFailed request)
+    Api.fetchRepositoryPulls
+        (RepositoryPulls.identityRepository request)
+        (Route.pullRequestStateToString (RepositoryPulls.identityState request))
+        (RepositoryPulls.identityPage request)
+        (PullsLoaded request)
+        (PullsFailed request)
 
 
 navigate : Route.RepositoryLocation -> Model -> ( Model, Effect Msg )
@@ -350,7 +292,7 @@ mapRepositoryView transform state =
             RepositoryReady { ready | view = transform ready.view }
 
 
-repositorySourceControl : RepositoryState -> SourceControl
+repositorySourceControl : RepositoryState -> SourceControl.State
 repositorySourceControl state =
     case state of
         RepositoryLoading _ _ source ->
@@ -363,7 +305,7 @@ repositorySourceControl state =
             ready.sourceControl
 
 
-withSourceControl : SourceControl -> RepositoryState -> RepositoryState
+withSourceControl : SourceControl.State -> RepositoryState -> RepositoryState
 withSourceControl source state =
     case state of
         RepositoryLoading request current _ ->
@@ -376,7 +318,7 @@ withSourceControl source state =
             RepositoryReady { ready | sourceControl = source }
 
 
-mapFilesView : (FilesState -> FilesState) -> RepositoryState -> RepositoryState
+mapFilesView : (RepositoryFiles.Model -> RepositoryFiles.Model) -> RepositoryState -> RepositoryState
 mapFilesView transform =
     mapRepositoryView
         (\current ->
@@ -402,7 +344,7 @@ mapCommitsView transform =
         )
 
 
-mapPullsView : (PullRequestsState -> PullRequestsState) -> RepositoryState -> RepositoryState
+mapPullsView : (RepositoryPulls.Model -> RepositoryPulls.Model) -> RepositoryState -> RepositoryState
 mapPullsView transform =
     mapRepositoryView
         (\current ->
@@ -415,50 +357,9 @@ mapPullsView transform =
         )
 
 
-currentFileRequest : Model -> FileRequest
-currentFileRequest model =
-    FileRequest (repositoryName model) (Maybe.withDefault "" model.location.path)
-
-
-currentSearchRequest : Model -> SearchRequest
-currentSearchRequest model =
-    SearchRequest (repositoryName model) model.location.query model.location.searchMode
-
-
-currentPullRequest : Model -> Int -> PullRequestIdentity
-currentPullRequest model page =
-    PullRequestIdentity (repositoryName model) model.location.pullState page
-
-
-pullPage : Remote PullRequestIdentity error value -> Int
-pullPage remote =
-    case remote of
-        Loading (PullRequestIdentity _ _ page) ->
-            page
-
-        Failure (PullRequestIdentity _ _ page) _ ->
-            page
-
-        Success (PullRequestIdentity _ _ page) _ ->
-            page
-
-        NotAsked ->
-            0
-
-
 cloneRequestRepository : CloneRequest -> String
 cloneRequestRepository (CloneRequest name _) =
     name
-
-
-isActivePullRequest : PullRequestIdentity -> RepositoryState -> Bool
-isActivePullRequest request state =
-    case repositoryView state of
-        PullRequests pulls ->
-            Remote.identity pulls.request == Just request
-
-        _ ->
-            False
 
 
 subscriptions : Model -> Sub Msg
@@ -534,32 +435,16 @@ update msg model =
                 unchanged model
 
         FileLoaded request file ->
-            if request == currentFileRequest model then
-                ( { model | repository = mapFilesView (\files -> { files | selectedFile = Success request file }) model.repository }, Effect.none )
-
-            else
-                unchanged model
+            ( { model | repository = mapFilesView (RepositoryFiles.fileLoaded request file) model.repository }, Effect.none )
 
         FileFailed request error ->
-            if request == currentFileRequest model then
-                ( { model | repository = mapFilesView (\files -> { files | selectedFile = Failure request error }) model.repository }, Effect.none )
-
-            else
-                unchanged model
+            ( { model | repository = mapFilesView (RepositoryFiles.fileFailed request error) model.repository }, Effect.none )
 
         SearchLoaded request results ->
-            if request == currentSearchRequest model then
-                ( { model | repository = mapFilesView (\files -> { files | search = Success request results }) model.repository }, Effect.none )
-
-            else
-                unchanged model
+            ( { model | repository = mapFilesView (RepositoryFiles.searchLoaded request results) model.repository }, Effect.none )
 
         SearchFailed request error ->
-            if request == currentSearchRequest model then
-                ( { model | repository = mapFilesView (\files -> { files | search = Failure request error }) model.repository }, Effect.none )
-
-            else
-                unchanged model
+            ( { model | repository = mapFilesView (RepositoryFiles.searchFailed request error) model.repository }, Effect.none )
 
         CommitsLoaded requested commits ->
             if repositoryRequestName requested == repositoryName model then
@@ -576,45 +461,20 @@ update msg model =
                 unchanged model
 
         PullsLoaded request page ->
-            if not (isActivePullRequest request model.repository) then
-                unchanged model
-
-            else
-                ( { model
-                    | repository =
-                        mapPullsView
-                            (\pulls ->
-                                { request = Success request page
-                                , rows =
-                                    if page.page == 1 then
-                                        page.pullRequests
-
-                                    else
-                                        pulls.rows ++ page.pullRequests
-                                , hasMore = page.hasMore
-                                }
-                            )
-                            model.repository
-                  }
-                , Effect.none
-                )
+            ( { model | repository = mapPullsView (RepositoryPulls.loaded request page) model.repository }, Effect.none )
 
         PullsFailed request error ->
-            if isActivePullRequest request model.repository then
-                ( { model | repository = mapPullsView (\pulls -> { pulls | request = Failure request error }) model.repository }, Effect.none )
-
-            else
-                unchanged model
+            ( { model | repository = mapPullsView (RepositoryPulls.failed request error) model.repository }, Effect.none )
 
         SourceLoaded requested status ->
             if requested == repositoryName model then
                 ( { model
                     | repository =
                         withSourceControl
-                            (SourceReady
+                            (SourceControl.Ready
                                 { repository = requested
                                 , status = status
-                                , activity = SourceIdle
+                                , activity = SourceControl.Idle
                                 }
                             )
                             model.repository
@@ -631,7 +491,7 @@ update msg model =
                     ( { model
                         | repository =
                             withSourceControl
-                                (SourceReady { source | activity = PullSynchronizing count })
+                                (SourceControl.Ready { source | activity = SourceControl.PullSynchronizing count })
                                 model.repository
                       }
                     , Api.refreshSourceControl requested
@@ -644,10 +504,10 @@ update msg model =
                 ( { model
                     | repository =
                         withSourceControl
-                            (SourceReady
+                            (SourceControl.Ready
                                 { repository = requested
                                 , status = status
-                                , activity = SourceSucceeded (pulledMessage count)
+                                , activity = SourceControl.Succeeded (SourceControl.pulledMessage count)
                                 }
                             )
                             model.repository
@@ -663,7 +523,7 @@ update msg model =
                 ( { model
                     | repository =
                         withSourceControl
-                            (SourceUnavailable requested
+                            (SourceControl.Unavailable requested
                                 (ApiError.context "The pull completed, but Git status could not be refreshed. " error)
                             )
                             model.repository
@@ -676,7 +536,7 @@ update msg model =
 
         SourceFailed requested error ->
             if requested == repositoryName model then
-                ( { model | repository = withSourceControl (SourceUnavailable requested error) model.repository }, Effect.none )
+                ( { model | repository = withSourceControl (SourceControl.Unavailable requested error) model.repository }, Effect.none )
 
             else
                 unchanged model
@@ -698,7 +558,7 @@ update msg model =
                 in
                 ( { model
                     | repository =
-                        RepositoryLoading requestIdentity nextView (SourceLoading name)
+                        RepositoryLoading requestIdentity nextView (SourceControl.Loading name)
                   }
                 , Effect.batch
                     [ Api.fetchRepositoryFiles name (FilesLoaded name) (FilesFailed name)
@@ -755,16 +615,14 @@ update msg model =
         RequestedMorePulls ->
             case repositoryView model.repository of
                 PullRequests pulls ->
-                    let
-                        page =
-                            pullPage pulls.request + 1
+                    case RepositoryPulls.more pulls of
+                        Just ( updated, request ) ->
+                            ( { model | repository = mapPullsView (always updated) model.repository }
+                            , loadPullRequests request
+                            )
 
-                        request =
-                            currentPullRequest model page
-                    in
-                    ( { model | repository = mapPullsView (\current -> { current | request = Loading request }) model.repository }
-                    , loadPullRequests request
-                    )
+                        Nothing ->
+                            unchanged model
 
                 _ ->
                     unchanged model
@@ -776,11 +634,11 @@ update msg model =
             in
             updateReadySource name model <|
                 \source ->
-                    if sourceBusy source.activity then
+                    if SourceControl.busy source.activity then
                         unchanged model
 
                     else
-                        ( { model | repository = withSourceControl (SourceReady { source | activity = BranchSwitching branch }) model.repository }
+                        ( { model | repository = withSourceControl (SourceControl.Ready { source | activity = SourceControl.BranchSwitching branch }) model.repository }
                         , Api.switchBranch name branch (SourceLoaded name) (SourceFailed name)
                         )
 
@@ -794,11 +652,11 @@ update msg model =
             in
             updateReadySource name model <|
                 \source ->
-                    if sourceBusy source.activity || not (sourceCanPull source.status) then
+                    if SourceControl.busy source.activity || not (SourceControl.canPull source.status) then
                         unchanged model
 
                     else
-                        ( { model | repository = withSourceControl (SourceReady { source | activity = PullInFlight }) model.repository }
+                        ( { model | repository = withSourceControl (SourceControl.Ready { source | activity = SourceControl.PullInFlight }) model.repository }
                         , Api.pullRepository name (PullCompleted name) (SourceFailed name)
                         )
 
@@ -839,28 +697,28 @@ refreshSource model =
             repositoryName model
     in
     case repositorySourceControl model.repository of
-        SourceReady source ->
-            if sourceBusy source.activity then
+        SourceControl.Ready source ->
+            if SourceControl.busy source.activity then
                 unchanged model
 
             else
-                ( { model | repository = withSourceControl (SourceReady { source | activity = SourceRefreshing }) model.repository }
+                ( { model | repository = withSourceControl (SourceControl.Ready { source | activity = SourceControl.Refreshing }) model.repository }
                 , Api.refreshSourceControl name (SourceLoaded name) (SourceFailed name)
                 )
 
-        SourceUnavailable requested _ ->
-            ( { model | repository = withSourceControl (SourceLoading requested) model.repository }
+        SourceControl.Unavailable requested _ ->
+            ( { model | repository = withSourceControl (SourceControl.Loading requested) model.repository }
             , Api.refreshSourceControl name (SourceLoaded name) (SourceFailed name)
             )
 
-        SourceLoading _ ->
+        SourceControl.Loading _ ->
             unchanged model
 
 
-updateReadySource : String -> Model -> (SourceSnapshot -> ( Model, Effect Msg )) -> ( Model, Effect Msg )
+updateReadySource : String -> Model -> (SourceControl.Snapshot -> ( Model, Effect Msg )) -> ( Model, Effect Msg )
 updateReadySource requested model updateSource =
     case repositorySourceControl model.repository of
-        SourceReady source ->
+        SourceControl.Ready source ->
             if source.repository == requested then
                 updateSource source
 
@@ -869,50 +727,6 @@ updateReadySource requested model updateSource =
 
         _ ->
             unchanged model
-
-
-sourceBusy : SourceActivity -> Bool
-sourceBusy activity =
-    case activity of
-        SourceRefreshing ->
-            True
-
-        BranchSwitching _ ->
-            True
-
-        PullInFlight ->
-            True
-
-        PullSynchronizing _ ->
-            True
-
-        SourceIdle ->
-            False
-
-        SourceSucceeded _ ->
-            False
-
-
-sourceCanPull : SourceControlStatus -> Bool
-sourceCanPull status =
-    case status.checkout of
-        TrackingBranch checkout ->
-            checkout.behind > 0
-
-        UntrackedBranch _ ->
-            False
-
-        DetachedHead _ ->
-            False
-
-
-pulledMessage : Int -> String
-pulledMessage count =
-    if count == 1 then
-        "Pulled 1 commit."
-
-    else
-        "Pulled " ++ String.fromInt count ++ " commits."
 
 
 unchanged : Model -> ( Model, Effect Msg )
@@ -1024,21 +838,21 @@ view syntaxHighlighting model =
 sourceControlView : Model -> Html Msg
 sourceControlView model =
     case repositorySourceControl model.repository of
-        SourceLoading _ ->
+        SourceControl.Loading _ ->
             section [ class "repository-source-control", attribute "role" "status" ]
                 [ span [ class "source-control-loading" ] [ text "Reading Git state…" ] ]
 
-        SourceUnavailable _ error ->
+        SourceControl.Unavailable _ error ->
             section [ class "repository-source-control" ]
                 [ span [ class "source-control-feedback is-error", attribute "role" "alert" ] [ text (ApiError.message error) ]
                 , button [ type_ "button", onClick RequestedSourceRefresh ] [ text "Retry" ]
                 ]
 
-        SourceReady source ->
+        SourceControl.Ready source ->
             sourceReady source
 
 
-sourceReady : SourceSnapshot -> Html Msg
+sourceReady : SourceControl.Snapshot -> Html Msg
 sourceReady source =
     let
         status =
@@ -1056,7 +870,7 @@ sourceReady source =
                     { branch = "", ahead = 0, behind = 0, canPull = False }
 
         busy =
-            sourceBusy source.activity
+            SourceControl.busy source.activity
     in
     section [ class "repository-source-control" ]
         [ label [ class "source-control-branch" ]
@@ -1113,11 +927,11 @@ sourceReady source =
         , button [ type_ "button", class "source-control-pull", disabled (busy || not branchState.canPull), onClick RequestedPull ]
             [ text
                 (case source.activity of
-                    PullInFlight ->
+                    SourceControl.PullInFlight ->
                         "Pulling…"
 
-                    PullSynchronizing count ->
-                        pulledMessage count ++ " Refreshing status…"
+                    SourceControl.PullSynchronizing count ->
+                        SourceControl.pulledMessage count ++ " Refreshing status…"
 
                     _ ->
                         if branchState.behind > 0 then
@@ -1130,10 +944,10 @@ sourceReady source =
         ]
 
 
-sourceFeedback : SourceActivity -> String -> Html Msg
+sourceFeedback : SourceControl.Activity -> String -> Html Msg
 sourceFeedback action path =
     case action of
-        SourceSucceeded message ->
+        SourceControl.Succeeded message ->
             span [ class "source-control-feedback is-success" ] [ text message ]
 
         _ ->
@@ -1246,9 +1060,9 @@ leafCount forest =
         )
 
 
-repositoryFileView : Bool -> Model -> FilesState -> Html Msg
+repositoryFileView : Bool -> Model -> RepositoryFiles.Model -> Html Msg
 repositoryFileView syntaxHighlighting model files =
-    case files.selectedFile of
+    case RepositoryFiles.selectedFile files of
         Loading _ ->
             pageState ("Opening " ++ Maybe.withDefault "file" model.location.path ++ "…") ""
 
@@ -1293,9 +1107,9 @@ repositoryFileView syntaxHighlighting model files =
             text ""
 
 
-repositorySearchView : Model -> FilesState -> Html Msg
+repositorySearchView : Model -> RepositoryFiles.Model -> Html Msg
 repositorySearchView model files =
-    case files.search of
+    case RepositoryFiles.search files of
         Loading _ ->
             pageState ("Searching for “" ++ model.location.query ++ "”…") (searchDescription model.location.searchMode)
 
@@ -1408,16 +1222,16 @@ pullsView model =
                     , div [ class "segmented repository-pull-filters" ]
                         (List.map (pullFilter model.location.pullState) [ OpenPulls, ClosedPulls, AllPulls ])
                     ]
-                , case pulls.request of
+                , case RepositoryPulls.request pulls of
                     Loading _ ->
-                        if List.isEmpty pulls.rows then
+                        if List.isEmpty (RepositoryPulls.rows pulls) then
                             pageState "Loading pull requests…" "Reading pull requests through your GitHub login."
 
                         else
                             pullRowsView model pulls True
 
                     Failure _ error ->
-                        if List.isEmpty pulls.rows then
+                        if List.isEmpty (RepositoryPulls.rows pulls) then
                             section [ class "page-state is-error" ] [ h1 [] [ text "Could not load pull requests" ], p [] [ text (ApiError.message error) ] ]
 
                         else
@@ -1451,11 +1265,11 @@ pullFilter active state =
         ]
 
 
-pullRowsView : Model -> PullRequestsState -> Bool -> Html Msg
+pullRowsView : Model -> RepositoryPulls.Model -> Bool -> Html Msg
 pullRowsView model pulls loading =
     div [ class "repository-pull-list" ]
-        (List.map (pullRow model) pulls.rows
-            ++ (if pulls.hasMore then
+        (List.map (pullRow model) (RepositoryPulls.rows pulls)
+            ++ (if RepositoryPulls.hasMore pulls then
                     [ button [ type_ "button", class "repository-pull-load-more", disabled loading, onClick RequestedMorePulls ]
                         [ text
                             (if loading then

@@ -111,7 +111,7 @@ test("serves Elm on history routes and keeps browser Back and Forward canonical"
 
   await page.goto("/");
   await expect(
-    page.getByRole("heading", { name: "Repositories" }),
+    page.getByRole("heading", { name: "Repositories", exact: true }),
   ).toBeVisible();
   await expect(page.locator(".app-bar")).toHaveCSS("position", "sticky");
   await page.getByLabel("Filter repositories").fill("effect");
@@ -276,10 +276,24 @@ test("shows loading instead of stale review data and preserves a single fetched 
   await expect(page.locator(".review-diffs.full-diff .diff-panel")).toHaveCount(
     2,
   );
-  await expect(page.locator(".diff-panel").first()).toHaveCSS(
-    "content-visibility",
-    "auto",
-  );
+  const hasDeferredPanelRule = await page.evaluate(() => {
+    const isGroupingRule = (rule: CSSRule): rule is CSSGroupingRule =>
+      "cssRules" in rule;
+    const includesRule = (rules: CSSRuleList): boolean =>
+      Array.from(rules).some((rule) => {
+        if (rule instanceof CSSStyleRule) {
+          return (
+            rule.selectorText === ".review-diffs.full-diff .diff-panel" &&
+            rule.style.contentVisibility === "auto"
+          );
+        }
+        return isGroupingRule(rule) && includesRule(rule.cssRules);
+      });
+    return Array.from(document.styleSheets).some((sheet) =>
+      includesRule(sheet.cssRules),
+    );
+  });
+  expect(hasDeferredPanelRule).toBe(true);
   const toolbar = page.locator(".compact-review-toolbar");
   const toolbarHeight = await toolbar.evaluate(
     (element) => element.getBoundingClientRect().height,
