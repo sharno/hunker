@@ -327,7 +327,11 @@ test("does not poll mutable revision state for an immutable commit", async ({
     return route.fulfill({
       status: 400,
       contentType: "application/json",
-      json: { error: "Immutable commits do not have a latest revision." },
+      json: {
+        code: "bad_request",
+        message: "Immutable commits do not have a latest revision.",
+        retryable: false,
+      },
     });
   });
 

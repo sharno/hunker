@@ -4,6 +4,7 @@ import Html exposing (Html, a, div, h1, header, input, main_, p, section, span, 
 import Html.Attributes exposing (class, href, placeholder, type_, value)
 import Html.Events exposing (onInput)
 import Hunker.Api as Api
+import Hunker.ApiError as ApiError exposing (ApiError)
 import Hunker.Domain.Repository exposing (Repository, RepositoryCatalog)
 import Hunker.Effect exposing (Effect)
 import Hunker.Remote as Remote exposing (Remote(..))
@@ -11,7 +12,7 @@ import Url
 
 
 type alias Model =
-    { repositories : Remote () String RepositoryCatalog
+    { repositories : Remote () ApiError RepositoryCatalog
     , query : String
     }
 
@@ -19,7 +20,7 @@ type alias Model =
 type Msg
     = ChangedQuery String
     | Loaded RepositoryCatalog
-    | Failed String
+    | Failed ApiError
 
 
 init : ( Model, Effect Msg )
@@ -75,7 +76,7 @@ repositoriesView model =
 
         Failure _ error ->
             section [ class "page-state is-error", Html.Attributes.attribute "role" "alert" ]
-                [ h1 [] [ text "Could not list repositories" ], p [] [ text error ] ]
+                [ h1 [] [ text "Could not list repositories" ], p [] [ text (ApiError.message error) ] ]
 
         Success _ catalog ->
             let

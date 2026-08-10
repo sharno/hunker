@@ -14,10 +14,11 @@ import Html exposing (Html, a, aside, button, code, div, form, h1, h2, header, i
 import Html.Attributes exposing (attribute, class, disabled, href, id, placeholder, selected, src, title, type_, value)
 import Html.Events exposing (onClick, onInput, onSubmit)
 import Hunker.Api as Api
+import Hunker.ApiError as ApiError exposing (ApiError)
 import Hunker.Domain.Repository as Repository exposing (Checkout(..), Commit, File, FileContent, PullRequest, PullRequestsPage, SearchResults, SourceControlStatus)
 import Hunker.Effect as Effect exposing (Effect)
 import Hunker.FileTree as FileTree exposing (Tree(..))
-import Hunker.Remote exposing (Remote(..))
+import Hunker.Remote as Remote exposing (Remote(..))
 import Hunker.Route as Route exposing (PullRequestState(..), RepositoryTab(..), SearchMode(..))
 import Hunker.Syntax as Syntax
 import Set exposing (Set)
@@ -27,24 +28,75 @@ import Url
 
 type alias Model =
     { location : Route.RepositoryLocation
-    , files : Remote String String (List File)
-    , selectedFile : Remote ( String, String ) String FileContent
-    , search : Remote ( String, String, SearchMode ) String SearchResults
-    , commits : Remote String String Repository.Commits
-    , pulls : Remote ( String, PullRequestState, Int ) String PullRequestsPage
-    , pullRows : List PullRequest
-    , pullHasMore : Bool
-    , sourceControl : SourceControl
-    , clone : Remote ( String, String ) String String
+    , repository : RepositoryState
     , collapsedFolders : Set String
     , searchDraft : String
     , searchMode : SearchMode
     }
 
 
+type RepositoryState
+    = RepositoryLoading RepositoryRequest RepositoryView SourceControl
+    | RepositoryFailed RepositoryRequest ApiError RepositoryView SourceControl CloneState
+    | RepositoryReady ReadyRepository
+
+
+type RepositoryRequest
+    = RepositoryRequest String
+
+
+type alias ReadyRepository =
+    { request : RepositoryRequest
+    , files : List File
+    , view : RepositoryView
+    , sourceControl : SourceControl
+    }
+
+
+type RepositoryView
+    = Files FilesState
+    | Commits (Remote RepositoryRequest ApiError Repository.Commits)
+    | PullRequests PullRequestsState
+
+
+type alias FilesState =
+    { selectedFile : Remote FileRequest ApiError FileContent
+    , search : Remote SearchRequest ApiError SearchResults
+    }
+
+
+type FileRequest
+    = FileRequest String String
+
+
+type SearchRequest
+    = SearchRequest String String SearchMode
+
+
+type PullRequestIdentity
+    = PullRequestIdentity String PullRequestState Int
+
+
+type alias PullRequestsState =
+    { request : Remote PullRequestIdentity ApiError PullRequestsPage
+    , rows : List Repository.PullRequest
+    , hasMore : Bool
+    }
+
+
+type CloneState
+    = CloneIdle
+    | CloneInFlight CloneRequest
+    | CloneFailure CloneRequest ApiError
+
+
+type CloneRequest
+    = CloneRequest String String
+
+
 type SourceControl
     = SourceLoading String
-    | SourceUnavailable String String
+    | SourceUnavailable String ApiError
     | SourceReady SourceSnapshot
 
 
@@ -66,22 +118,22 @@ type SourceActivity
 
 type Msg
     = FilesLoaded String (List File)
-    | FilesFailed String String
-    | FileLoaded ( String, String ) FileContent
-    | FileFailed ( String, String ) String
-    | SearchLoaded ( String, String, SearchMode ) SearchResults
-    | SearchFailed ( String, String, SearchMode ) String
-    | CommitsLoaded String Repository.Commits
-    | CommitsFailed String String
-    | PullsLoaded ( String, PullRequestState, Int ) PullRequestsPage
-    | PullsFailed ( String, PullRequestState, Int ) String
+    | FilesFailed String ApiError
+    | FileLoaded FileRequest FileContent
+    | FileFailed FileRequest ApiError
+    | SearchLoaded SearchRequest SearchResults
+    | SearchFailed SearchRequest ApiError
+    | CommitsLoaded RepositoryRequest Repository.Commits
+    | CommitsFailed RepositoryRequest ApiError
+    | PullsLoaded PullRequestIdentity PullRequestsPage
+    | PullsFailed PullRequestIdentity ApiError
     | SourceLoaded String SourceControlStatus
     | PullCompleted String Int
     | PullStatusLoaded String Int SourceControlStatus
-    | PullStatusFailed String String
-    | SourceFailed String String
-    | CloneLoaded ( String, String ) String
-    | CloneFailed ( String, String ) String
+    | PullStatusFailed String ApiError
+    | SourceFailed String ApiError
+    | CloneLoaded CloneRequest String
+    | CloneFailed CloneRequest ApiError
     | ChangedSearch String
     | SelectedSearchMode SearchMode
     | SubmittedSearch
@@ -105,38 +157,15 @@ init location =
         name =
             location.owner ++ "/" ++ location.repository
 
+        request =
+            RepositoryRequest name
+
+        viewState =
+            initialView name location
+
         model =
             { location = location
-            , files = Loading name
-            , selectedFile =
-                case location.path of
-                    Just path ->
-                        Loading ( name, path )
-
-                    Nothing ->
-                        NotAsked
-            , search =
-                if location.query == "" then
-                    NotAsked
-
-                else
-                    Loading ( name, location.query, location.searchMode )
-            , commits =
-                if location.tab == RepositoryCommits then
-                    Loading name
-
-                else
-                    NotAsked
-            , pulls =
-                if location.tab == RepositoryPulls then
-                    Loading ( name, location.pullState, 1 )
-
-                else
-                    NotAsked
-            , pullRows = []
-            , pullHasMore = False
-            , sourceControl = SourceLoading name
-            , clone = NotAsked
+            , repository = RepositoryLoading request viewState (SourceLoading name)
             , collapsedFolders = Set.empty
             , searchDraft = location.query
             , searchMode = location.searchMode
@@ -145,38 +174,86 @@ init location =
         effects =
             [ Api.fetchRepositoryFiles name (FilesLoaded name) (FilesFailed name)
             , Api.refreshSourceControl name (SourceLoaded name) (SourceFailed name)
-            , case location.path of
-                Just path ->
-                    Api.fetchRepositoryFile name path (FileLoaded ( name, path )) (FileFailed ( name, path ))
-
-                Nothing ->
-                    Effect.none
-            , if location.query == "" then
-                Effect.none
-
-              else
-                Api.searchRepository name
-                    location.query
-                    (Route.searchModeToString location.searchMode)
-                    (SearchLoaded ( name, location.query, location.searchMode ))
-                    (SearchFailed ( name, location.query, location.searchMode ))
-            , if location.tab == RepositoryCommits then
-                Api.fetchRepositoryCommits name (CommitsLoaded name) (CommitsFailed name)
-
-              else
-                Effect.none
-            , if location.tab == RepositoryPulls then
-                Api.fetchRepositoryPulls name
-                    (Route.pullRequestStateToString location.pullState)
-                    1
-                    (PullsLoaded ( name, location.pullState, 1 ))
-                    (PullsFailed ( name, location.pullState, 1 ))
-
-              else
-                Effect.none
+            , loadView viewState
             ]
     in
     ( model, Effect.batch effects )
+
+
+initialView : String -> Route.RepositoryLocation -> RepositoryView
+initialView name location =
+    case location.tab of
+        RepositoryFiles ->
+            Files
+                { selectedFile =
+                    case location.path of
+                        Just path ->
+                            Loading (FileRequest name path)
+
+                        Nothing ->
+                            NotAsked
+                , search =
+                    if location.query == "" then
+                        NotAsked
+
+                    else
+                        Loading (SearchRequest name location.query location.searchMode)
+                }
+
+        RepositoryCommits ->
+            Commits (Loading (RepositoryRequest name))
+
+        RepositoryPulls ->
+            PullRequests
+                { request = Loading (PullRequestIdentity name location.pullState 1)
+                , rows = []
+                , hasMore = False
+                }
+
+
+loadView : RepositoryView -> Effect Msg
+loadView viewState =
+    case viewState of
+        Files files ->
+            Effect.batch
+                [ case files.selectedFile of
+                    Loading (FileRequest name path) ->
+                        Api.fetchRepositoryFile name path (FileLoaded (FileRequest name path)) (FileFailed (FileRequest name path))
+
+                    _ ->
+                        Effect.none
+                , case files.search of
+                    Loading (SearchRequest name query mode) ->
+                        Api.searchRepository name query (Route.searchModeToString mode) (SearchLoaded (SearchRequest name query mode)) (SearchFailed (SearchRequest name query mode))
+
+                    _ ->
+                        Effect.none
+                ]
+
+        Commits (Loading request) ->
+            Api.fetchRepositoryCommits (repositoryRequestName request) (CommitsLoaded request) (CommitsFailed request)
+
+        Commits _ ->
+            Effect.none
+
+        PullRequests pulls ->
+            case pulls.request of
+                Loading request ->
+                    loadPullRequests request
+
+                _ ->
+                    Effect.none
+
+
+loadPullRequests : PullRequestIdentity -> Effect Msg
+loadPullRequests request =
+    case request of
+        PullRequestIdentity name pullState page ->
+            Api.fetchRepositoryPulls name
+                (Route.pullRequestStateToString pullState)
+                page
+                (PullsLoaded request)
+                (PullsFailed request)
 
 
 navigate : Route.RepositoryLocation -> Model -> ( Model, Effect Msg )
@@ -195,152 +272,29 @@ navigate nextLocation model =
 
 navigateWithinRepository : Route.RepositoryLocation -> Model -> ( Model, Effect Msg )
 navigateWithinRepository nextLocation model =
-    let
-        name =
-            repositoryName model
+    if nextLocation == model.location then
+        unchanged model
 
-        fileChanged =
-            nextLocation.path /= model.location.path
-
-        searchChanged =
-            nextLocation.query
-                /= model.location.query
-                || nextLocation.searchMode
-                /= model.location.searchMode
-
-        pullsChanged =
-            nextLocation.pullState /= model.location.pullState
-
-        loadCommits =
-            nextLocation.tab
-                == RepositoryCommits
-                && (case model.commits of
-                        NotAsked ->
-                            True
-
-                        _ ->
-                            False
-                   )
-
-        loadPulls =
-            nextLocation.tab
-                == RepositoryPulls
-                && (pullsChanged
-                        || (case model.pulls of
-                                NotAsked ->
-                                    True
-
-                                _ ->
-                                    False
-                           )
-                   )
-
-        selectedFile =
-            if not fileChanged then
-                model.selectedFile
-
-            else
-                case nextLocation.path of
-                    Just path ->
-                        Loading ( name, path )
-
-                    Nothing ->
-                        NotAsked
-
-        search =
-            if not searchChanged then
-                model.search
-
-            else if nextLocation.query == "" then
-                NotAsked
-
-            else
-                Loading ( name, nextLocation.query, nextLocation.searchMode )
-
-        commits =
-            if loadCommits then
-                Loading name
-
-            else
-                model.commits
-
-        pullRequest =
-            ( name, nextLocation.pullState, 1 )
-
-        pulls =
-            if loadPulls then
-                Loading pullRequest
-
-            else
-                model.pulls
-
-        updated =
-            { model
-                | location = nextLocation
-                , selectedFile = selectedFile
-                , search = search
-                , commits = commits
-                , pulls = pulls
-                , pullRows =
-                    if pullsChanged then
-                        []
-
-                    else
-                        model.pullRows
-                , pullHasMore =
-                    if pullsChanged then
-                        False
-
-                    else
-                        model.pullHasMore
-                , collapsedFolders = revealLocationPath nextLocation.path model
-                , searchDraft = nextLocation.query
-                , searchMode = nextLocation.searchMode
-            }
-
-        effects =
-            [ case nextLocation.path of
-                Just path ->
-                    if fileChanged then
-                        Api.fetchRepositoryFile name path (FileLoaded ( name, path )) (FileFailed ( name, path ))
-
-                    else
-                        Effect.none
-
-                Nothing ->
-                    Effect.none
-            , if searchChanged && nextLocation.query /= "" then
-                Api.searchRepository name
-                    nextLocation.query
-                    (Route.searchModeToString nextLocation.searchMode)
-                    (SearchLoaded ( name, nextLocation.query, nextLocation.searchMode ))
-                    (SearchFailed ( name, nextLocation.query, nextLocation.searchMode ))
-
-              else
-                Effect.none
-            , if loadCommits then
-                Api.fetchRepositoryCommits name (CommitsLoaded name) (CommitsFailed name)
-
-              else
-                Effect.none
-            , if loadPulls then
-                Api.fetchRepositoryPulls name
-                    (Route.pullRequestStateToString nextLocation.pullState)
-                    1
-                    (PullsLoaded pullRequest)
-                    (PullsFailed pullRequest)
-
-              else
-                Effect.none
-            ]
-    in
-    ( updated, Effect.batch effects )
+    else
+        let
+            nextView =
+                initialView (repositoryName model) nextLocation
+        in
+        ( { model
+            | location = nextLocation
+            , repository = mapRepositoryView (always nextView) model.repository
+            , collapsedFolders = revealLocationPath nextLocation.path model
+            , searchDraft = nextLocation.query
+            , searchMode = nextLocation.searchMode
+          }
+        , loadView nextView
+        )
 
 
 revealLocationPath : Maybe String -> Model -> Set String
 revealLocationPath maybePath model =
-    case ( maybePath, model.files ) of
-        ( Just path, Success _ files ) ->
+    case ( maybePath, repositoryFiles model.repository ) of
+        ( Just path, Just files ) ->
             model.collapsedFolders
                 |> Set.toList
                 |> FileTree.reveal path
@@ -353,6 +307,158 @@ revealLocationPath maybePath model =
 repositoryName : Model -> String
 repositoryName model =
     model.location.owner ++ "/" ++ model.location.repository
+
+
+repositoryRequestName : RepositoryRequest -> String
+repositoryRequestName (RepositoryRequest name) =
+    name
+
+
+repositoryFiles : RepositoryState -> Maybe (List File)
+repositoryFiles state =
+    case state of
+        RepositoryReady ready ->
+            Just ready.files
+
+        _ ->
+            Nothing
+
+
+repositoryView : RepositoryState -> RepositoryView
+repositoryView state =
+    case state of
+        RepositoryLoading _ current _ ->
+            current
+
+        RepositoryFailed _ _ current _ _ ->
+            current
+
+        RepositoryReady ready ->
+            ready.view
+
+
+mapRepositoryView : (RepositoryView -> RepositoryView) -> RepositoryState -> RepositoryState
+mapRepositoryView transform state =
+    case state of
+        RepositoryLoading request current source ->
+            RepositoryLoading request (transform current) source
+
+        RepositoryFailed request error current source clone ->
+            RepositoryFailed request error (transform current) source clone
+
+        RepositoryReady ready ->
+            RepositoryReady { ready | view = transform ready.view }
+
+
+repositorySourceControl : RepositoryState -> SourceControl
+repositorySourceControl state =
+    case state of
+        RepositoryLoading _ _ source ->
+            source
+
+        RepositoryFailed _ _ _ source _ ->
+            source
+
+        RepositoryReady ready ->
+            ready.sourceControl
+
+
+withSourceControl : SourceControl -> RepositoryState -> RepositoryState
+withSourceControl source state =
+    case state of
+        RepositoryLoading request current _ ->
+            RepositoryLoading request current source
+
+        RepositoryFailed request error current _ clone ->
+            RepositoryFailed request error current source clone
+
+        RepositoryReady ready ->
+            RepositoryReady { ready | sourceControl = source }
+
+
+mapFilesView : (FilesState -> FilesState) -> RepositoryState -> RepositoryState
+mapFilesView transform =
+    mapRepositoryView
+        (\current ->
+            case current of
+                Files files ->
+                    Files (transform files)
+
+                _ ->
+                    current
+        )
+
+
+mapCommitsView : (Remote RepositoryRequest ApiError Repository.Commits -> Remote RepositoryRequest ApiError Repository.Commits) -> RepositoryState -> RepositoryState
+mapCommitsView transform =
+    mapRepositoryView
+        (\current ->
+            case current of
+                Commits commits ->
+                    Commits (transform commits)
+
+                _ ->
+                    current
+        )
+
+
+mapPullsView : (PullRequestsState -> PullRequestsState) -> RepositoryState -> RepositoryState
+mapPullsView transform =
+    mapRepositoryView
+        (\current ->
+            case current of
+                PullRequests pulls ->
+                    PullRequests (transform pulls)
+
+                _ ->
+                    current
+        )
+
+
+currentFileRequest : Model -> FileRequest
+currentFileRequest model =
+    FileRequest (repositoryName model) (Maybe.withDefault "" model.location.path)
+
+
+currentSearchRequest : Model -> SearchRequest
+currentSearchRequest model =
+    SearchRequest (repositoryName model) model.location.query model.location.searchMode
+
+
+currentPullRequest : Model -> Int -> PullRequestIdentity
+currentPullRequest model page =
+    PullRequestIdentity (repositoryName model) model.location.pullState page
+
+
+pullPage : Remote PullRequestIdentity error value -> Int
+pullPage remote =
+    case remote of
+        Loading (PullRequestIdentity _ _ page) ->
+            page
+
+        Failure (PullRequestIdentity _ _ page) _ ->
+            page
+
+        Success (PullRequestIdentity _ _ page) _ ->
+            page
+
+        NotAsked ->
+            0
+
+
+cloneRequestRepository : CloneRequest -> String
+cloneRequestRepository (CloneRequest name _) =
+    name
+
+
+isActivePullRequest : PullRequestIdentity -> RepositoryState -> Bool
+isActivePullRequest request state =
+    case repositoryView state of
+        PullRequests pulls ->
+            Remote.identity pulls.request == Just request
+
+        _ ->
+            False
 
 
 subscriptions : Model -> Sub Msg
@@ -373,7 +479,26 @@ update msg model =
                         FileTree.build .path files
                 in
                 ( { model
-                    | files = Success requested files
+                    | repository =
+                        case model.repository of
+                            RepositoryLoading request current source ->
+                                RepositoryReady
+                                    { request = request
+                                    , files = files
+                                    , view = current
+                                    , sourceControl = source
+                                    }
+
+                            RepositoryReady ready ->
+                                RepositoryReady { ready | files = files }
+
+                            RepositoryFailed request _ current source _ ->
+                                RepositoryReady
+                                    { request = request
+                                    , files = files
+                                    , view = current
+                                    , sourceControl = source
+                                    }
                     , collapsedFolders =
                         case model.location.path of
                             Nothing ->
@@ -390,77 +515,93 @@ update msg model =
 
         FilesFailed requested error ->
             if requested == repositoryName model then
-                ( { model | files = Failure requested error }, Effect.none )
+                ( { model
+                    | repository =
+                        case model.repository of
+                            RepositoryLoading request current source ->
+                                RepositoryFailed request error current source CloneIdle
+
+                            RepositoryFailed request _ current source clone ->
+                                RepositoryFailed request error current source clone
+
+                            RepositoryReady ready ->
+                                RepositoryFailed ready.request error ready.view ready.sourceControl CloneIdle
+                  }
+                , Effect.none
+                )
 
             else
                 unchanged model
 
         FileLoaded request file ->
-            if request == ( repositoryName model, Maybe.withDefault "" model.location.path ) then
-                ( { model | selectedFile = Success request file }, Effect.none )
+            if request == currentFileRequest model then
+                ( { model | repository = mapFilesView (\files -> { files | selectedFile = Success request file }) model.repository }, Effect.none )
 
             else
                 unchanged model
 
         FileFailed request error ->
-            if request == ( repositoryName model, Maybe.withDefault "" model.location.path ) then
-                ( { model | selectedFile = Failure request error }, Effect.none )
+            if request == currentFileRequest model then
+                ( { model | repository = mapFilesView (\files -> { files | selectedFile = Failure request error }) model.repository }, Effect.none )
 
             else
                 unchanged model
 
         SearchLoaded request results ->
-            if request == ( repositoryName model, model.location.query, model.location.searchMode ) then
-                ( { model | search = Success request results }, Effect.none )
+            if request == currentSearchRequest model then
+                ( { model | repository = mapFilesView (\files -> { files | search = Success request results }) model.repository }, Effect.none )
 
             else
                 unchanged model
 
         SearchFailed request error ->
-            if request == ( repositoryName model, model.location.query, model.location.searchMode ) then
-                ( { model | search = Failure request error }, Effect.none )
+            if request == currentSearchRequest model then
+                ( { model | repository = mapFilesView (\files -> { files | search = Failure request error }) model.repository }, Effect.none )
 
             else
                 unchanged model
 
         CommitsLoaded requested commits ->
-            if requested == repositoryName model then
-                ( { model | commits = Success requested commits }, Effect.none )
+            if repositoryRequestName requested == repositoryName model then
+                ( { model | repository = mapCommitsView (always (Success requested commits)) model.repository }, Effect.none )
 
             else
                 unchanged model
 
         CommitsFailed requested error ->
-            if requested == repositoryName model then
-                ( { model | commits = Failure requested error }, Effect.none )
+            if repositoryRequestName requested == repositoryName model then
+                ( { model | repository = mapCommitsView (always (Failure requested error)) model.repository }, Effect.none )
 
             else
                 unchanged model
 
         PullsLoaded request page ->
-            if request /= ( repositoryName model, model.location.pullState, page.page ) then
+            if not (isActivePullRequest request model.repository) then
                 unchanged model
 
             else
-                let
-                    rows =
-                        if page.page == 1 then
-                            page.pullRequests
-
-                        else
-                            model.pullRows ++ page.pullRequests
-                in
                 ( { model
-                    | pulls = Success request page
-                    , pullRows = rows
-                    , pullHasMore = page.hasMore
+                    | repository =
+                        mapPullsView
+                            (\pulls ->
+                                { request = Success request page
+                                , rows =
+                                    if page.page == 1 then
+                                        page.pullRequests
+
+                                    else
+                                        pulls.rows ++ page.pullRequests
+                                , hasMore = page.hasMore
+                                }
+                            )
+                            model.repository
                   }
                 , Effect.none
                 )
 
         PullsFailed request error ->
-            if tripleFirst request == repositoryName model then
-                ( { model | pulls = Failure request error }, Effect.none )
+            if isActivePullRequest request model.repository then
+                ( { model | repository = mapPullsView (\pulls -> { pulls | request = Failure request error }) model.repository }, Effect.none )
 
             else
                 unchanged model
@@ -468,12 +609,15 @@ update msg model =
         SourceLoaded requested status ->
             if requested == repositoryName model then
                 ( { model
-                    | sourceControl =
-                        SourceReady
-                            { repository = requested
-                            , status = status
-                            , activity = SourceIdle
-                            }
+                    | repository =
+                        withSourceControl
+                            (SourceReady
+                                { repository = requested
+                                , status = status
+                                , activity = SourceIdle
+                                }
+                            )
+                            model.repository
                   }
                 , Effect.none
                 )
@@ -485,8 +629,10 @@ update msg model =
             updateReadySource requested model <|
                 \source ->
                     ( { model
-                        | sourceControl =
-                            SourceReady { source | activity = PullSynchronizing count }
+                        | repository =
+                            withSourceControl
+                                (SourceReady { source | activity = PullSynchronizing count })
+                                model.repository
                       }
                     , Api.refreshSourceControl requested
                         (PullStatusLoaded requested count)
@@ -496,12 +642,15 @@ update msg model =
         PullStatusLoaded requested count status ->
             if requested == repositoryName model then
                 ( { model
-                    | sourceControl =
-                        SourceReady
-                            { repository = requested
-                            , status = status
-                            , activity = SourceSucceeded (pulledMessage count)
-                            }
+                    | repository =
+                        withSourceControl
+                            (SourceReady
+                                { repository = requested
+                                , status = status
+                                , activity = SourceSucceeded (pulledMessage count)
+                                }
+                            )
+                            model.repository
                   }
                 , Effect.none
                 )
@@ -512,9 +661,12 @@ update msg model =
         PullStatusFailed requested error ->
             if requested == repositoryName model then
                 ( { model
-                    | sourceControl =
-                        SourceUnavailable requested
-                            ("The pull completed, but Git status could not be refreshed. " ++ error)
+                    | repository =
+                        withSourceControl
+                            (SourceUnavailable requested
+                                (ApiError.context "The pull completed, but Git status could not be refreshed. " error)
+                            )
+                            model.repository
                   }
                 , Effect.none
                 )
@@ -524,34 +676,45 @@ update msg model =
 
         SourceFailed requested error ->
             if requested == repositoryName model then
-                ( { model | sourceControl = SourceUnavailable requested error }, Effect.none )
+                ( { model | repository = withSourceControl (SourceUnavailable requested error) model.repository }, Effect.none )
 
             else
                 unchanged model
 
-        CloneLoaded request path ->
-            if Tuple.first request /= repositoryName model then
+        CloneLoaded request _ ->
+            if cloneRequestRepository request /= repositoryName model then
                 unchanged model
 
             else
                 let
                     name =
                         repositoryName model
+
+                    requestIdentity =
+                        RepositoryRequest name
+
+                    nextView =
+                        initialView name model.location
                 in
                 ( { model
-                    | clone = Success request path
-                    , files = Loading name
-                    , sourceControl = SourceLoading name
+                    | repository =
+                        RepositoryLoading requestIdentity nextView (SourceLoading name)
                   }
                 , Effect.batch
                     [ Api.fetchRepositoryFiles name (FilesLoaded name) (FilesFailed name)
                     , Api.refreshSourceControl name (SourceLoaded name) (SourceFailed name)
+                    , loadView nextView
                     ]
                 )
 
         CloneFailed request error ->
-            if Tuple.first request == repositoryName model then
-                ( { model | clone = Failure request error }, Effect.none )
+            if cloneRequestRepository request == repositoryName model then
+                case model.repository of
+                    RepositoryFailed repositoryRequest repositoryError current source _ ->
+                        ( { model | repository = RepositoryFailed repositoryRequest repositoryError current source (CloneFailure request error) }, Effect.none )
+
+                    _ ->
+                        unchanged model
 
             else
                 unchanged model
@@ -590,28 +753,21 @@ update msg model =
             ( model, Effect.PushUrl (repositoryPath model RepositoryPulls Nothing "" LiteralSearch state) )
 
         RequestedMorePulls ->
-            let
-                page =
-                    case model.pulls of
-                        Success ( _, _, current ) _ ->
-                            current + 1
+            case repositoryView model.repository of
+                PullRequests pulls ->
+                    let
+                        page =
+                            pullPage pulls.request + 1
 
-                        Failure ( _, _, current ) _ ->
-                            current + 1
+                        request =
+                            currentPullRequest model page
+                    in
+                    ( { model | repository = mapPullsView (\current -> { current | request = Loading request }) model.repository }
+                    , loadPullRequests request
+                    )
 
-                        _ ->
-                            1
-
-                request =
-                    ( repositoryName model, model.location.pullState, page )
-            in
-            ( { model | pulls = Loading request }
-            , Api.fetchRepositoryPulls (repositoryName model)
-                (Route.pullRequestStateToString model.location.pullState)
-                page
-                (PullsLoaded request)
-                (PullsFailed request)
-            )
+                _ ->
+                    unchanged model
 
         SelectedBranch branch ->
             let
@@ -624,7 +780,7 @@ update msg model =
                         unchanged model
 
                     else
-                        ( { model | sourceControl = SourceReady { source | activity = BranchSwitching branch } }
+                        ( { model | repository = withSourceControl (SourceReady { source | activity = BranchSwitching branch }) model.repository }
                         , Api.switchBranch name branch (SourceLoaded name) (SourceFailed name)
                         )
 
@@ -642,18 +798,23 @@ update msg model =
                         unchanged model
 
                     else
-                        ( { model | sourceControl = SourceReady { source | activity = PullInFlight } }
+                        ( { model | repository = withSourceControl (SourceReady { source | activity = PullInFlight }) model.repository }
                         , Api.pullRepository name (PullCompleted name) (SourceFailed name)
                         )
 
         RequestedClone destination ->
             let
                 request =
-                    ( repositoryName model, destination )
+                    CloneRequest (repositoryName model) destination
             in
-            ( { model | clone = Loading request }
-            , Api.cloneRepository (repositoryName model) destination (CloneLoaded request) (CloneFailed request)
-            )
+            case model.repository of
+                RepositoryFailed repositoryRequest error current source _ ->
+                    ( { model | repository = RepositoryFailed repositoryRequest error current source (CloneInFlight request) }
+                    , Api.cloneRepository (repositoryName model) destination (CloneLoaded request) (CloneFailed request)
+                    )
+
+                _ ->
+                    unchanged model
 
         SelectedCommit commit ->
             ( model
@@ -677,18 +838,18 @@ refreshSource model =
         name =
             repositoryName model
     in
-    case model.sourceControl of
+    case repositorySourceControl model.repository of
         SourceReady source ->
             if sourceBusy source.activity then
                 unchanged model
 
             else
-                ( { model | sourceControl = SourceReady { source | activity = SourceRefreshing } }
+                ( { model | repository = withSourceControl (SourceReady { source | activity = SourceRefreshing }) model.repository }
                 , Api.refreshSourceControl name (SourceLoaded name) (SourceFailed name)
                 )
 
         SourceUnavailable requested _ ->
-            ( { model | sourceControl = SourceLoading requested }
+            ( { model | repository = withSourceControl (SourceLoading requested) model.repository }
             , Api.refreshSourceControl name (SourceLoaded name) (SourceFailed name)
             )
 
@@ -698,7 +859,7 @@ refreshSource model =
 
 updateReadySource : String -> Model -> (SourceSnapshot -> ( Model, Effect Msg )) -> ( Model, Effect Msg )
 updateReadySource requested model updateSource =
-    case model.sourceControl of
+    case repositorySourceControl model.repository of
         SourceReady source ->
             if source.repository == requested then
                 updateSource source
@@ -862,14 +1023,14 @@ view syntaxHighlighting model =
 
 sourceControlView : Model -> Html Msg
 sourceControlView model =
-    case model.sourceControl of
+    case repositorySourceControl model.repository of
         SourceLoading _ ->
             section [ class "repository-source-control", attribute "role" "status" ]
                 [ span [ class "source-control-loading" ] [ text "Reading Git state…" ] ]
 
         SourceUnavailable _ error ->
             section [ class "repository-source-control" ]
-                [ span [ class "source-control-feedback is-error", attribute "role" "alert" ] [ text error ]
+                [ span [ class "source-control-feedback is-error", attribute "role" "alert" ] [ text (ApiError.message error) ]
                 , button [ type_ "button", onClick RequestedSourceRefresh ] [ text "Retry" ]
                 ]
 
@@ -981,36 +1142,38 @@ sourceFeedback action path =
 
 filesView : Bool -> Model -> Html Msg
 filesView syntaxHighlighting model =
-    case model.files of
-        Failure _ error ->
-            cloneOffer model error
+    case model.repository of
+        RepositoryFailed _ error _ _ clone ->
+            cloneOffer error clone
 
-        Loading _ ->
+        RepositoryLoading _ _ _ ->
             pageState "Reading repository files…" "Using the current local checkout without switching other tabs."
 
-        NotAsked ->
-            text ""
-
-        Success _ files ->
+        RepositoryReady ready ->
             div [ class "repository-workspace" ]
                 [ aside [ class "repository-file-sidebar" ]
-                    [ header [] [ strong [] [ text "Files" ], span [ class "count-badge" ] [ text (String.fromInt (List.length files)) ] ]
-                    , fileTree model (FileTree.build .path files)
+                    [ header [] [ strong [] [ text "Files" ], span [ class "count-badge" ] [ text (String.fromInt (List.length ready.files)) ] ]
+                    , fileTree model (FileTree.build .path ready.files)
                     ]
                 , section [ class "repository-results" ]
-                    [ case model.location.path of
-                        Just _ ->
-                            repositoryFileView syntaxHighlighting model
+                    [ case ready.view of
+                        Files files ->
+                            case model.location.path of
+                                Just _ ->
+                                    repositoryFileView syntaxHighlighting model files
 
-                        Nothing ->
-                            if model.location.query /= "" then
-                                repositorySearchView model
+                                Nothing ->
+                                    if model.location.query /= "" then
+                                        repositorySearchView model files
 
-                            else
-                                div [ class "repository-empty-selection" ]
-                                    [ h1 [] [ text "Choose a file" ]
-                                    , p [] [ text "Browse the collapsed tree or search literal text, regular expressions, or FFF fuzzy matches." ]
-                                    ]
+                                    else
+                                        div [ class "repository-empty-selection" ]
+                                            [ h1 [] [ text "Choose a file" ]
+                                            , p [] [ text "Browse the collapsed tree or search literal text, regular expressions, or FFF fuzzy matches." ]
+                                            ]
+
+                        _ ->
+                            text ""
                     ]
                 ]
 
@@ -1083,14 +1246,14 @@ leafCount forest =
         )
 
 
-repositoryFileView : Bool -> Model -> Html Msg
-repositoryFileView syntaxHighlighting model =
-    case model.selectedFile of
+repositoryFileView : Bool -> Model -> FilesState -> Html Msg
+repositoryFileView syntaxHighlighting model files =
+    case files.selectedFile of
         Loading _ ->
             pageState ("Opening " ++ Maybe.withDefault "file" model.location.path ++ "…") ""
 
         Failure _ error ->
-            section [ class "page-state is-error" ] [ h1 [] [ text "Could not open file" ], p [] [ text error ] ]
+            section [ class "page-state is-error" ] [ h1 [] [ text "Could not open file" ], p [] [ text (ApiError.message error) ] ]
 
         Success _ file ->
             section [ class "repository-file-view" ]
@@ -1130,14 +1293,14 @@ repositoryFileView syntaxHighlighting model =
             text ""
 
 
-repositorySearchView : Model -> Html Msg
-repositorySearchView model =
-    case model.search of
+repositorySearchView : Model -> FilesState -> Html Msg
+repositorySearchView model files =
+    case files.search of
         Loading _ ->
             pageState ("Searching for “" ++ model.location.query ++ "”…") (searchDescription model.location.searchMode)
 
         Failure _ error ->
-            section [ class "page-state is-error" ] [ h1 [] [ text "Search failed" ], p [] [ text error ] ]
+            section [ class "page-state is-error" ] [ h1 [] [ text "Search failed" ], p [] [ text (ApiError.message error) ] ]
 
         Success _ results ->
             div [ class "repository-search-results" ]
@@ -1181,33 +1344,38 @@ searchMatchView match =
 
 commitsView : Model -> Html Msg
 commitsView model =
-    case model.commits of
-        Loading _ ->
-            pageState "Loading commits…" "Reading immutable OIDs from the local checkout."
+    case repositoryView model.repository of
+        Commits remote ->
+            case remote of
+                Loading _ ->
+                    pageState "Loading commits…" "Reading immutable OIDs from the local checkout."
 
-        Failure _ error ->
-            section [ class "page-state is-error" ] [ h1 [] [ text "Could not load commits" ], p [] [ text error ] ]
+                Failure _ error ->
+                    section [ class "page-state is-error" ] [ h1 [] [ text "Could not load commits" ], p [] [ text (ApiError.message error) ] ]
 
-        Success _ data ->
-            section [ class "commits-browser repository-commits-browser" ]
-                [ header [ class "commits-heading" ]
-                    [ div [] [ h2 [] [ text ("Commits on " ++ data.ref) ], p [] [ text "Select an immutable commit to open its diff." ] ]
-                    , span []
-                        [ text
-                            (String.fromInt (List.length data.commits)
-                                ++ (if data.shallow then
-                                        " · shallow"
+                Success _ data ->
+                    section [ class "commits-browser repository-commits-browser" ]
+                        [ header [ class "commits-heading" ]
+                            [ div [] [ h2 [] [ text ("Commits on " ++ data.ref) ], p [] [ text "Select an immutable commit to open its diff." ] ]
+                            , span []
+                                [ text
+                                    (String.fromInt (List.length data.commits)
+                                        ++ (if data.shallow then
+                                                " · shallow"
 
-                                    else
-                                        ""
-                                   )
-                            )
+                                            else
+                                                ""
+                                           )
+                                    )
+                                ]
+                            ]
+                        , div [ class "commit-list" ] (List.map commitRow data.commits)
                         ]
-                    ]
-                , div [ class "commit-list" ] (List.map commitRow data.commits)
-                ]
 
-        NotAsked ->
+                NotAsked ->
+                    text ""
+
+        _ ->
             text ""
 
 
@@ -1228,37 +1396,42 @@ commitRow commit =
 
 pullsView : Model -> Html Msg
 pullsView model =
-    section [ class "repository-pulls-browser" ]
-        [ header [ class "repository-pulls-heading" ]
-            [ div []
-                [ span [] [ text "GitHub" ]
-                , h1 [] [ text ("Pull requests for " ++ repositoryName model) ]
-                , p [] [ text "Open a pull request directly in Hunker’s diff view." ]
+    case repositoryView model.repository of
+        PullRequests pulls ->
+            section [ class "repository-pulls-browser" ]
+                [ header [ class "repository-pulls-heading" ]
+                    [ div []
+                        [ span [] [ text "GitHub" ]
+                        , h1 [] [ text ("Pull requests for " ++ repositoryName model) ]
+                        , p [] [ text "Open a pull request directly in Hunker’s diff view." ]
+                        ]
+                    , div [ class "segmented repository-pull-filters" ]
+                        (List.map (pullFilter model.location.pullState) [ OpenPulls, ClosedPulls, AllPulls ])
+                    ]
+                , case pulls.request of
+                    Loading _ ->
+                        if List.isEmpty pulls.rows then
+                            pageState "Loading pull requests…" "Reading pull requests through your GitHub login."
+
+                        else
+                            pullRowsView model pulls True
+
+                    Failure _ error ->
+                        if List.isEmpty pulls.rows then
+                            section [ class "page-state is-error" ] [ h1 [] [ text "Could not load pull requests" ], p [] [ text (ApiError.message error) ] ]
+
+                        else
+                            div [] [ pullRowsView model pulls False, p [ class "repository-pull-page-error" ] [ text (ApiError.message error) ] ]
+
+                    Success _ _ ->
+                        pullRowsView model pulls False
+
+                    NotAsked ->
+                        text ""
                 ]
-            , div [ class "segmented repository-pull-filters" ]
-                (List.map (pullFilter model.location.pullState) [ OpenPulls, ClosedPulls, AllPulls ])
-            ]
-        , case model.pulls of
-            Loading _ ->
-                if List.isEmpty model.pullRows then
-                    pageState "Loading pull requests…" "Reading pull requests through your GitHub login."
 
-                else
-                    pullRowsView model True
-
-            Failure _ error ->
-                if List.isEmpty model.pullRows then
-                    section [ class "page-state is-error" ] [ h1 [] [ text "Could not load pull requests" ], p [] [ text error ] ]
-
-                else
-                    div [] [ pullRowsView model False, p [ class "repository-pull-page-error" ] [ text error ] ]
-
-            Success _ _ ->
-                pullRowsView model False
-
-            NotAsked ->
-                text ""
-        ]
+        _ ->
+            text ""
 
 
 pullFilter : PullRequestState -> PullRequestState -> Html Msg
@@ -1278,11 +1451,11 @@ pullFilter active state =
         ]
 
 
-pullRowsView : Model -> Bool -> Html Msg
-pullRowsView model loading =
+pullRowsView : Model -> PullRequestsState -> Bool -> Html Msg
+pullRowsView model pulls loading =
     div [ class "repository-pull-list" ]
-        (List.map (pullRow model) model.pullRows
-            ++ (if model.pullHasMore then
+        (List.map (pullRow model) pulls.rows
+            ++ (if pulls.hasMore then
                     [ button [ type_ "button", class "repository-pull-load-more", disabled loading, onClick RequestedMorePulls ]
                         [ text
                             (if loading then
@@ -1337,41 +1510,38 @@ pullRow model pull =
         ]
 
 
-cloneOffer : Model -> String -> Html Msg
-cloneOffer model error =
+cloneOffer : ApiError -> CloneState -> Html Msg
+cloneOffer error clone =
     section [ class "repository-clone-offer" ]
         [ span [ class "repository-clone-mark" ] [ text "git" ]
         , h1 [] [ text "Clone this repository for local browsing" ]
-        , p [] [ text error ]
-        , cloneFeedback model.clone
+        , p [] [ text (ApiError.message error) ]
+        , cloneFeedback clone
         , div [ class "repository-clone-actions" ]
-            [ button [ type_ "button", disabled (isCloneLoading model.clone), onClick (RequestedClone "temporary") ] [ text "Clone to /tmp" ]
-            , button [ type_ "button", disabled (isCloneLoading model.clone), onClick (RequestedClone "configured") ] [ text "Clone to repos root" ]
+            [ button [ type_ "button", disabled (isCloneLoading clone), onClick (RequestedClone "temporary") ] [ text "Clone to /tmp" ]
+            , button [ type_ "button", disabled (isCloneLoading clone), onClick (RequestedClone "configured") ] [ text "Clone to repos root" ]
             ]
         , small [] [ text "Clones start shallow and use your local GitHub authentication for private repositories." ]
         ]
 
 
-cloneFeedback : Remote ( String, String ) String String -> Html Msg
-cloneFeedback remote =
-    case remote of
-        Loading _ ->
+cloneFeedback : CloneState -> Html Msg
+cloneFeedback clone =
+    case clone of
+        CloneInFlight _ ->
             p [ class "repository-clone-feedback" ] [ text "Cloning…" ]
 
-        Failure _ error ->
-            p [ class "repository-clone-error" ] [ text error ]
+        CloneFailure _ error ->
+            p [ class "repository-clone-error" ] [ text (ApiError.message error) ]
 
-        Success _ path ->
-            p [ class "repository-clone-feedback" ] [ text ("Cloned to " ++ path) ]
-
-        NotAsked ->
+        CloneIdle ->
             text ""
 
 
-isCloneLoading : Remote identity error value -> Bool
-isCloneLoading remote =
-    case remote of
-        Loading _ ->
+isCloneLoading : CloneState -> Bool
+isCloneLoading clone =
+    case clone of
+        CloneInFlight _ ->
             True
 
         _ ->
@@ -1429,8 +1599,3 @@ activeClass active =
 titleCase : String -> String
 titleCase value =
     String.left 1 (String.toUpper value) ++ String.dropLeft 1 value
-
-
-tripleFirst : ( a, b, c ) -> a
-tripleFirst ( first, _, _ ) =
-    first

@@ -23,6 +23,7 @@ module Hunker.Api exposing
     )
 
 import Http
+import Hunker.ApiError exposing (ApiError)
 import Hunker.Domain.Repository as Repository
 import Hunker.Domain.Review as Review
 import Hunker.Domain.Settings as Settings
@@ -32,21 +33,21 @@ import Json.Encode as Encode
 import Url
 
 
-loadSettings : (Settings.SettingsDocument -> msg) -> (String -> msg) -> Effect msg
+loadSettings : (Settings.SettingsDocument -> msg) -> (ApiError -> msg) -> Effect msg
 loadSettings succeeded failed =
     Effect.get "/api/settings"
         (Decode.map succeeded Settings.documentDecoder)
         failed
 
 
-listRepositories : (Repository.RepositoryCatalog -> msg) -> (String -> msg) -> Effect msg
+listRepositories : (Repository.RepositoryCatalog -> msg) -> (ApiError -> msg) -> Effect msg
 listRepositories succeeded failed =
     Effect.get "/api/repositories"
         (Decode.map succeeded Repository.catalogDecoder)
         failed
 
 
-fetchReview : String -> (Review.ReviewDocument -> msg) -> (String -> msg) -> Effect msg
+fetchReview : String -> (Review.ReviewDocument -> msg) -> (ApiError -> msg) -> Effect msg
 fetchReview githubUrl succeeded failed =
     Effect.get
         ("/api/diff?url=" ++ encode githubUrl ++ "&refresh=" ++ encode githubUrl)
@@ -54,7 +55,7 @@ fetchReview githubUrl succeeded failed =
         failed
 
 
-fetchCommits : String -> (List Review.PullCommit -> msg) -> (String -> msg) -> Effect msg
+fetchCommits : String -> (List Review.PullCommit -> msg) -> (ApiError -> msg) -> Effect msg
 fetchCommits githubUrl succeeded failed =
     Effect.get
         ("/api/commits?url=" ++ encode githubUrl)
@@ -62,7 +63,7 @@ fetchCommits githubUrl succeeded failed =
         failed
 
 
-checkRevision : String -> String -> (Review.Revision -> msg) -> (String -> msg) -> Effect msg
+checkRevision : String -> String -> (Review.Revision -> msg) -> (ApiError -> msg) -> Effect msg
 checkRevision githubUrl headOid succeeded failed =
     Effect.get
         ("/api/revision?url=" ++ encode githubUrl ++ "&headOid=" ++ encode headOid)
@@ -70,7 +71,7 @@ checkRevision githubUrl headOid succeeded failed =
         failed
 
 
-fetchRepositoryFiles : String -> (List Repository.File -> msg) -> (String -> msg) -> Effect msg
+fetchRepositoryFiles : String -> (List Repository.File -> msg) -> (ApiError -> msg) -> Effect msg
 fetchRepositoryFiles repository succeeded failed =
     Effect.get
         ("/api/repository/files?repository=" ++ encode repository)
@@ -78,7 +79,7 @@ fetchRepositoryFiles repository succeeded failed =
         failed
 
 
-fetchRepositoryCommits : String -> (Repository.Commits -> msg) -> (String -> msg) -> Effect msg
+fetchRepositoryCommits : String -> (Repository.Commits -> msg) -> (ApiError -> msg) -> Effect msg
 fetchRepositoryCommits repository succeeded failed =
     Effect.get
         ("/api/repository/commits?repository=" ++ encode repository)
@@ -86,7 +87,7 @@ fetchRepositoryCommits repository succeeded failed =
         failed
 
 
-fetchRepositoryPulls : String -> String -> Int -> (Repository.PullRequestsPage -> msg) -> (String -> msg) -> Effect msg
+fetchRepositoryPulls : String -> String -> Int -> (Repository.PullRequestsPage -> msg) -> (ApiError -> msg) -> Effect msg
 fetchRepositoryPulls repository state page succeeded failed =
     Effect.get
         ("/api/repository/pulls?repository="
@@ -100,7 +101,7 @@ fetchRepositoryPulls repository state page succeeded failed =
         failed
 
 
-searchRepository : String -> String -> String -> (Repository.SearchResults -> msg) -> (String -> msg) -> Effect msg
+searchRepository : String -> String -> String -> (Repository.SearchResults -> msg) -> (ApiError -> msg) -> Effect msg
 searchRepository repository search mode succeeded failed =
     Effect.get
         ("/api/repository/search?repository="
@@ -114,7 +115,7 @@ searchRepository repository search mode succeeded failed =
         failed
 
 
-fetchRepositoryFile : String -> String -> (Repository.FileContent -> msg) -> (String -> msg) -> Effect msg
+fetchRepositoryFile : String -> String -> (Repository.FileContent -> msg) -> (ApiError -> msg) -> Effect msg
 fetchRepositoryFile repository path succeeded failed =
     Effect.get
         ("/api/repository/file?repository=" ++ encode repository ++ "&path=" ++ encode path)
@@ -122,7 +123,7 @@ fetchRepositoryFile repository path succeeded failed =
         failed
 
 
-cloneRepository : String -> String -> (String -> msg) -> (String -> msg) -> Effect msg
+cloneRepository : String -> String -> (String -> msg) -> (ApiError -> msg) -> Effect msg
 cloneRepository repository destination succeeded failed =
     Effect.send "POST"
         "/api/repository/clone"
@@ -137,7 +138,7 @@ cloneRepository repository destination succeeded failed =
         failed
 
 
-refreshSourceControl : String -> (Repository.SourceControlStatus -> msg) -> (String -> msg) -> Effect msg
+refreshSourceControl : String -> (Repository.SourceControlStatus -> msg) -> (ApiError -> msg) -> Effect msg
 refreshSourceControl repository succeeded failed =
     Effect.get
         ("/api/repository/source-control?repository=" ++ encode repository)
@@ -145,7 +146,7 @@ refreshSourceControl repository succeeded failed =
         failed
 
 
-switchBranch : String -> String -> (Repository.SourceControlStatus -> msg) -> (String -> msg) -> Effect msg
+switchBranch : String -> String -> (Repository.SourceControlStatus -> msg) -> (ApiError -> msg) -> Effect msg
 switchBranch repository branch succeeded failed =
     Effect.send "POST"
         "/api/repository/branch"
@@ -160,7 +161,7 @@ switchBranch repository branch succeeded failed =
         failed
 
 
-pullRepository : String -> (Int -> msg) -> (String -> msg) -> Effect msg
+pullRepository : String -> (Int -> msg) -> (ApiError -> msg) -> Effect msg
 pullRepository repository succeeded failed =
     Effect.send "POST"
         "/api/repository/pull"
@@ -169,7 +170,7 @@ pullRepository repository succeeded failed =
         failed
 
 
-saveSettings : Settings.Settings -> (Settings.SettingsDocument -> msg) -> (String -> msg) -> Effect msg
+saveSettings : Settings.Settings -> (Settings.SettingsDocument -> msg) -> (ApiError -> msg) -> Effect msg
 saveSettings settings succeeded failed =
     Effect.send "PUT"
         "/api/settings"
@@ -178,7 +179,7 @@ saveSettings settings succeeded failed =
         failed
 
 
-fetchAnalysis : String -> Review.ReviewBacking -> Bool -> Bool -> Settings.InlineDiffMode -> (Review.AnalysisSnapshot -> msg) -> (String -> msg) -> Effect msg
+fetchAnalysis : String -> Review.ReviewBacking -> Bool -> Bool -> Settings.InlineDiffMode -> (Review.AnalysisSnapshot -> msg) -> (ApiError -> msg) -> Effect msg
 fetchAnalysis githubUrl backing ignoreWhitespace semantic inlineDiff succeeded failed =
     Effect.get
         ("/api/analysis?url="
@@ -208,7 +209,7 @@ fetchAnalysis githubUrl backing ignoreWhitespace semantic inlineDiff succeeded f
         failed
 
 
-fetchFullFile : String -> Review.FileChange -> Review.ReviewBacking -> (Review.FullFile -> msg) -> (String -> msg) -> Effect msg
+fetchFullFile : String -> Review.FileChange -> Review.ReviewBacking -> (Review.FullFile -> msg) -> (ApiError -> msg) -> Effect msg
 fetchFullFile githubUrl file backing succeeded failed =
     Effect.get
         ("/api/file?" ++ fileQuery githubUrl file backing)
@@ -216,7 +217,7 @@ fetchFullFile githubUrl file backing succeeded failed =
         failed
 
 
-fetchReviewComments : String -> (List Review.ReviewComment -> msg) -> (String -> msg) -> Effect msg
+fetchReviewComments : String -> (List Review.ReviewComment -> msg) -> (ApiError -> msg) -> Effect msg
 fetchReviewComments githubUrl succeeded failed =
     Effect.get
         ("/api/reviews?url=" ++ encode githubUrl)
@@ -224,7 +225,7 @@ fetchReviewComments githubUrl succeeded failed =
         failed
 
 
-postInlineComment : { pullUrl : String, commitId : String, path : String, line : Int, side : Review.CommentSide, body : String } -> (Review.ReviewComment -> msg) -> (String -> msg) -> Effect msg
+postInlineComment : { pullUrl : String, commitId : String, path : String, line : Int, side : Review.CommentSide, body : String } -> (Review.ReviewComment -> msg) -> (ApiError -> msg) -> Effect msg
 postInlineComment comment succeeded failed =
     Effect.send "POST"
         "/api/reviews/comment"
@@ -243,7 +244,7 @@ postInlineComment comment succeeded failed =
         failed
 
 
-postReply : String -> Int -> String -> (Review.ReviewComment -> msg) -> (String -> msg) -> Effect msg
+postReply : String -> Int -> String -> (Review.ReviewComment -> msg) -> (ApiError -> msg) -> Effect msg
 postReply githubUrl commentId body succeeded failed =
     Effect.send "POST"
         "/api/reviews/reply"
@@ -259,7 +260,7 @@ postReply githubUrl commentId body succeeded failed =
         failed
 
 
-submitReview : String -> String -> String -> (String -> msg) -> (String -> msg) -> Effect msg
+submitReview : String -> String -> String -> (String -> msg) -> (ApiError -> msg) -> Effect msg
 submitReview githubUrl body event succeeded failed =
     Effect.send "POST"
         "/api/reviews/submit"

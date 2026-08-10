@@ -2,6 +2,7 @@ module MainProgramTest exposing (suite)
 
 import Expect
 import Http
+import Hunker.ApiError as ApiError exposing (ApiError)
 import Hunker.Effect as AppEffect
 import Hunker.Page.Repository as Repository
 import Hunker.Page.Review as Review
@@ -16,6 +17,7 @@ import SimulatedEffect.Process as SimulatedProcess
 import SimulatedEffect.Task as SimulatedTask
 import Test exposing (Test, describe, test)
 import Test.Html.Selector exposing (containing, disabled, tag, text)
+import Test.Http as TestHttp
 import Time
 
 
@@ -122,6 +124,28 @@ suite =
                         , text "Local file contents"
                         , text "Pull 2 ↓"
                         ]
+        , test "shows the structured server message for a repository conflict" <|
+            \() ->
+                startedAt "/mohamed-rdr/hunker"
+                    |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
+                    |> ProgramTest.simulateHttpResponse "GET"
+                        "/api/repository/files?repository=mohamed-rdr%2Fhunker"
+                        (TestHttp.httpResponse
+                            { statusCode = 409
+                            , headers = []
+                            , body = """{"code":"conflict","message":"Commit or stash staged changes before pulling.","retryable":false}"""
+                            }
+                        )
+                    |> ProgramTest.expectViewHas [ text "Commit or stash staged changes before pulling." ]
+        , test "does not render a stale commits response after returning to files" <|
+            \() ->
+                startedAt "/mohamed-rdr/hunker"
+                    |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
+                    |> ProgramTest.simulateHttpOk "GET" "/api/repository/files?repository=mohamed-rdr%2Fhunker" repositoryFilesJson
+                    |> ProgramTest.clickButton "Commits"
+                    |> ProgramTest.clickButton "Files"
+                    |> ProgramTest.simulateHttpOk "GET" "/api/repository/commits?repository=mohamed-rdr%2Fhunker" repositoryCommitsJson
+                    |> ProgramTest.expectViewHas [ text "Choose a file" ]
         ]
 
 
@@ -161,7 +185,7 @@ simulateEffect effect =
                 , headers = []
                 , expect =
                     SimulatedHttp.expectStringResponse
-                        (Result.withDefault (request.onError "The simulated request failed."))
+                        (Result.withDefault (request.onError (ApiError.transport "The simulated request failed.")))
                         (decodeResponse request.decoder request.onError >> Ok)
                 , timeout = Nothing
                 , tracker = Nothing
@@ -183,7 +207,7 @@ simulateEffect effect =
             SimulatedTask.perform (always message) (SimulatedProcess.sleep milliseconds)
 
 
-decodeResponse : Decode.Decoder msg -> (String -> msg) -> Http.Response String -> msg
+decodeResponse : Decode.Decoder msg -> (ApiError -> msg) -> Http.Response String -> msg
 decodeResponse decoder onError response =
     case response of
         Http.GoodStatus_ _ body ->
@@ -192,19 +216,25 @@ decodeResponse decoder onError response =
                     message
 
                 Err error ->
-                    onError (Decode.errorToString error)
+                    onError (ApiError.unexpectedResponse (Decode.errorToString error))
 
         Http.BadUrl_ url ->
-            onError ("Invalid API URL: " ++ url)
+            onError (ApiError.transport ("Invalid API URL: " ++ url))
 
         Http.Timeout_ ->
-            onError "The Hunker API timed out."
+            onError (ApiError.transport "The Hunker API timed out.")
 
         Http.NetworkError_ ->
-            onError "Could not reach the local Hunker API."
+            onError (ApiError.transport "Could not reach the local Hunker API.")
 
-        Http.BadStatus_ metadata _ ->
-            onError ("The Hunker API returned " ++ String.fromInt metadata.statusCode ++ ".")
+        Http.BadStatus_ metadata body ->
+            onError
+                (Decode.decodeString ApiError.decoder body
+                    |> Result.withDefault
+                        (ApiError.unexpectedResponse
+                            ("The Hunker API returned " ++ String.fromInt metadata.statusCode ++ ".")
+                        )
+                )
 
 
 settingsJson : String
@@ -241,6 +271,11 @@ repositoryFileJson : String
 repositoryFileJson =
     """{"path":"README.md","content":"# Local file contents
 ","truncated":false}"""
+
+
+repositoryCommitsJson : String
+repositoryCommitsJson =
+    """{"ref":"main","shallow":false,"commits":[{"sha":"1111111111111111111111111111111111111111","parents":[],"subject":"A stale commit","authorName":"Mohamed","authorEmail":"mohamed@example.com","authoredAt":"2026-08-10T00:00:00Z"}]}"""
 
 
 sourceControlRequest : String

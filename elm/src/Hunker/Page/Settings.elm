@@ -12,8 +12,7 @@ type alias Model =
 
 
 type SaveStatus
-    = SaveIdle
-    | SaveInProgress
+    = SaveInProgress
     | SaveSucceeded String
     | SaveError String
 
@@ -197,7 +196,7 @@ saveFeedback saveStatus =
         SaveError error ->
             span [ class "save-feedback is-error" ] [ text error ]
 
-        _ ->
+        SaveInProgress ->
             text ""
 
 

@@ -29,6 +29,16 @@
 - Main exclusively owns settings and serializes/coalesces persistence. Pages
   emit settings-change intents; they do not issue `/api/settings` requests or
   cache an independent settings document.
+- Keep settings persistence in the opaque `Hunker.Settings.Sync` state machine.
+  Revision, sent settings, latest desired settings, config path, and save error
+  belong to one ADT; do not reintroduce parallel synchronization fields in
+  `Main`.
+- Decode non-2xx JSON bodies into `Hunker.ApiError` inside `Hunker.Effect` and
+  preserve that typed error through page state. Do not replace a server message
+  with a status-only string or flatten errors before rendering.
+- A repository page owns exactly one active `RepositoryView`. Route changes and
+  clone completion reconstruct that view with named request identities so late
+  file, search, commit, or pull responses cannot populate a different tab.
 
 ## Elm UI and tests
 

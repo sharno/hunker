@@ -16,6 +16,7 @@ import Html exposing (Html, a, article, aside, button, code, div, footer, form, 
 import Html.Attributes exposing (attribute, checked, class, disabled, href, id, placeholder, selected, type_, value)
 import Html.Events exposing (onCheck, onClick, onInput, onSubmit)
 import Hunker.Api as Api
+import Hunker.ApiError as ApiError exposing (ApiError)
 import Hunker.Diff as Diff exposing (DiffLine, Hunk, Kind(..), SideLine, SplitRow)
 import Hunker.Domain.Review as Review exposing (AnalysisFeature(..), AnalysisSnapshot, CharacterRange, CommentSide(..), FileChange, FileStatus(..), FullFile, MovedBlock, PullCommit, ReviewComment, ReviewDocument, Revision(..), SemanticChange(..), SemanticResult(..))
 import Hunker.Domain.Settings as Settings exposing (InlineDiffMode(..), ReviewScope(..), Settings, ViewMode(..))
@@ -36,7 +37,7 @@ import Url
 
 type alias Model =
     { review : ReviewState
-    , fullFiles : Dict String (Remote String String FullFile)
+    , fullFiles : Dict String (Remote String ApiError FullFile)
     , filter : String
     , filterMode : SearchMode
     , collapsedFolders : Set String
@@ -45,17 +46,17 @@ type alias Model =
     , reviewedFiles : Set String
     , collapsedThreads : Set Int
     , replyDrafts : Dict Int String
-    , replyState : Remote Int String ReviewComment
+    , replyState : Remote Int ApiError ReviewComment
     , reviewBody : String
-    , reviewSubmission : Remote String String String
+    , reviewSubmission : Remote String ApiError String
     , inlineComposer : Maybe InlineComposer
-    , inlineSubmission : Remote String String ReviewComment
+    , inlineSubmission : Remote String ApiError ReviewComment
     }
 
 
 type ReviewState
     = ReviewLoading ReviewRequest
-    | ReviewFailure ReviewRequest String
+    | ReviewFailure ReviewRequest ApiError
     | ReviewReady ReadyReview
 
 
@@ -78,14 +79,14 @@ type alias ReadyReview =
 type AnalysisState
     = AnalysisDisabled
     | AnalysisInFlight AnalysisIdentity
-    | AnalysisFailure AnalysisIdentity String
+    | AnalysisFailure AnalysisIdentity ApiError
     | AnalysisComplete AnalysisIdentity AnalysisSnapshot
 
 
 type alias CollaborationState =
-    { commits : Remote String String (List PullCommit)
-    , comments : Remote String String (List ReviewComment)
-    , revision : Remote String String Revision
+    { commits : Remote String ApiError (List PullCommit)
+    , comments : Remote String ApiError (List ReviewComment)
+    , revision : Remote String ApiError Revision
     }
 
 
@@ -114,10 +115,10 @@ type alias InlineComposer =
 
 type Msg
     = ReviewLoaded String ReviewDocument
-    | ReviewFailed String String
+    | ReviewFailed String ApiError
     | Refreshed
     | CommitsLoaded String (List PullCommit)
-    | CommitsFailed String String
+    | CommitsFailed String ApiError
     | SelectedTab ReviewTab
     | SelectedCommit String
     | SelectedFile String
@@ -133,34 +134,34 @@ type Msg
     | ToggledSyntax Bool
     | ToggledReviews Bool
     | AnalysisLoaded AnalysisIdentity AnalysisSnapshot
-    | AnalysisFailed AnalysisIdentity String
+    | AnalysisFailed AnalysisIdentity ApiError
     | FullFileLoaded String String FullFile
-    | FullFileFailed String String String
+    | FullFileFailed String String ApiError
     | ToggledFullFile FileChange
     | ToggledFile String
     | ToggledHunk String String
     | ToggledReviewed String
     | SelectedMoveTarget String String
     | CommentsLoaded String (List ReviewComment)
-    | CommentsFailed String String
+    | CommentsFailed String ApiError
     | ToggledThread Int
     | ChangedReply Int String
     | SubmittedReply Int
     | ReplyLoaded Int ReviewComment
-    | ReplyFailed Int String
+    | ReplyFailed Int ApiError
     | ChangedReviewBody String
     | SubmittedReview String
     | ReviewSubmitted String String
-    | ReviewSubmitFailed String String
+    | ReviewSubmitFailed String ApiError
     | OpenedInlineComposer String Int CommentSide
     | ChangedInlineBody String
     | CancelledInlineComposer
     | SubmittedInlineComment
     | InlineCommentLoaded String ReviewComment
-    | InlineCommentFailed String String
+    | InlineCommentFailed String ApiError
     | CheckedRevision
     | RevisionLoaded String Revision
-    | RevisionFailed String String
+    | RevisionFailed String ApiError
     | PollRevision Time.Posix
 
 
@@ -320,14 +321,14 @@ reviewCollaboration model =
     readyState model |> Maybe.map .collaboration
 
 
-reviewComments : Model -> Remote String String (List ReviewComment)
+reviewComments : Model -> Remote String ApiError (List ReviewComment)
 reviewComments model =
     reviewCollaboration model
         |> Maybe.map .comments
         |> Maybe.withDefault NotAsked
 
 
-reviewCommits : Model -> Remote String String (List PullCommit)
+reviewCommits : Model -> Remote String ApiError (List PullCommit)
 reviewCommits model =
     reviewCollaboration model
         |> Maybe.map .commits
@@ -955,7 +956,7 @@ view settings model =
         ReviewFailure _ error ->
             section [ class "review-load-error", attribute "role" "alert" ]
                 [ strong [] [ text "Could not load this change" ]
-                , p [] [ text error ]
+                , p [] [ text (ApiError.message error) ]
                 , button [ type_ "button", onClick Refreshed ] [ text "Try again" ]
                 ]
 
@@ -1057,7 +1058,7 @@ metric amount description extra =
     div [ class ("review-metric " ++ extra) ] [ strong [] [ text amount ], span [] [ text description ] ]
 
 
-revisionNotice : Remote String String Revision -> Html Msg
+revisionNotice : Remote String ApiError Revision -> Html Msg
 revisionNotice revision =
     case revision of
         Success _ value ->
@@ -1076,7 +1077,7 @@ revisionNotice revision =
                             ]
 
         Failure _ error ->
-            div [ class "revision-notice is-error" ] [ text error ]
+            div [ class "revision-notice is-error" ] [ text (ApiError.message error) ]
 
         _ ->
             text ""
@@ -1345,7 +1346,7 @@ fileDiff settings model file =
                         fullFileDiff settings model file full
 
                     Just (Failure _ error) ->
-                        div [ class "diff-error" ] [ text error ]
+                        div [ class "diff-error" ] [ text (ApiError.message error) ]
 
                     _ ->
                         patchDiff settings model file
@@ -1374,7 +1375,7 @@ semanticSummary settings model file =
                 div [ class "semantic-banner is-loading" ] [ span [ class "loading-spinner" ] [], text "Analyzing syntax tree…" ]
 
             AnalysisFailure _ error ->
-                div [ class "semantic-banner is-error" ] [ text error ]
+                div [ class "semantic-banner is-error" ] [ text (ApiError.message error) ]
 
             AnalysisComplete _ snapshot ->
                 snapshot.files
@@ -1719,7 +1720,7 @@ detachedThreads model path =
                 |> div [ class "detached-review-threads" ]
 
         Failure _ error ->
-            div [ class "review-comments-error" ] [ text error ]
+            div [ class "review-comments-error" ] [ text (ApiError.message error) ]
 
         _ ->
             text ""
@@ -1836,7 +1837,7 @@ commitsView model =
                         pageState "Loading commits…"
 
                     Failure _ error ->
-                        div [ class "page-state is-error" ] [ text error ]
+                        div [ class "page-state is-error" ] [ text (ApiError.message error) ]
 
                     Success _ commits ->
                         div [ class "commit-list" ] (List.map commitRow commits)
@@ -2065,12 +2066,12 @@ isRemoteLoading identity remote =
             False
 
 
-remoteError : comparable -> Remote comparable String value -> Html msg
+remoteError : comparable -> Remote comparable ApiError value -> Html msg
 remoteError identity remote =
     case remote of
         Failure current error ->
             if current == identity then
-                span [ class "form-error" ] [ text error ]
+                span [ class "form-error" ] [ text (ApiError.message error) ]
 
             else
                 text ""
@@ -2079,11 +2080,11 @@ remoteError identity remote =
             text ""
 
 
-remoteAnyError : Remote identity String value -> Html msg
+remoteAnyError : Remote identity ApiError value -> Html msg
 remoteAnyError remote =
     case remote of
         Failure _ error ->
-            span [ class "form-error" ] [ text error ]
+            span [ class "form-error" ] [ text (ApiError.message error) ]
 
         _ ->
             text ""

@@ -6,6 +6,7 @@ import Html exposing (Html, a, button, div, form, header, input, main_, p, span,
 import Html.Attributes exposing (attribute, class, href, placeholder, type_, value)
 import Html.Events exposing (onInput, onSubmit)
 import Hunker.Api as Api
+import Hunker.ApiError as ApiError exposing (ApiError)
 import Hunker.Domain.Settings as Settings exposing (Settings, SettingsDocument)
 import Hunker.Effect as Effect exposing (Effect)
 import Hunker.Page.Home as Home
@@ -13,23 +14,14 @@ import Hunker.Page.Repository as Repository
 import Hunker.Page.Review as Review
 import Hunker.Page.Settings as SettingsPage
 import Hunker.Route as Route exposing (Route)
+import Hunker.Settings.Sync as SettingsSync
 import Url exposing (Url)
 
 
 type AppState
     = Booting Route
-    | BootFailed Route String
-    | Ready SettingsState Page
-
-
-type SettingsState
-    = SettingsClean Settings
-    | SettingsSaving SettingsRevision Settings
-    | SettingsFailed SettingsRevision Settings String
-
-
-type SettingsRevision
-    = SettingsRevision Int
+    | BootFailed Route ApiError
+    | Ready SettingsSync.Sync Page
 
 
 type Page
@@ -45,9 +37,6 @@ type alias Model =
     , state : AppState
     , githubInput : String
     , githubInputError : String
-    , settingsRevision : Int
-    , pendingSettings : Maybe Settings
-    , settingsConfigPath : String
     }
 
 
@@ -61,9 +50,9 @@ type Msg
     = LinkClicked Browser.UrlRequest
     | UrlChanged Url
     | SettingsLoaded SettingsDocument
-    | SettingsLoadFailed String
-    | SettingsSaved SettingsRevision SettingsDocument
-    | SettingsSaveFailed SettingsRevision String
+    | SettingsLoadFailed ApiError
+    | SettingsSaved SettingsSync.Revision SettingsDocument
+    | SettingsSaveFailed SettingsSync.Revision ApiError
     | RetriedBootstrap
     | ChangedGitHubInput String
     | SubmittedGitHubInput
@@ -95,9 +84,6 @@ init _ url _ =
       , state = Booting route
       , githubInput = ""
       , githubInputError = ""
-      , settingsRevision = 0
-      , pendingSettings = Nothing
-      , settingsConfigPath = ""
       }
     , Api.loadSettings SettingsLoaded SettingsLoadFailed
     )
@@ -194,7 +180,7 @@ update msg model =
                     ( { model | route = route, state = Booting route }, Effect.none )
 
         SettingsLoaded document ->
-            startRoute (SettingsClean document.settings) model.route { model | settingsConfigPath = document.configPath }
+            startRoute (SettingsSync.loaded document) model.route model
 
         SettingsLoadFailed error ->
             ( { model | state = BootFailed model.route error }, Effect.none )
@@ -274,10 +260,13 @@ update msg model =
                         ReviewPage review ->
                             let
                                 settings =
-                                    settingsValue settingsState
+                                    SettingsSync.value settingsState
+
+                                intent =
+                                    Review.settingsIntent settings message
 
                                 desired =
-                                    Review.settingsIntent settings message
+                                    intent
                                         |> Maybe.withDefault settings
 
                                 ( updated, effect ) =
@@ -286,7 +275,7 @@ update msg model =
                                 updatedModel =
                                     { model | state = Ready settingsState (ReviewPage updated) }
                             in
-                            case Review.settingsIntent settings message of
+                            case intent of
                                 Just changed ->
                                     queueSettings changed updatedModel
                                         |> addEffect (Effect.map ReviewMsg effect)
@@ -299,7 +288,7 @@ update msg model =
                 )
 
 
-updatePage : Model -> (SettingsState -> Page -> ( Model, Effect Msg )) -> ( Model, Effect Msg )
+updatePage : Model -> (SettingsSync.Sync -> Page -> ( Model, Effect Msg )) -> ( Model, Effect Msg )
 updatePage model apply =
     case model.state of
         Ready settingsState page ->
@@ -309,18 +298,18 @@ updatePage model apply =
             unchanged model
 
 
-mapPage : (childModel -> Page) -> (childMsg -> Msg) -> SettingsState -> Model -> ( childModel, Effect childMsg ) -> ( Model, Effect Msg )
+mapPage : (childModel -> Page) -> (childMsg -> Msg) -> SettingsSync.Sync -> Model -> ( childModel, Effect childMsg ) -> ( Model, Effect Msg )
 mapPage toPage toMsg settingsState model ( childModel, childEffect ) =
     ( { model | state = Ready settingsState (toPage childModel) }
     , Effect.map toMsg childEffect
     )
 
 
-startRoute : SettingsState -> Route -> Model -> ( Model, Effect Msg )
+startRoute : SettingsSync.Sync -> Route -> Model -> ( Model, Effect Msg )
 startRoute settingsState route model =
     let
         settings =
-            settingsValue settingsState
+            SettingsSync.value settingsState
     in
     case route of
         Route.Home ->
@@ -363,113 +352,61 @@ startRoute settingsState route model =
             ( { model | route = route, state = Ready settingsState (NotFoundPage path) }, Effect.none )
 
 
-settingsValue : SettingsState -> Settings
-settingsValue state =
-    case state of
-        SettingsClean settings ->
-            settings
-
-        SettingsSaving _ settings ->
-            settings
-
-        SettingsFailed _ settings _ ->
-            settings
-
-
 queueSettings : Settings -> Model -> ( Model, Effect Msg )
 queueSettings desired model =
     case model.state of
-        Ready (SettingsSaving revision _) page ->
-            ( { model
-                | state = Ready (SettingsSaving revision desired) page
-                , pendingSettings = Just desired
-              }
-            , Effect.none
-            )
-
-        Ready _ page ->
-            startSettingsSave desired page model
+        Ready sync page ->
+            applySettingsTransition page model (SettingsSync.queue desired sync)
 
         _ ->
             unchanged model
 
 
-startSettingsSave : Settings -> Page -> Model -> ( Model, Effect Msg )
-startSettingsSave settings page model =
-    let
-        number =
-            model.settingsRevision + 1
+finishSettingsSave : SettingsSync.Revision -> SettingsDocument -> Model -> ( Model, Effect Msg )
+finishSettingsSave revision document model =
+    case model.state of
+        Ready sync page ->
+            applySettingsTransition page model (SettingsSync.saved revision document sync)
 
-        revision =
-            SettingsRevision number
-    in
-    ( { model
-        | state = Ready (SettingsSaving revision settings) page
-        , settingsRevision = number
-        , pendingSettings = Nothing
-      }
-    , Api.saveSettings settings (SettingsSaved revision) (SettingsSaveFailed revision)
+        _ ->
+            unchanged model
+
+
+failSettingsSave : SettingsSync.Revision -> ApiError -> Model -> ( Model, Effect Msg )
+failSettingsSave revision error model =
+    case model.state of
+        Ready sync page ->
+            ( { model | state = Ready (SettingsSync.failed revision error sync) page }, Effect.none )
+
+        _ ->
+            unchanged model
+
+
+applySettingsTransition : Page -> Model -> ( SettingsSync.Sync, Maybe SettingsSync.SaveRequest ) -> ( Model, Effect Msg )
+applySettingsTransition page model ( sync, request ) =
+    ( { model | state = Ready sync page }
+    , request
+        |> Maybe.map
+            (\save ->
+                Api.saveSettings save.settings
+                    (SettingsSaved save.revision)
+                    (SettingsSaveFailed save.revision)
+            )
+        |> Maybe.withDefault Effect.none
     )
 
 
-finishSettingsSave : SettingsRevision -> SettingsDocument -> Model -> ( Model, Effect Msg )
-finishSettingsSave revision document model =
-    case model.state of
-        Ready (SettingsSaving active desired) page ->
-            if revision /= active then
-                unchanged model
+settingsSaveStatus : SettingsSync.Sync -> SettingsPage.SaveStatus
+settingsSaveStatus sync =
+    case SettingsSync.status sync of
+        SettingsSync.Saved configPath ->
+            SettingsPage.SaveSucceeded configPath
 
-            else
-                case model.pendingSettings of
-                    Just pending ->
-                        startSettingsSave pending page { model | settingsConfigPath = document.configPath }
-
-                    Nothing ->
-                        ( { model
-                            | state = Ready (SettingsClean document.settings) page
-                            , settingsConfigPath = document.configPath
-                          }
-                        , Effect.none
-                        )
-
-        _ ->
-            unchanged model
-
-
-failSettingsSave : SettingsRevision -> String -> Model -> ( Model, Effect Msg )
-failSettingsSave revision error model =
-    case model.state of
-        Ready (SettingsSaving active desired) page ->
-            if revision /= active then
-                unchanged model
-
-            else
-                ( { model
-                    | state = Ready (SettingsFailed revision desired error) page
-                    , pendingSettings = Nothing
-                  }
-                , Effect.none
-                )
-
-        _ ->
-            unchanged model
-
-
-settingsSaveStatus : Model -> SettingsState -> SettingsPage.SaveStatus
-settingsSaveStatus model settingsState =
-    case settingsState of
-        SettingsClean _ ->
-            if model.settingsConfigPath == "" then
-                SettingsPage.SaveIdle
-
-            else
-                SettingsPage.SaveSucceeded model.settingsConfigPath
-
-        SettingsSaving _ _ ->
+        SettingsSync.SaveInProgress ->
             SettingsPage.SaveInProgress
 
-        SettingsFailed _ _ error ->
-            SettingsPage.SaveError error
+        SettingsSync.SaveFailed error ->
+            SettingsPage.SaveError (ApiError.message error)
 
 
 addEffect : Effect Msg -> ( Model, Effect Msg ) -> ( Model, Effect Msg )
@@ -575,21 +512,21 @@ pageView model =
         BootFailed _ error ->
             main_ [ class "page-state is-error", attribute "role" "alert" ]
                 [ strong [] [ text "Could not load Hunker settings" ]
-                , p [] [ text error ]
+                , p [] [ text (ApiError.message error) ]
                 , button [ type_ "button", Html.Events.onClick RetriedBootstrap ] [ text "Try again" ]
                 ]
 
         Ready settingsState page ->
             let
                 settings =
-                    settingsValue settingsState
+                    SettingsSync.value settingsState
             in
             case page of
                 HomePage home ->
                     Html.map HomeMsg (Home.view home)
 
                 SettingsPage settingsModel ->
-                    Html.map SettingsMsg (SettingsPage.view (settingsSaveStatus model settingsState) settingsModel)
+                    Html.map SettingsMsg (SettingsPage.view (settingsSaveStatus settingsState) settingsModel)
 
                 RepositoryPage repository ->
                     Html.map RepositoryMsg (Repository.view settings.syntaxHighlighting repository)

@@ -12,6 +12,7 @@ module Hunker.Effect exposing
 import Browser.Dom
 import Browser.Navigation as Navigation
 import Http
+import Hunker.ApiError as ApiError exposing (ApiError)
 import Json.Decode as Decode
 import Process
 import Task
@@ -33,7 +34,7 @@ type alias HttpRequest msg =
     , url : String
     , body : Http.Body
     , decoder : Decode.Decoder msg
-    , onError : String -> msg
+    , onError : ApiError -> msg
     }
 
 
@@ -67,7 +68,7 @@ batch effects =
            )
 
 
-get : String -> Decode.Decoder msg -> (String -> msg) -> Effect msg
+get : String -> Decode.Decoder msg -> (ApiError -> msg) -> Effect msg
 get url decoder onError =
     Request
         { method = "GET"
@@ -78,7 +79,7 @@ get url decoder onError =
         }
 
 
-send : String -> String -> Http.Body -> Decode.Decoder msg -> (String -> msg) -> Effect msg
+send : String -> String -> Http.Body -> Decode.Decoder msg -> (ApiError -> msg) -> Effect msg
 send method url body decoder onError =
     Request
         { method = method
@@ -161,7 +162,7 @@ perform key effect =
                 |> Task.perform (always message)
 
 
-expectJson : Decode.Decoder msg -> (String -> msg) -> Http.Expect msg
+expectJson : Decode.Decoder msg -> (ApiError -> msg) -> Http.Expect msg
 expectJson decoder onError =
     Http.expectStringResponse
         (\result ->
@@ -170,42 +171,34 @@ expectJson decoder onError =
                     message
 
                 Err error ->
-                    onError (httpError error)
+                    onError error
         )
     <|
         \response ->
             case response of
                 Http.BadUrl_ url ->
-                    Err (Http.BadUrl url)
+                    Err (ApiError.transport ("Invalid API URL: " ++ url))
 
                 Http.Timeout_ ->
-                    Err Http.Timeout
+                    Err (ApiError.transport "The Hunker API timed out.")
 
                 Http.NetworkError_ ->
-                    Err Http.NetworkError
+                    Err (ApiError.transport "Could not reach the local Hunker API.")
 
-                Http.BadStatus_ metadata _ ->
-                    Err (Http.BadStatus metadata.statusCode)
+                Http.BadStatus_ metadata body ->
+                    case Decode.decodeString ApiError.decoder body of
+                        Ok apiError ->
+                            Err apiError
+
+                        Err _ ->
+                            Err
+                                (ApiError.unexpectedResponse
+                                    ("The Hunker API returned " ++ String.fromInt metadata.statusCode ++ ".")
+                                )
 
                 Http.GoodStatus_ _ body ->
                     Decode.decodeString decoder body
-                        |> Result.mapError (Decode.errorToString >> Http.BadBody)
-
-
-httpError : Http.Error -> String
-httpError error =
-    case error of
-        Http.BadUrl url ->
-            "Invalid API URL: " ++ url
-
-        Http.Timeout ->
-            "The Hunker API timed out."
-
-        Http.NetworkError ->
-            "Could not reach the local Hunker API."
-
-        Http.BadStatus status ->
-            "The Hunker API returned " ++ String.fromInt status ++ "."
-
-        Http.BadBody detail ->
-            "The Hunker API returned unexpected data: " ++ detail
+                        |> Result.mapError
+                            (Decode.errorToString
+                                >> (\detail -> ApiError.unexpectedResponse ("The Hunker API returned unexpected data: " ++ detail))
+                            )
