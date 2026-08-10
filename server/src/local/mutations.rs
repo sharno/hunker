@@ -1,15 +1,66 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::{
     command,
     error::{AppError, AppResult},
+    settings,
+    types::RepositorySlug,
 };
 
-use super::{Checkout, PullResult, SourceControlStatus, inspect_source_control};
+use super::{Checkout, Local, PullResult, SourceControlStatus, source_control, valid_segment};
+
+impl Local {
+    pub async fn clone_repository(
+        &self,
+        repository: &RepositorySlug,
+        destination: &str,
+    ) -> AppResult<PathBuf> {
+        if !valid_segment(&repository.owner) || !valid_segment(&repository.name) {
+            return Err(AppError::bad_request("That repository name is not valid."));
+        }
+        let settings = settings::load().await?.settings;
+        let root = if destination == "configured" {
+            settings::resolve_path(&settings.repositories_root)
+        } else {
+            settings::resolve_path(&settings.cache_root)
+        };
+        let target = if destination == "configured" {
+            root.join(&repository.name)
+        } else {
+            root.join(&repository.owner).join(&repository.name)
+        };
+        if target.exists() {
+            return Ok(target);
+        }
+        tokio::fs::create_dir_all(target.parent().unwrap_or(&root))
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("Could not create clone directory: {error}"))
+            })?;
+        let target_text = target.to_string_lossy();
+        command::checked(
+            "gh",
+            &[
+                "repo",
+                "clone",
+                &format!("{}/{}", repository.owner, repository.name),
+                &target_text,
+                "--",
+                "--depth=1",
+                "--single-branch",
+                "--filter=blob:none",
+                "--no-tags",
+            ],
+            target.parent(),
+        )
+        .await?;
+        Ok(target)
+    }
+}
 
 pub(super) async fn switch_branch(root: &Path, branch: &str) -> AppResult<SourceControlStatus> {
     action(root, &["check-ref-format", "--branch", branch]).await?;
-    let current = inspect_source_control(root, true).await?;
+    let current = source_control::inspect(root, true).await?;
     let target = current
         .branches
         .iter()
@@ -31,11 +82,11 @@ pub(super) async fn switch_branch(root: &Path, branch: &str) -> AppResult<Source
         let origin = format!("origin/{branch}");
         action(root, &["switch", "--track", "-c", branch, "--", &origin]).await?;
     }
-    inspect_source_control(root, false).await
+    source_control::inspect(root, false).await
 }
 
 pub(super) async fn pull(root: &Path) -> AppResult<PullResult> {
-    let current = inspect_source_control(root, true).await?;
+    let current = source_control::inspect(root, true).await?;
     let (behind, before) = match &current.checkout {
         Checkout::DetachedHead { .. } => {
             return Err(AppError::conflict(

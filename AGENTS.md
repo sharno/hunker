@@ -45,6 +45,9 @@
 - Keep repository file/search, pull-list, and source-control transitions in
   `Hunker.Repository.*`; the page coordinates effects and routing instead of
   rebuilding those state machines as one flat record.
+- Model local repository availability explicitly: only `Missing` owns clone
+  state, while only `Ready` owns files, the active view, and source control. Do
+  not represent a failed lookup as a cloneable missing repository.
 
 ## Elm UI and tests
 
@@ -77,11 +80,16 @@
 - Exercise a 100+ file, 10k+ changed-line fixture before shipping review data
   pipeline changes. One route must issue one analysis request and apply one
   model update for one immutable snapshot.
+- Put feature rendering in generic view modules that receive decoded data and
+  typed callbacks. View modules must not import a page model or message type;
+  pages remain the owners of transitions, routes, and effects.
 
 ## Rust server
 
 - Keep the backend in `server/`, using typed Serde request/response structs and
   `AppError` at boundaries. Do not recover types with ad hoc JSON probing.
+- Return named Serde response structs and tagged enums from every Axum handler;
+  never use `serde_json::Value` or `json!` as an application API contract.
 - Group Axum transport handlers by feature under `server/src/api`. Keep local
   object reads and checkout mutations in separate `local` modules; mutation
   commands surface Git refusal as conflicts and never participate in review
@@ -118,6 +126,10 @@
   fuzzy search back into indexing work.
 - Shallow clones expand refs/history only when a selected branch or immutable
   object requires it.
+- Keep local Git responsibilities in feature modules: `catalog` discovers and
+  reads repositories, `search` owns literal/regex/FFF indexing, `review_backing`
+  owns immutable revision materialization, and `source_control` owns checkout
+  inspection. Shared `local.rs` contains state and public result types only.
 
 ## Tooling
 
