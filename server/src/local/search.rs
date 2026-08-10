@@ -11,7 +11,7 @@ use walkdir::WalkDir;
 use crate::{
     command,
     error::{AppError, AppResult},
-    types::RepositorySlug,
+    types::{Oid, RepositorySlug},
 };
 
 use super::{Local, RepositoryFile, RepositorySearchMatch, SearchResults};
@@ -20,10 +20,17 @@ impl Local {
     pub async fn search(
         &self,
         repository: &RepositorySlug,
+        oid: &Oid,
         query: &str,
         mode: &str,
     ) -> AppResult<SearchResults> {
         let root = self.repository_path(repository).await?;
+        let head = command::git(&root, &["rev-parse", "HEAD"]).await?;
+        if head.trim() != oid.as_str() {
+            return Err(AppError::conflict(
+                "The repository changed while this search was loading. Refresh and try again.",
+            ));
+        }
         if query.trim().is_empty() {
             return Err(AppError::bad_request("Enter a search query."));
         }

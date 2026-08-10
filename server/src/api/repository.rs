@@ -11,7 +11,7 @@ use crate::{
     AppState,
     error::{AppError, AppResult},
     local,
-    types::{RelativePath, RepositorySlug},
+    types::{Oid, RelativePath, RepositorySlug},
 };
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -31,6 +31,12 @@ pub fn routes() -> Router<Arc<AppState>> {
 #[derive(Deserialize)]
 struct RepositoryQuery {
     repository: String,
+}
+
+#[derive(Deserialize)]
+struct RevisionQuery {
+    repository: String,
+    oid: Oid,
 }
 
 #[derive(Serialize)]
@@ -65,24 +71,24 @@ async fn get_repositories(
 
 async fn get_files(
     State(state): State<Arc<AppState>>,
-    Query(query): Query<RepositoryQuery>,
+    Query(query): Query<RevisionQuery>,
 ) -> AppResult<Json<FilesResponse>> {
     Ok(Json(FilesResponse {
         files: state
             .local
-            .list_files(&parse_repository(&query.repository)?)
+            .list_files(&parse_repository(&query.repository)?, &query.oid)
             .await?,
     }))
 }
 
 async fn get_commits(
     State(state): State<Arc<AppState>>,
-    Query(query): Query<RepositoryQuery>,
+    Query(query): Query<RevisionQuery>,
 ) -> AppResult<Json<local::RepositoryCommits>> {
     Ok(Json(
         state
             .local
-            .list_commits(&parse_repository(&query.repository)?)
+            .list_commits(&parse_repository(&query.repository)?, &query.oid)
             .await?,
     ))
 }
@@ -146,6 +152,7 @@ async fn get_pulls(
 #[derive(Deserialize)]
 struct SearchQuery {
     repository: String,
+    oid: Oid,
     query: String,
     mode: Option<SearchMode>,
 }
@@ -178,6 +185,7 @@ async fn get_search(
             .local
             .search(
                 &parse_repository(&query.repository)?,
+                &query.oid,
                 &query.query,
                 mode.as_str(),
             )
@@ -188,6 +196,7 @@ async fn get_search(
 #[derive(Deserialize)]
 struct FileQuery {
     repository: String,
+    oid: Oid,
     path: RelativePath,
 }
 
@@ -198,7 +207,11 @@ async fn get_file(
     Ok(Json(
         state
             .local
-            .read_file(&parse_repository(&query.repository)?, query.path.as_str())
+            .read_file(
+                &parse_repository(&query.repository)?,
+                &query.oid,
+                query.path.as_str(),
+            )
             .await?,
     ))
 }

@@ -1,6 +1,6 @@
 use std::{
-    collections::{BTreeMap, HashMap},
-    path::{Component, Path, PathBuf},
+    collections::BTreeMap,
+    path::{Path, PathBuf},
 };
 
 use regex::Regex;
@@ -9,12 +9,12 @@ use crate::{
     command,
     error::{AppError, AppResult},
     settings,
-    types::{LocalGitRepository, RepositorySlug},
+    types::{LocalGitRepository, Oid, RepositorySlug},
 };
 
 use super::{
     Local, LocalRepositories, LocalRepositorySummary, MAX_FILE_CHARACTERS, RepositoryCommit,
-    RepositoryCommits, RepositoryFile, RepositoryFileContent, git_result, valid_segment,
+    RepositoryCommits, RepositoryFile, RepositoryFileContent, git_result, objects, valid_segment,
 };
 
 impl Local {
@@ -109,41 +109,37 @@ impl Local {
         })
     }
 
-    pub async fn list_files(&self, repository: &RepositorySlug) -> AppResult<Vec<RepositoryFile>> {
+    pub async fn list_files(
+        &self,
+        repository: &RepositorySlug,
+        oid: &Oid,
+    ) -> AppResult<Vec<RepositoryFile>> {
         let root = self.repository_path(repository).await?;
-        let raw = command::git(&root, &["ls-files", "-co", "--exclude-standard", "-z"]).await?;
-        let statuses = file_statuses(&root).await?;
-        let mut files = Vec::new();
-        for relative in raw
+        let raw = command::git(
+            &root,
+            &["ls-tree", "-r", "-z", "--long", oid.as_str(), "--"],
+        )
+        .await?;
+        Ok(raw
             .split('\0')
-            .filter(|value| !value.is_empty())
+            .filter_map(parse_tree_file)
             .take(20_000)
-        {
-            let size = tokio::fs::metadata(root.join(relative))
-                .await
-                .map_or(0, |metadata| metadata.len());
-            files.push(RepositoryFile {
-                path: relative.to_owned(),
-                size,
-                git_status: statuses
-                    .get(relative)
-                    .cloned()
-                    .unwrap_or_else(|| "clean".to_owned()),
-            });
-        }
-        Ok(files)
+            .collect())
     }
 
     pub async fn read_file(
         &self,
         repository: &RepositorySlug,
+        oid: &Oid,
         relative: &str,
     ) -> AppResult<RepositoryFileContent> {
         let root = self.repository_path(repository).await?;
-        let path = validated_file(&root, relative).await?;
-        let content = tokio::fs::read_to_string(path)
-            .await
-            .map_err(|_| AppError::not_found(format!("Could not read {relative}.")))?;
+        objects::validate_git_path(relative)?;
+        let object = format!("{}:{relative}", oid.as_str());
+        let mut contents = objects::cat_file_batch(&root, &[object]).await?;
+        let content = contents
+            .pop()
+            .ok_or_else(|| AppError::not_found(format!("Could not read {relative}.")))?;
         let truncated = content.chars().count() > MAX_FILE_CHARACTERS;
         Ok(RepositoryFileContent {
             path: relative.to_owned(),
@@ -152,7 +148,11 @@ impl Local {
         })
     }
 
-    pub async fn list_commits(&self, repository: &RepositorySlug) -> AppResult<RepositoryCommits> {
+    pub async fn list_commits(
+        &self,
+        repository: &RepositorySlug,
+        oid: &Oid,
+    ) -> AppResult<RepositoryCommits> {
         let root = self.repository_path(repository).await?;
         let raw = command::git(
             &root,
@@ -161,24 +161,36 @@ impl Local {
                 "-100",
                 "--no-show-signature",
                 "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e",
-                "HEAD",
+                oid.as_str(),
             ],
         )
         .await?;
-        let reference = command::git(&root, &["rev-parse", "--abbrev-ref", "HEAD"])
-            .await?
-            .trim()
-            .to_owned();
         let shallow = command::git(&root, &["rev-parse", "--is-shallow-repository"])
             .await?
             .trim()
             == "true";
         Ok(RepositoryCommits {
-            reference,
+            reference: oid.to_string(),
             shallow,
             commits: parse_repository_commits(&raw),
         })
     }
+}
+
+fn parse_tree_file(record: &str) -> Option<RepositoryFile> {
+    let (metadata, path) = record.split_once('\t')?;
+    let mut fields = metadata.split_whitespace();
+    fields.next()?;
+    if fields.next()? != "blob" {
+        return None;
+    }
+    fields.next()?;
+    let size = fields.next()?.parse().ok()?;
+    Some(RepositoryFile {
+        path: path.to_owned(),
+        size,
+        git_status: "clean".to_owned(),
+    })
 }
 
 fn repository_directories(root: &Path) -> Vec<PathBuf> {
@@ -211,48 +223,6 @@ fn parse_github_remote(remote: &str) -> Option<(String, String)> {
         captures.get(1)?.as_str().to_owned(),
         captures.get(2)?.as_str().to_owned(),
     ))
-}
-
-async fn validated_file(root: &Path, relative: &str) -> AppResult<PathBuf> {
-    let relative_path = Path::new(relative);
-    if relative.is_empty()
-        || relative_path.is_absolute()
-        || relative_path.components().any(|component| {
-            matches!(
-                component,
-                Component::ParentDir | Component::RootDir | Component::Prefix(_)
-            )
-        })
-    {
-        return Err(AppError::bad_request(
-            "That file is outside the configured repository.",
-        ));
-    }
-    let canonical_root = tokio::fs::canonicalize(root)
-        .await
-        .map_err(|_| AppError::internal(format!("Could not inspect {}.", root.display())))?;
-    let canonical_file = tokio::fs::canonicalize(root.join(relative))
-        .await
-        .map_err(|_| AppError::not_found(format!("Could not read {relative}.")))?;
-    if !canonical_file.starts_with(&canonical_root) {
-        return Err(AppError::bad_request(
-            "That file is outside the configured repository.",
-        ));
-    }
-    Ok(canonical_file)
-}
-
-async fn file_statuses(root: &Path) -> AppResult<HashMap<String, String>> {
-    let raw = command::git(
-        root,
-        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-    )
-    .await?;
-    let mut statuses = HashMap::new();
-    for record in raw.split('\0').filter(|record| record.len() > 3) {
-        statuses.insert(record[3..].to_owned(), record[..2].trim().to_owned());
-    }
-    Ok(statuses)
 }
 
 fn parse_repository_commits(raw: &str) -> Vec<RepositoryCommit> {
@@ -294,5 +264,15 @@ mod tests {
             parse_github_remote("https://github.com/acme/demo"),
             Some(("acme".to_owned(), "demo".to_owned()))
         );
+    }
+
+    #[test]
+    fn parses_only_blob_entries_from_immutable_trees() {
+        let file = parse_tree_file("100644 blob 0123456789abcdef 42\tsrc/main.rs")
+            .expect("blob entry should be visible in the file tree");
+        assert_eq!(file.path, "src/main.rs");
+        assert_eq!(file.size, 42);
+        assert_eq!(file.git_status, "clean");
+        assert!(parse_tree_file("160000 commit 0123456789abcdef -\tvendor/effect").is_none());
     }
 }

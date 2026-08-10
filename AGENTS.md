@@ -45,9 +45,11 @@
 - Keep repository file/search, pull-list, and source-control transitions in
   `Hunker.Repository.*`; the page coordinates effects and routing instead of
   rebuilding those state machines as one flat record.
-- Model local repository availability explicitly: only `Missing` owns clone
-  state, while only `Ready` owns files, the active view, and source control. Do
-  not represent a failed lookup as a cloneable missing repository.
+- Model local repository availability independently from the active repository
+  view. Only `LocalMissing` owns clone state and only `LocalReady` owns an
+  immutable OID-keyed file/source-control snapshot; GitHub-backed pull-request
+  lists remain usable in every local availability state. Do not represent a
+  failed lookup as a cloneable missing repository.
 
 ## Elm UI and tests
 

@@ -6,6 +6,7 @@ module Hunker.Repository.Files exposing
     , changeSearchDraft
     , fileFailed
     , fileLoaded
+    , fileOid
     , filePath
     , fileRepository
     , init
@@ -17,6 +18,7 @@ module Hunker.Repository.Files exposing
     , searchFailed
     , searchLoaded
     , searchMode
+    , searchOid
     , searchQuery
     , searchRepository
     , selectSearchMode
@@ -38,6 +40,7 @@ type Model
 
 type alias Details =
     { repository : String
+    , oid : String
     , catalog : List File
     , selectedFile : Remote FileRequest ApiError FileContent
     , search : Remote SearchRequest ApiError SearchResults
@@ -48,20 +51,21 @@ type alias Details =
 
 
 type FileRequest
-    = FileRequest String String
+    = FileRequest String String String
 
 
 type SearchRequest
-    = SearchRequest String String SearchMode
+    = SearchRequest String String String SearchMode
 
 
-init : String -> List File -> Maybe String -> String -> SearchMode -> Model
-init repository files path query mode =
+init : String -> String -> List File -> Maybe String -> String -> SearchMode -> Model
+init repository oid files path query mode =
     Model
         { repository = repository
+        , oid = oid
         , catalog = files
-        , selectedFile = selectedRequest repository path
-        , search = searchRequest repository query mode
+        , selectedFile = selectedRequest repository oid path
+        , search = searchRequest repository oid query mode
         , collapsedFolders = collapsedFor path files
         , searchDraft = query
         , searchMode = mode
@@ -72,8 +76,8 @@ navigate : Maybe String -> String -> SearchMode -> Model -> Model
 navigate path query mode (Model details) =
     Model
         { details
-            | selectedFile = selectedRequest details.repository path
-            , search = searchRequest details.repository query mode
+            | selectedFile = selectedRequest details.repository details.oid path
+            , search = searchRequest details.repository details.oid query mode
             , collapsedFolders = reveal path details.collapsedFolders
             , searchDraft = query
             , searchMode = mode
@@ -146,44 +150,54 @@ searchFailed request error =
 
 
 fileRepository : FileRequest -> String
-fileRepository (FileRequest repository _) =
+fileRepository (FileRequest repository _ _) =
     repository
 
 
+fileOid : FileRequest -> String
+fileOid (FileRequest _ oid _) =
+    oid
+
+
 filePath : FileRequest -> String
-filePath (FileRequest _ path) =
+filePath (FileRequest _ _ path) =
     path
 
 
 searchRepository : SearchRequest -> String
-searchRepository (SearchRequest repository _ _) =
+searchRepository (SearchRequest repository _ _ _) =
     repository
 
 
+searchOid : SearchRequest -> String
+searchOid (SearchRequest _ oid _ _) =
+    oid
+
+
 searchQuery : SearchRequest -> String
-searchQuery (SearchRequest _ query _) =
+searchQuery (SearchRequest _ _ query _) =
     query
 
 
 requestSearchMode : SearchRequest -> SearchMode
-requestSearchMode (SearchRequest _ _ mode) =
+requestSearchMode (SearchRequest _ _ _ mode) =
     mode
 
 
-selectedRequest : String -> Maybe String -> Remote FileRequest error value
-selectedRequest repository path =
+selectedRequest : String -> String -> Maybe String -> Remote FileRequest error value
+selectedRequest repository oid path =
     path
-        |> Maybe.map (FileRequest repository >> Loading)
+        |> Maybe.map (FileRequest repository oid >> Loading)
         |> Maybe.withDefault NotAsked
 
 
-searchRequest : String -> String -> SearchMode -> Remote SearchRequest error value
-searchRequest repository query mode =
+searchRequest : String -> String -> String -> SearchMode -> Remote SearchRequest error value
+searchRequest repository oid query mode =
     if query == "" then
         NotAsked
 
     else
-        Loading (SearchRequest repository query mode)
+        Loading (SearchRequest repository oid query mode)
 
 
 collapsedFor : Maybe String -> List File -> Set String

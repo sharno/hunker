@@ -162,6 +162,9 @@ parseSegments segments options originalPath =
             else
                 repositoryRoute owner repository RepositoryFiles (Just reference) (Just (String.join "/" filePath)) options
 
+        [ owner, repository, "tree", reference ] ->
+            repositoryRoute owner repository RepositoryFiles (Just reference) Nothing options
+
         [ owner, repository, "pulls" ] ->
             repositoryRoute owner repository RepositoryPulls Nothing Nothing options
 
@@ -252,6 +255,9 @@ repositoryPath location =
             case ( location.tab, location.path, location.ref ) of
                 ( RepositoryFiles, Just filePath, maybeReference ) ->
                     prefix ++ "/blob/" ++ encode (Maybe.withDefault "HEAD" maybeReference) ++ "/" ++ encodePath filePath
+
+                ( RepositoryFiles, Nothing, Just reference ) ->
+                    prefix ++ "/tree/" ++ encode reference
 
                 ( RepositoryPulls, _, _ ) ->
                     prefix ++ "/pulls"

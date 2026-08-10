@@ -82,8 +82,8 @@ suite =
             \() ->
                 startedAt "/mohamed-rdr/hunker"
                     |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
-                    |> ProgramTest.simulateHttpOk "GET" "/api/repository/files?repository=mohamed-rdr%2Fhunker" repositoryFilesJson
                     |> ProgramTest.simulateHttpOk "GET" sourceControlRequest (sourceControlJson 2)
+                    |> ProgramTest.simulateHttpOk "GET" repositoryFilesRequest repositoryFilesJson
                     |> ProgramTest.clickButton "Pull 2 ↓"
                     |> ProgramTest.update (Main.RepositoryMsg (Repository.PollSourceControl (Time.millisToPosix 120000)))
                     |> ProgramTest.ensureViewHas
@@ -99,6 +99,12 @@ suite =
                         ]
                     |> ProgramTest.ensureHttpRequestWasMade "GET" sourceControlRequest
                     |> ProgramTest.simulateHttpOk "GET" sourceControlRequest (sourceControlJson 1)
+                    |> ProgramTest.ensureViewHas
+                        [ tag "button"
+                        , containing [ text "Pulled 2 commits. Refreshing status…" ]
+                        , disabled True
+                        ]
+                    |> ProgramTest.simulateHttpOk "GET" repositoryFilesRequest repositoryFilesJson
                     |> ProgramTest.expectViewHas
                         [ text "Pulled 2 commits."
                         , tag "button"
@@ -109,8 +115,8 @@ suite =
             \() ->
                 startedAt "/mohamed-rdr/hunker"
                     |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
-                    |> ProgramTest.simulateHttpOk "GET" "/api/repository/files?repository=mohamed-rdr%2Fhunker" repositoryFilesJson
                     |> ProgramTest.simulateHttpOk "GET" sourceControlRequest (sourceControlJson 2)
+                    |> ProgramTest.simulateHttpOk "GET" repositoryFilesRequest repositoryFilesJson
                     |> ProgramTest.clickButton "README.md"
                     |> ProgramTest.ensureViewHas
                         [ text "Opening README.md…"
@@ -124,12 +130,23 @@ suite =
                         , text "Local file contents"
                         , text "Pull 2 ↓"
                         ]
+        , test "reloads the immutable file snapshot after switching branches" <|
+            \() ->
+                startedAt "/mohamed-rdr/hunker"
+                    |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
+                    |> ProgramTest.simulateHttpOk "GET" sourceControlRequest (sourceControlJson 0)
+                    |> ProgramTest.simulateHttpOk "GET" repositoryFilesRequest repositoryFilesJson
+                    |> ProgramTest.update (Main.RepositoryMsg (Repository.SelectedBranch "feature"))
+                    |> ProgramTest.simulateHttpOk "POST" "/api/repository/branch" (sourceControlAt "feature" featureOid 0)
+                    |> ProgramTest.ensureViewHas [ text "Reading repository files…" ]
+                    |> ProgramTest.simulateHttpOk "GET" featureFilesRequest featureFilesJson
+                    |> ProgramTest.expectViewHas [ text "feature.txt", text "Switched to feature." ]
         , test "shows the structured server message for a repository conflict" <|
             \() ->
                 startedAt "/mohamed-rdr/hunker"
                     |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
                     |> ProgramTest.simulateHttpResponse "GET"
-                        "/api/repository/files?repository=mohamed-rdr%2Fhunker"
+                        sourceControlRequest
                         (TestHttp.httpResponse
                             { statusCode = 409
                             , headers = []
@@ -143,7 +160,7 @@ suite =
                 startedAt "/example/missing"
                     |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
                     |> ProgramTest.simulateHttpResponse "GET"
-                        "/api/repository/files?repository=example%2Fmissing"
+                        "/api/repository/source-control?repository=example%2Fmissing"
                         (TestHttp.httpResponse
                             { statusCode = 404
                             , headers = []
@@ -155,11 +172,26 @@ suite =
             \() ->
                 startedAt "/mohamed-rdr/hunker"
                     |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
-                    |> ProgramTest.simulateHttpOk "GET" "/api/repository/files?repository=mohamed-rdr%2Fhunker" repositoryFilesJson
+                    |> ProgramTest.simulateHttpOk "GET" sourceControlRequest (sourceControlJson 0)
+                    |> ProgramTest.simulateHttpOk "GET" repositoryFilesRequest repositoryFilesJson
                     |> ProgramTest.clickButton "Commits"
                     |> ProgramTest.clickButton "Files"
-                    |> ProgramTest.simulateHttpOk "GET" "/api/repository/commits?repository=mohamed-rdr%2Fhunker" repositoryCommitsJson
+                    |> ProgramTest.simulateHttpOk "GET" repositoryCommitsRequest repositoryCommitsJson
                     |> ProgramTest.expectViewHas [ text "Choose a file" ]
+        , test "loads GitHub pull requests even when the repository is not cloned" <|
+            \() ->
+                startedAt "/example/missing/pulls"
+                    |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
+                    |> ProgramTest.simulateHttpResponse "GET"
+                        "/api/repository/source-control?repository=example%2Fmissing"
+                        (TestHttp.httpResponse
+                            { statusCode = 404
+                            , headers = []
+                            , body = """{"code":"not_found","message":"Local repository not found for example/missing.","retryable":false}"""
+                            }
+                        )
+                    |> ProgramTest.simulateHttpOk "GET" "/api/repository/pulls?repository=example%2Fmissing&state=open&page=1" repositoryPullsJson
+                    |> ProgramTest.expectViewHas [ text "Pull requests for example/missing", text "Remote pull request" ]
         ]
 
 
@@ -279,9 +311,34 @@ repositoryFilesJson =
     """{"files":[{"path":"README.md","size":10,"gitStatus":"clean"}]}"""
 
 
+repositoryOid : String
+repositoryOid =
+    "2222222222222222222222222222222222222222"
+
+
+repositoryFilesRequest : String
+repositoryFilesRequest =
+    "/api/repository/files?repository=mohamed-rdr%2Fhunker&oid=" ++ repositoryOid
+
+
+featureOid : String
+featureOid =
+    "3333333333333333333333333333333333333333"
+
+
+featureFilesRequest : String
+featureFilesRequest =
+    "/api/repository/files?repository=mohamed-rdr%2Fhunker&oid=" ++ featureOid
+
+
+featureFilesJson : String
+featureFilesJson =
+    """{"files":[{"path":"feature.txt","size":12,"gitStatus":"clean"}]}"""
+
+
 repositoryFileRequest : String
 repositoryFileRequest =
-    "/api/repository/file?repository=mohamed-rdr%2Fhunker&path=README.md"
+    "/api/repository/file?repository=mohamed-rdr%2Fhunker&oid=" ++ repositoryOid ++ "&path=README.md"
 
 
 repositoryFileJson : String
@@ -295,6 +352,16 @@ repositoryCommitsJson =
     """{"ref":"main","shallow":false,"commits":[{"sha":"1111111111111111111111111111111111111111","parents":[],"subject":"A stale commit","authorName":"Mohamed","authorEmail":"mohamed@example.com","authoredAt":"2026-08-10T00:00:00Z"}]}"""
 
 
+repositoryCommitsRequest : String
+repositoryCommitsRequest =
+    "/api/repository/commits?repository=mohamed-rdr%2Fhunker&oid=" ++ repositoryOid
+
+
+repositoryPullsJson : String
+repositoryPullsJson =
+    """{"state":"open","page":1,"hasMore":false,"pullRequests":[{"number":7,"title":"Remote pull request","author":"agent","avatarUrl":"","state":"open","draft":false,"updatedAt":"2026-08-10T00:00:00Z","base":"main","head":"feature","labels":[]}]}"""
+
+
 sourceControlRequest : String
 sourceControlRequest =
     "/api/repository/source-control?repository=mohamed-rdr%2Fhunker"
@@ -302,6 +369,11 @@ sourceControlRequest =
 
 sourceControlJson : Int -> String
 sourceControlJson behind =
+    sourceControlAt "main" repositoryOid behind
+
+
+sourceControlAt : String -> String -> Int -> String
+sourceControlAt branch oid behind =
     Encode.encode 0 <|
         Encode.object
             [ ( "status"
@@ -310,9 +382,9 @@ sourceControlJson behind =
                     , ( "checkout"
                       , Encode.object
                             [ ( "_tag", Encode.string "TrackingBranch" )
-                            , ( "name", Encode.string "main" )
-                            , ( "oid", Encode.string "2222222222222222222222222222222222222222" )
-                            , ( "upstream", Encode.string "origin/main" )
+                            , ( "name", Encode.string branch )
+                            , ( "oid", Encode.string oid )
+                            , ( "upstream", Encode.string ("origin/" ++ branch) )
                             , ( "ahead", Encode.int 0 )
                             , ( "behind", Encode.int behind )
                             ]
@@ -321,6 +393,11 @@ sourceControlJson behind =
                       , Encode.list identity
                             [ Encode.object
                                 [ ( "name", Encode.string "main" )
+                                , ( "local", Encode.bool True )
+                                , ( "remote", Encode.bool True )
+                                ]
+                            , Encode.object
+                                [ ( "name", Encode.string "feature" )
                                 , ( "local", Encode.bool True )
                                 , ( "remote", Encode.bool True )
                                 ]

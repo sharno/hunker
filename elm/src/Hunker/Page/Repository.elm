@@ -30,40 +30,89 @@ import Url
 
 type alias Model =
     { location : Route.RepositoryLocation
-    , repository : RepositoryState
+    , repository : RepositoryId
+    , local : LocalRepositoryState
+    , view : RepositoryView
     }
 
 
-type RepositoryState
-    = Resolving RepositoryRequest
-    | Missing MissingRepository
-    | Failed RepositoryRequest ApiError
-    | Ready ReadyRepository
+type RepositoryId
+    = RepositoryId String
 
 
-type RepositoryRequest
-    = RepositoryRequest String
+type BranchName
+    = BranchName String
 
 
-type alias ReadyRepository =
-    { request : RepositoryRequest
+type Oid
+    = Oid String
+
+
+type LocalRepositoryState
+    = LocalResolving LocalRequest
+    | LocalMissing MissingRepository
+    | LocalFailed LocalRequest ApiError
+    | LocalReady RepositorySnapshot
+
+
+type LocalRequest
+    = DiscoverLocal RepositoryId
+    | LoadSnapshot SnapshotRequest
+
+
+type alias RepositorySnapshot =
+    { repository : RepositoryId
+    , branch : BranchName
+    , headOid : Oid
     , files : RepositoryFiles.Model
-    , view : RepositoryView
     , sourceControl : SourceControl.State
     }
 
 
+type alias SnapshotRequest =
+    { identity : SnapshotIdentity
+    , branch : BranchName
+    , source : SourceControl.Snapshot
+    , completion : SnapshotCompletion
+    }
+
+
+type SnapshotIdentity
+    = SnapshotIdentity RepositoryId Oid
+
+
+type SnapshotCompletion
+    = InitialSnapshot
+    | RefreshedSnapshot
+    | SwitchedSnapshot BranchName
+    | PulledSnapshot Int
+
+
 type alias MissingRepository =
-    { request : RepositoryRequest
+    { repository : RepositoryId
     , error : ApiError
     , clone : CloneState
     }
 
 
 type RepositoryView
-    = Files
-    | Commits (Remote RepositoryRequest ApiError Repository.Commits)
-    | PullRequests RepositoryPulls.Model
+    = Files FilesState
+    | Commits CommitsState
+    | PullRequests PullsState
+
+
+type FilesState
+    = FilesWaiting
+    | FilesReady
+
+
+type CommitsState
+    = CommitsWaiting
+    | CommitsRemote (Remote SnapshotIdentity ApiError Repository.Commits)
+
+
+type PullsState
+    = PullsState RepositoryPulls.Model
 
 
 type CloneState
@@ -73,25 +122,30 @@ type CloneState
 
 
 type CloneRequest
-    = CloneRequest String String
+    = CloneRequest RepositoryId String
+
+
+type SourceRequest
+    = DiscoverSource RepositoryId
+    | RefreshSource SnapshotIdentity
+    | SwitchSource SnapshotIdentity BranchName
+    | PulledSource SnapshotIdentity Int
 
 
 type Msg
-    = FilesLoaded String (List File)
-    | FilesFailed String ApiError
+    = FilesLoaded SnapshotRequest (List File)
+    | FilesFailed SnapshotRequest ApiError
     | FileLoaded RepositoryFiles.FileRequest FileContent
     | FileFailed RepositoryFiles.FileRequest ApiError
     | SearchLoaded RepositoryFiles.SearchRequest SearchResults
     | SearchFailed RepositoryFiles.SearchRequest ApiError
-    | CommitsLoaded RepositoryRequest Repository.Commits
-    | CommitsFailed RepositoryRequest ApiError
+    | CommitsLoaded SnapshotIdentity Repository.Commits
+    | CommitsFailed SnapshotIdentity ApiError
     | PullsLoaded RepositoryPulls.Identity PullRequestsPage
     | PullsFailed RepositoryPulls.Identity ApiError
-    | SourceLoaded String SourceControlStatus
-    | PullCompleted String Int
-    | PullStatusLoaded String Int SourceControlStatus
-    | PullStatusFailed String ApiError
-    | SourceFailed String ApiError
+    | SourceLoaded SourceRequest SourceControlStatus
+    | PullCompleted SnapshotIdentity Int
+    | SourceFailed SourceRequest ApiError
     | CloneLoaded CloneRequest String
     | CloneFailed CloneRequest ApiError
     | ChangedSearch String
@@ -117,67 +171,82 @@ init location =
         name =
             location.owner ++ "/" ++ location.repository
 
-        request =
-            RepositoryRequest name
+        repository =
+            RepositoryId name
+
+        viewState =
+            initialView name location
 
         model =
             { location = location
-            , repository = Resolving request
+            , repository = repository
+            , local = LocalResolving (DiscoverLocal repository)
+            , view = viewState
             }
     in
-    ( model, Api.fetchRepositoryFiles name (FilesLoaded name) (FilesFailed name) )
+    ( model
+    , Effect.batch
+        [ Api.refreshSourceControl name (SourceLoaded (DiscoverSource repository)) (SourceFailed (DiscoverSource repository))
+        , loadRemoteView viewState
+        ]
+    )
 
 
 initialView : String -> Route.RepositoryLocation -> RepositoryView
 initialView name location =
     case location.tab of
         RepositoryFiles ->
-            Files
+            Files FilesWaiting
 
         RepositoryCommits ->
-            Commits (Loading (RepositoryRequest name))
+            Commits CommitsWaiting
 
         RepositoryPulls ->
-            PullRequests (RepositoryPulls.init name location.pullState)
+            PullRequests (PullsState (RepositoryPulls.init name location.pullState))
 
 
-loadView : RepositoryFiles.Model -> RepositoryView -> Effect Msg
-loadView files viewState =
+loadFiles : RepositoryFiles.Model -> Effect Msg
+loadFiles files =
+    Effect.batch
+        [ case RepositoryFiles.selectedFile files of
+            Loading request ->
+                Api.fetchRepositoryFile
+                    (RepositoryFiles.fileRepository request)
+                    (RepositoryFiles.fileOid request)
+                    (RepositoryFiles.filePath request)
+                    (FileLoaded request)
+                    (FileFailed request)
+
+            _ ->
+                Effect.none
+        , case RepositoryFiles.search files of
+            Loading request ->
+                Api.searchRepository
+                    (RepositoryFiles.searchRepository request)
+                    (RepositoryFiles.searchOid request)
+                    (RepositoryFiles.searchQuery request)
+                    (Route.searchModeToString (RepositoryFiles.requestSearchMode request))
+                    (SearchLoaded request)
+                    (SearchFailed request)
+
+            _ ->
+                Effect.none
+        ]
+
+
+loadRemoteView : RepositoryView -> Effect Msg
+loadRemoteView viewState =
     case viewState of
-        Files ->
-            Effect.batch
-                [ case RepositoryFiles.selectedFile files of
-                    Loading request ->
-                        Api.fetchRepositoryFile (RepositoryFiles.fileRepository request) (RepositoryFiles.filePath request) (FileLoaded request) (FileFailed request)
-
-                    _ ->
-                        Effect.none
-                , case RepositoryFiles.search files of
-                    Loading request ->
-                        Api.searchRepository
-                            (RepositoryFiles.searchRepository request)
-                            (RepositoryFiles.searchQuery request)
-                            (Route.searchModeToString (RepositoryFiles.requestSearchMode request))
-                            (SearchLoaded request)
-                            (SearchFailed request)
-
-                    _ ->
-                        Effect.none
-                ]
-
-        Commits (Loading request) ->
-            Api.fetchRepositoryCommits (repositoryRequestName request) (CommitsLoaded request) (CommitsFailed request)
-
-        Commits _ ->
-            Effect.none
-
-        PullRequests pulls ->
+        PullRequests (PullsState pulls) ->
             case RepositoryPulls.request pulls of
                 Loading request ->
                     loadPullRequests request
 
                 _ ->
                     Effect.none
+
+        _ ->
+            Effect.none
 
 
 loadPullRequests : RepositoryPulls.Identity -> Effect Msg
@@ -200,135 +269,153 @@ navigate nextLocation model =
     then
         init nextLocation
 
-    else
-        navigateWithinRepository nextLocation model
-
-
-navigateWithinRepository : Route.RepositoryLocation -> Model -> ( Model, Effect Msg )
-navigateWithinRepository nextLocation model =
-    if nextLocation == model.location then
+    else if nextLocation == model.location then
         unchanged model
 
     else
-        let
-            nextView =
-                initialView (repositoryName model) nextLocation
+        activateLocation nextLocation model
 
-            updated =
-                { model
-                    | location = nextLocation
-                    , repository =
-                        mapReady
-                            (\ready ->
-                                { ready
-                                    | files = RepositoryFiles.navigate nextLocation.path nextLocation.query nextLocation.searchMode ready.files
-                                    , view = nextView
-                                }
-                            )
-                            model.repository
-                }
-        in
-        ( updated
-        , readyState updated
-            |> Maybe.map (\ready -> loadView ready.files ready.view)
-            |> Maybe.withDefault Effect.none
-        )
+
+activateLocation : Route.RepositoryLocation -> Model -> ( Model, Effect Msg )
+activateLocation nextLocation model =
+    let
+        name =
+            repositoryName model
+    in
+    case ( nextLocation.tab, readySnapshot model ) of
+        ( RepositoryFiles, Just snapshot ) ->
+            let
+                files =
+                    RepositoryFiles.navigate nextLocation.path nextLocation.query nextLocation.searchMode snapshot.files
+            in
+            ( { model
+                | location = nextLocation
+                , local = LocalReady { snapshot | files = files }
+                , view = Files FilesReady
+              }
+            , loadFiles files
+            )
+
+        ( RepositoryCommits, Just snapshot ) ->
+            let
+                identity =
+                    snapshotIdentity snapshot
+            in
+            ( { model | location = nextLocation, view = Commits (CommitsRemote (Loading identity)) }
+            , Api.fetchRepositoryCommits name (oidString snapshot.headOid) (CommitsLoaded identity) (CommitsFailed identity)
+            )
+
+        ( RepositoryPulls, _ ) ->
+            let
+                pulls =
+                    RepositoryPulls.init name nextLocation.pullState
+
+                nextView =
+                    PullRequests (PullsState pulls)
+            in
+            ( { model | location = nextLocation, view = nextView }, loadRemoteView nextView )
+
+        ( RepositoryFiles, Nothing ) ->
+            ( { model | location = nextLocation, view = Files FilesWaiting }, Effect.none )
+
+        ( RepositoryCommits, Nothing ) ->
+            ( { model | location = nextLocation, view = Commits CommitsWaiting }, Effect.none )
 
 
 repositoryName : Model -> String
 repositoryName model =
-    model.location.owner ++ "/" ++ model.location.repository
+    repositoryIdString model.repository
 
 
-repositoryRequestName : RepositoryRequest -> String
-repositoryRequestName (RepositoryRequest name) =
-    name
+repositoryIdString : RepositoryId -> String
+repositoryIdString (RepositoryId value) =
+    value
 
 
-readyState : Model -> Maybe ReadyRepository
-readyState model =
-    case model.repository of
-        Ready ready ->
-            Just ready
-
-        _ ->
-            Nothing
+branchNameString : BranchName -> String
+branchNameString (BranchName value) =
+    value
 
 
-mapReady : (ReadyRepository -> ReadyRepository) -> RepositoryState -> RepositoryState
-mapReady transform state =
-    case state of
-        Ready ready ->
-            Ready (transform ready)
-
-        _ ->
-            state
+oidString : Oid -> String
+oidString (Oid value) =
+    value
 
 
-repositoryView : RepositoryState -> Maybe RepositoryView
-repositoryView state =
-    case state of
-        Ready ready ->
-            Just ready.view
+snapshotIdentity : RepositorySnapshot -> SnapshotIdentity
+snapshotIdentity snapshot =
+    SnapshotIdentity snapshot.repository snapshot.headOid
+
+
+readySnapshot : Model -> Maybe RepositorySnapshot
+readySnapshot model =
+    case model.local of
+        LocalReady snapshot ->
+            Just snapshot
 
         _ ->
             Nothing
 
 
-mapRepositoryView : (RepositoryView -> RepositoryView) -> RepositoryState -> RepositoryState
-mapRepositoryView transform state =
-    mapReady (\ready -> { ready | view = transform ready.view }) state
-
-
-repositorySourceControl : RepositoryState -> Maybe SourceControl.State
-repositorySourceControl state =
-    case state of
-        Ready ready ->
-            Just ready.sourceControl
+mapSnapshot : (RepositorySnapshot -> RepositorySnapshot) -> Model -> Model
+mapSnapshot transform model =
+    case model.local of
+        LocalReady snapshot ->
+            { model | local = LocalReady (transform snapshot) }
 
         _ ->
-            Nothing
+            model
 
 
-withSourceControl : SourceControl.State -> RepositoryState -> RepositoryState
-withSourceControl source state =
-    mapReady (\ready -> { ready | sourceControl = source }) state
-
-
-mapFilesView : (RepositoryFiles.Model -> RepositoryFiles.Model) -> RepositoryState -> RepositoryState
+mapFilesView : (RepositoryFiles.Model -> RepositoryFiles.Model) -> Model -> Model
 mapFilesView transform =
-    mapReady (\ready -> { ready | files = transform ready.files })
+    mapSnapshot (\snapshot -> { snapshot | files = transform snapshot.files })
 
 
-mapCommitsView : (Remote RepositoryRequest ApiError Repository.Commits -> Remote RepositoryRequest ApiError Repository.Commits) -> RepositoryState -> RepositoryState
-mapCommitsView transform =
-    mapRepositoryView
-        (\current ->
-            case current of
-                Commits commits ->
-                    Commits (transform commits)
+mapCommitsView : (Remote SnapshotIdentity ApiError Repository.Commits -> Remote SnapshotIdentity ApiError Repository.Commits) -> Model -> Model
+mapCommitsView transform model =
+    case model.view of
+        Commits (CommitsRemote commits) ->
+            { model | view = Commits (CommitsRemote (transform commits)) }
 
-                _ ->
-                    current
-        )
+        _ ->
+            model
 
 
-mapPullsView : (RepositoryPulls.Model -> RepositoryPulls.Model) -> RepositoryState -> RepositoryState
-mapPullsView transform =
-    mapRepositoryView
-        (\current ->
-            case current of
-                PullRequests pulls ->
-                    PullRequests (transform pulls)
+mapPullsView : (RepositoryPulls.Model -> RepositoryPulls.Model) -> Model -> Model
+mapPullsView transform model =
+    case model.view of
+        PullRequests (PullsState pulls) ->
+            { model | view = PullRequests (PullsState (transform pulls)) }
 
-                _ ->
-                    current
-        )
+        _ ->
+            model
 
 
-cloneRequestRepository : CloneRequest -> String
-cloneRequestRepository (CloneRequest name _) =
-    name
+cloneRequestRepository : CloneRequest -> RepositoryId
+cloneRequestRepository (CloneRequest repository _) =
+    repository
+
+
+localSourceControl : Model -> Maybe SourceControl.State
+localSourceControl model =
+    case model.local of
+        LocalReady snapshot ->
+            Just snapshot.sourceControl
+
+        LocalResolving (LoadSnapshot request) ->
+            Just (SourceControl.Ready request.source)
+
+        LocalFailed (LoadSnapshot request) error ->
+            Just (SourceControl.Unavailable (repositoryName model) error)
+
+        _ ->
+            Nothing
+
+
+mapSourceControl : (SourceControl.State -> SourceControl.State) -> Model -> Model
+mapSourceControl transform model =
+    mapSnapshot (\snapshot -> { snapshot | sourceControl = transform snapshot.sourceControl }) model
 
 
 subscriptions : Model -> Sub Msg
@@ -339,209 +426,195 @@ subscriptions _ =
 update : Msg -> Model -> ( Model, Effect Msg )
 update msg model =
     case msg of
-        FilesLoaded requested files ->
-            if requested /= repositoryName model then
-                unchanged model
+        FilesLoaded request files ->
+            case model.local of
+                LocalResolving (LoadSnapshot active) ->
+                    if active.identity /= request.identity then
+                        unchanged model
 
-            else
-                let
-                    request =
-                        RepositoryRequest requested
+                    else
+                        let
+                            repository =
+                                snapshotRepository request.identity
 
-                    fileBrowser =
-                        RepositoryFiles.init requested files model.location.path model.location.query model.location.searchMode
+                            oid =
+                                snapshotOid request.identity
 
-                    viewState =
-                        initialView requested model.location
+                            fileBrowser =
+                                RepositoryFiles.init
+                                    (repositoryIdString repository)
+                                    (oidString oid)
+                                    files
+                                    model.location.path
+                                    model.location.query
+                                    model.location.searchMode
 
-                    updated =
-                        { model
-                            | repository =
-                                Ready
-                                    { request = request
-                                    , files = fileBrowser
-                                    , view = viewState
-                                    , sourceControl = SourceControl.Loading requested
-                                    }
-                        }
-                in
-                ( updated
-                , Effect.batch
-                    [ Api.refreshSourceControl requested (SourceLoaded requested) (SourceFailed requested)
-                    , loadView fileBrowser viewState
-                    ]
-                )
+                            source =
+                                request.source
 
-        FilesFailed requested error ->
-            if requested == repositoryName model then
-                ( { model
-                    | repository =
-                        if ApiError.isNotFound error then
-                            Missing
-                                { request = RepositoryRequest requested
-                                , error = error
-                                , clone = CloneIdle
+                            snapshot =
+                                { repository = repository
+                                , branch = request.branch
+                                , headOid = oid
+                                , files = fileBrowser
+                                , sourceControl =
+                                    SourceControl.Ready
+                                        { source | activity = completedActivity request.completion }
                                 }
 
-                        else
-                            Failed (RepositoryRequest requested) error
-                  }
-                , Effect.none
-                )
+                            ready =
+                                { model | local = LocalReady snapshot }
+                        in
+                        activateLocation model.location ready
 
-            else
-                unchanged model
+                _ ->
+                    unchanged model
+
+        FilesFailed request error ->
+            case model.local of
+                LocalResolving (LoadSnapshot active) ->
+                    if active.identity == request.identity then
+                        ( { model | local = LocalFailed (LoadSnapshot request) error }, Effect.none )
+
+                    else
+                        unchanged model
+
+                _ ->
+                    unchanged model
 
         FileLoaded request file ->
-            ( { model | repository = mapFilesView (RepositoryFiles.fileLoaded request file) model.repository }, Effect.none )
+            ( mapFilesView (RepositoryFiles.fileLoaded request file) model, Effect.none )
 
         FileFailed request error ->
-            ( { model | repository = mapFilesView (RepositoryFiles.fileFailed request error) model.repository }, Effect.none )
+            ( mapFilesView (RepositoryFiles.fileFailed request error) model, Effect.none )
 
         SearchLoaded request results ->
-            ( { model | repository = mapFilesView (RepositoryFiles.searchLoaded request results) model.repository }, Effect.none )
+            ( mapFilesView (RepositoryFiles.searchLoaded request results) model, Effect.none )
 
         SearchFailed request error ->
-            ( { model | repository = mapFilesView (RepositoryFiles.searchFailed request error) model.repository }, Effect.none )
+            ( mapFilesView (RepositoryFiles.searchFailed request error) model, Effect.none )
 
         CommitsLoaded requested commits ->
-            if repositoryRequestName requested == repositoryName model then
-                ( { model | repository = mapCommitsView (always (Success requested commits)) model.repository }, Effect.none )
+            ( mapCommitsView
+                (\remote ->
+                    if Remote.identity remote == Just requested then
+                        Success requested commits
 
-            else
-                unchanged model
+                    else
+                        remote
+                )
+                model
+            , Effect.none
+            )
 
         CommitsFailed requested error ->
-            if repositoryRequestName requested == repositoryName model then
-                ( { model | repository = mapCommitsView (always (Failure requested error)) model.repository }, Effect.none )
+            ( mapCommitsView
+                (\remote ->
+                    if Remote.identity remote == Just requested then
+                        Failure requested error
 
-            else
-                unchanged model
+                    else
+                        remote
+                )
+                model
+            , Effect.none
+            )
 
         PullsLoaded request page ->
-            ( { model | repository = mapPullsView (RepositoryPulls.loaded request page) model.repository }, Effect.none )
+            ( mapPullsView (RepositoryPulls.loaded request page) model, Effect.none )
 
         PullsFailed request error ->
-            ( { model | repository = mapPullsView (RepositoryPulls.failed request error) model.repository }, Effect.none )
+            ( mapPullsView (RepositoryPulls.failed request error) model, Effect.none )
 
-        SourceLoaded requested status ->
-            if requested == repositoryName model then
-                ( { model
-                    | repository =
-                        withSourceControl
-                            (SourceControl.Ready
-                                { repository = requested
-                                , status = status
-                                , activity = SourceControl.Idle
-                                }
-                            )
-                            model.repository
-                  }
-                , Effect.none
-                )
+        SourceLoaded request status ->
+            if sourceRequestMatches request model then
+                beginSnapshot request status model
 
             else
                 unchanged model
 
         PullCompleted requested count ->
-            updateReadySource requested model <|
-                \source ->
-                    ( { model
-                        | repository =
-                            withSourceControl
-                                (SourceControl.Ready { source | activity = SourceControl.PullSynchronizing count })
-                                model.repository
-                      }
-                    , Api.refreshSourceControl requested
-                        (PullStatusLoaded requested count)
-                        (PullStatusFailed requested)
-                    )
+            withReadySource model <|
+                \snapshot source ->
+                    if snapshotIdentity snapshot /= requested then
+                        unchanged model
 
-        PullStatusLoaded requested count status ->
-            if requested == repositoryName model then
-                ( { model
-                    | repository =
-                        withSourceControl
-                            (SourceControl.Ready
-                                { repository = requested
-                                , status = status
-                                , activity = SourceControl.Succeeded (SourceControl.pulledMessage count)
-                                }
+                    else
+                        ( mapSourceControl
+                            (always (SourceControl.Ready { source | activity = SourceControl.PullSynchronizing count }))
+                            model
+                        , Api.refreshSourceControl
+                            (repositoryName model)
+                            (SourceLoaded (PulledSource requested count))
+                            (SourceFailed (PulledSource requested count))
+                        )
+
+        SourceFailed request error ->
+            if not (sourceRequestMatches request model) then
+                unchanged model
+
+            else
+                case request of
+                    DiscoverSource repository ->
+                        if ApiError.isNotFound error then
+                            ( { model
+                                | local =
+                                    LocalMissing
+                                        { repository = repository
+                                        , error = error
+                                        , clone = CloneIdle
+                                        }
+                              }
+                            , Effect.none
                             )
-                            model.repository
-                  }
-                , Effect.none
-                )
 
-            else
-                unchanged model
+                        else
+                            ( { model | local = LocalFailed (DiscoverLocal repository) error }, Effect.none )
 
-        PullStatusFailed requested error ->
-            if requested == repositoryName model then
-                ( { model
-                    | repository =
-                        withSourceControl
-                            (SourceControl.Unavailable requested
-                                (ApiError.context "The pull completed, but Git status could not be refreshed. " error)
-                            )
-                            model.repository
-                  }
-                , Effect.none
-                )
-
-            else
-                unchanged model
-
-        SourceFailed requested error ->
-            if requested == repositoryName model then
-                ( { model | repository = withSourceControl (SourceControl.Unavailable requested error) model.repository }, Effect.none )
-
-            else
-                unchanged model
+                    _ ->
+                        ( mapSourceControl (always (SourceControl.Unavailable (repositoryName model) error)) model, Effect.none )
 
         CloneLoaded request _ ->
-            if cloneRequestRepository request /= repositoryName model then
+            if cloneRequestRepository request /= model.repository then
                 unchanged model
 
             else
                 let
-                    name =
-                        repositoryName model
+                    sourceRequest =
+                        DiscoverSource model.repository
                 in
-                ( { model
-                    | repository = Resolving (RepositoryRequest name)
-                  }
-                , Api.fetchRepositoryFiles name (FilesLoaded name) (FilesFailed name)
+                ( { model | local = LocalResolving (DiscoverLocal model.repository) }
+                , Api.refreshSourceControl (repositoryName model) (SourceLoaded sourceRequest) (SourceFailed sourceRequest)
                 )
 
         CloneFailed request error ->
-            if cloneRequestRepository request == repositoryName model then
-                case model.repository of
-                    Missing missing ->
-                        ( { model | repository = Missing { missing | clone = CloneFailure request error } }, Effect.none )
+            if cloneRequestRepository request /= model.repository then
+                unchanged model
+
+            else
+                case model.local of
+                    LocalMissing missing ->
+                        ( { model | local = LocalMissing { missing | clone = CloneFailure request error } }, Effect.none )
 
                     _ ->
                         unchanged model
 
-            else
-                unchanged model
-
         ChangedSearch query ->
-            ( { model | repository = mapFilesView (RepositoryFiles.changeSearchDraft query) model.repository }, Effect.none )
+            ( mapFilesView (RepositoryFiles.changeSearchDraft query) model, Effect.none )
 
         SelectedSearchMode mode ->
-            ( { model | repository = mapFilesView (RepositoryFiles.selectSearchMode mode) model.repository }, Effect.none )
+            ( mapFilesView (RepositoryFiles.selectSearchMode mode) model, Effect.none )
 
         SubmittedSearch ->
-            case readyState model of
-                Just ready ->
+            case readySnapshot model of
+                Just snapshot ->
                     ( model
                     , Effect.PushUrl
                         (repositoryPath model
                             RepositoryFiles
                             Nothing
-                            (RepositoryFiles.searchDraft ready.files)
-                            (RepositoryFiles.searchMode ready.files)
+                            (RepositoryFiles.searchDraft snapshot.files)
+                            (RepositoryFiles.searchMode snapshot.files)
                             model.location.pullState
                         )
                     )
@@ -559,19 +632,17 @@ update msg model =
             ( model, Effect.PushUrl (repositoryPath model RepositoryFiles Nothing model.location.query model.location.searchMode model.location.pullState) )
 
         ToggledFolder path ->
-            ( { model | repository = mapFilesView (RepositoryFiles.toggleFolder path) model.repository }, Effect.none )
+            ( mapFilesView (RepositoryFiles.toggleFolder path) model, Effect.none )
 
         SelectedPullState state ->
             ( model, Effect.PushUrl (repositoryPath model RepositoryPulls Nothing "" LiteralSearch state) )
 
         RequestedMorePulls ->
-            case repositoryView model.repository of
-                Just (PullRequests pulls) ->
+            case model.view of
+                PullRequests (PullsState pulls) ->
                     case RepositoryPulls.more pulls of
                         Just ( updated, request ) ->
-                            ( { model | repository = mapPullsView (always updated) model.repository }
-                            , loadPullRequests request
-                            )
+                            ( mapPullsView (always updated) model, loadPullRequests request )
 
                         Nothing ->
                             unchanged model
@@ -580,46 +651,53 @@ update msg model =
                     unchanged model
 
         SelectedBranch branch ->
-            let
-                name =
-                    repositoryName model
-            in
-            updateReadySource name model <|
-                \source ->
+            withReadySource model <|
+                \snapshot source ->
                     if SourceControl.busy source.activity then
                         unchanged model
 
                     else
-                        ( { model | repository = withSourceControl (SourceControl.Ready { source | activity = SourceControl.BranchSwitching branch }) model.repository }
-                        , Api.switchBranch name branch (SourceLoaded name) (SourceFailed name)
+                        let
+                            identity =
+                                snapshotIdentity snapshot
+
+                            selected =
+                                BranchName branch
+                        in
+                        ( mapSourceControl (always (SourceControl.Ready { source | activity = SourceControl.BranchSwitching branch })) model
+                        , Api.switchBranch
+                            (repositoryName model)
+                            branch
+                            (SourceLoaded (SwitchSource identity selected))
+                            (SourceFailed (SwitchSource identity selected))
                         )
 
         RequestedSourceRefresh ->
             refreshSource model
 
         RequestedPull ->
-            let
-                name =
-                    repositoryName model
-            in
-            updateReadySource name model <|
-                \source ->
+            withReadySource model <|
+                \snapshot source ->
                     if SourceControl.busy source.activity || not (SourceControl.canPull source.status) then
                         unchanged model
 
                     else
-                        ( { model | repository = withSourceControl (SourceControl.Ready { source | activity = SourceControl.PullInFlight }) model.repository }
-                        , Api.pullRepository name (PullCompleted name) (SourceFailed name)
+                        let
+                            identity =
+                                snapshotIdentity snapshot
+                        in
+                        ( mapSourceControl (always (SourceControl.Ready { source | activity = SourceControl.PullInFlight })) model
+                        , Api.pullRepository (repositoryName model) (PullCompleted identity) (SourceFailed (RefreshSource identity))
                         )
 
         RequestedClone destination ->
             let
                 request =
-                    CloneRequest (repositoryName model) destination
+                    CloneRequest model.repository destination
             in
-            case model.repository of
-                Missing missing ->
-                    ( { model | repository = Missing { missing | clone = CloneInFlight request } }
+            case model.local of
+                LocalMissing missing ->
+                    ( { model | local = LocalMissing { missing | clone = CloneInFlight request } }
                     , Api.cloneRepository (repositoryName model) destination (CloneLoaded request) (CloneFailed request)
                     )
 
@@ -642,46 +720,191 @@ update msg model =
             refreshSource model
 
 
-refreshSource : Model -> ( Model, Effect Msg )
-refreshSource model =
+beginSnapshot : SourceRequest -> SourceControlStatus -> Model -> ( Model, Effect Msg )
+beginSnapshot sourceRequest status model =
     let
-        name =
-            repositoryName model
+        ( branch, oid ) =
+            checkoutRevision status.checkout
+
+        repository =
+            sourceRequestRepository sourceRequest
+
+        completion =
+            sourceRequestCompletion sourceRequest
+
+        request =
+            { identity = SnapshotIdentity repository oid
+            , branch = branch
+            , source =
+                { repository = repositoryIdString repository
+                , status = status
+                , activity = loadingActivity completion
+                }
+            , completion = completion
+            }
+
+        currentLocation =
+            model.location
+
+        location =
+            { currentLocation | ref = Just (branchNameString branch) }
     in
-    case repositorySourceControl model.repository of
-        Just (SourceControl.Ready source) ->
-            if SourceControl.busy source.activity then
-                unchanged model
+    ( { model | location = location, local = LocalResolving (LoadSnapshot request) }
+    , Effect.batch
+        [ Api.fetchRepositoryFiles
+            (repositoryIdString repository)
+            (oidString oid)
+            (FilesLoaded request)
+            (FilesFailed request)
+        , Effect.ReplaceUrl (Route.toPath (Route.Repository location))
+        ]
+    )
 
-            else
-                ( { model | repository = withSourceControl (SourceControl.Ready { source | activity = SourceControl.Refreshing }) model.repository }
-                , Api.refreshSourceControl name (SourceLoaded name) (SourceFailed name)
-                )
 
-        Just (SourceControl.Unavailable requested _) ->
-            ( { model | repository = withSourceControl (SourceControl.Loading requested) model.repository }
-            , Api.refreshSourceControl name (SourceLoaded name) (SourceFailed name)
-            )
+checkoutRevision : Checkout -> ( BranchName, Oid )
+checkoutRevision checkout =
+    case checkout of
+        TrackingBranch value ->
+            ( BranchName value.name, Oid value.oid )
 
-        Just (SourceControl.Loading _) ->
-            unchanged model
+        UntrackedBranch value ->
+            ( BranchName value.name, Oid value.oid )
+
+        DetachedHead value ->
+            ( BranchName value.oid, Oid value.oid )
+
+
+sourceRequestRepository : SourceRequest -> RepositoryId
+sourceRequestRepository request =
+    case request of
+        DiscoverSource repository ->
+            repository
+
+        RefreshSource (SnapshotIdentity repository _) ->
+            repository
+
+        SwitchSource (SnapshotIdentity repository _) _ ->
+            repository
+
+        PulledSource (SnapshotIdentity repository _) _ ->
+            repository
+
+
+sourceRequestCompletion : SourceRequest -> SnapshotCompletion
+sourceRequestCompletion request =
+    case request of
+        DiscoverSource _ ->
+            InitialSnapshot
+
+        RefreshSource _ ->
+            RefreshedSnapshot
+
+        SwitchSource _ branch ->
+            SwitchedSnapshot branch
+
+        PulledSource _ count ->
+            PulledSnapshot count
+
+
+sourceRequestMatches : SourceRequest -> Model -> Bool
+sourceRequestMatches request model =
+    case request of
+        DiscoverSource repository ->
+            model.repository
+                == repository
+                && (case model.local of
+                        LocalResolving (DiscoverLocal active) ->
+                            active == repository
+
+                        _ ->
+                            False
+                   )
+
+        RefreshSource identity ->
+            readySnapshot model |> Maybe.map ((==) identity << snapshotIdentity) |> Maybe.withDefault False
+
+        SwitchSource identity _ ->
+            readySnapshot model |> Maybe.map ((==) identity << snapshotIdentity) |> Maybe.withDefault False
+
+        PulledSource identity _ ->
+            readySnapshot model |> Maybe.map ((==) identity << snapshotIdentity) |> Maybe.withDefault False
+
+
+snapshotRepository : SnapshotIdentity -> RepositoryId
+snapshotRepository (SnapshotIdentity repository _) =
+    repository
+
+
+snapshotOid : SnapshotIdentity -> Oid
+snapshotOid (SnapshotIdentity _ oid) =
+    oid
+
+
+loadingActivity : SnapshotCompletion -> SourceControl.Activity
+loadingActivity completion =
+    case completion of
+        InitialSnapshot ->
+            SourceControl.Refreshing
+
+        RefreshedSnapshot ->
+            SourceControl.Refreshing
+
+        SwitchedSnapshot branch ->
+            SourceControl.BranchSwitching (branchNameString branch)
+
+        PulledSnapshot count ->
+            SourceControl.PullSynchronizing count
+
+
+completedActivity : SnapshotCompletion -> SourceControl.Activity
+completedActivity completion =
+    case completion of
+        InitialSnapshot ->
+            SourceControl.Idle
+
+        RefreshedSnapshot ->
+            SourceControl.Succeeded "Repository refreshed."
+
+        SwitchedSnapshot branch ->
+            SourceControl.Succeeded ("Switched to " ++ branchNameString branch ++ ".")
+
+        PulledSnapshot count ->
+            SourceControl.Succeeded (SourceControl.pulledMessage count)
+
+
+withReadySource : Model -> (RepositorySnapshot -> SourceControl.Snapshot -> ( Model, Effect Msg )) -> ( Model, Effect Msg )
+withReadySource model apply =
+    case readySnapshot model of
+        Just snapshot ->
+            case snapshot.sourceControl of
+                SourceControl.Ready source ->
+                    apply snapshot source
+
+                _ ->
+                    unchanged model
 
         Nothing ->
             unchanged model
 
 
-updateReadySource : String -> Model -> (SourceControl.Snapshot -> ( Model, Effect Msg )) -> ( Model, Effect Msg )
-updateReadySource requested model updateSource =
-    case repositorySourceControl model.repository of
-        Just (SourceControl.Ready source) ->
-            if source.repository == requested then
-                updateSource source
-
-            else
+refreshSource : Model -> ( Model, Effect Msg )
+refreshSource model =
+    withReadySource model <|
+        \snapshot source ->
+            if SourceControl.busy source.activity then
                 unchanged model
 
-        _ ->
-            unchanged model
+            else
+                let
+                    identity =
+                        snapshotIdentity snapshot
+                in
+                ( mapSourceControl (always (SourceControl.Ready { source | activity = SourceControl.Refreshing })) model
+                , Api.refreshSourceControl
+                    (repositoryName model)
+                    (SourceLoaded (RefreshSource identity))
+                    (SourceFailed (RefreshSource identity))
+                )
 
 
 unchanged : Model -> ( Model, Effect Msg )
@@ -691,17 +914,24 @@ unchanged model =
 
 repositoryPath : Model -> RepositoryTab -> Maybe String -> String -> SearchMode -> PullRequestState -> String
 repositoryPath model tab path query mode pullState =
+    let
+        activeRef =
+            readySnapshot model
+                |> Maybe.map (.branch >> branchNameString)
+                |> Maybe.map Just
+                |> Maybe.withDefault model.location.ref
+    in
     Route.toPath
         (Route.Repository
             { owner = model.location.owner
             , repository = model.location.repository
             , tab = tab
             , ref =
-                if path == Nothing then
-                    model.location.ref
+                if tab == RepositoryPulls then
+                    Nothing
 
                 else
-                    Just "HEAD"
+                    activeRef
             , path = path
             , query = query
             , searchMode = mode
@@ -736,11 +966,11 @@ tabButton label tab active =
 
 searchForm : Model -> Html Msg
 searchForm model =
-    case readyState model of
-        Just ready ->
+    case readySnapshot model of
+        Just snapshot ->
             let
                 mode =
-                    RepositoryFiles.searchMode ready.files
+                    RepositoryFiles.searchMode snapshot.files
             in
             form
                 [ class ("repository-search" ++ activeClass (model.location.tab /= RepositoryFiles))
@@ -755,7 +985,7 @@ searchForm model =
                     [ type_ "search"
                     , attribute "aria-label" "Search repository"
                     , placeholder "Search repository"
-                    , value (RepositoryFiles.searchDraft ready.files)
+                    , value (RepositoryFiles.searchDraft snapshot.files)
                     , onInput ChangedSearch
                     ]
                     []
@@ -801,7 +1031,7 @@ view syntaxHighlighting model =
 
 sourceControlView : Model -> Html Msg
 sourceControlView model =
-    case repositorySourceControl model.repository of
+    case localSourceControl model of
         Just (SourceControl.Loading _) ->
             section [ class "repository-source-control", attribute "role" "status" ]
                 [ span [ class "source-control-loading" ] [ text "Reading Git state…" ] ]
@@ -923,36 +1153,36 @@ sourceFeedback action path =
 
 filesView : Bool -> Model -> Html Msg
 filesView syntaxHighlighting model =
-    case model.repository of
-        Missing missing ->
+    case model.local of
+        LocalMissing missing ->
             cloneOffer missing.error missing.clone
 
-        Resolving _ ->
+        LocalResolving _ ->
             pageState "Reading repository files…" "Using the current local checkout without switching other tabs."
 
-        Failed _ error ->
+        LocalFailed _ error ->
             pageState "Could not read this repository" (ApiError.message error)
 
-        Ready ready ->
+        LocalReady snapshot ->
             let
                 files =
-                    RepositoryFiles.catalog ready.files
+                    RepositoryFiles.catalog snapshot.files
             in
             div [ class "repository-workspace" ]
                 [ aside [ class "repository-file-sidebar" ]
                     [ header [] [ strong [] [ text "Files" ], span [ class "count-badge" ] [ text (String.fromInt (List.length files)) ] ]
-                    , fileTree model ready.files (FileTree.build .path files)
+                    , fileTree model snapshot.files (FileTree.build .path files)
                     ]
                 , section [ class "repository-results" ]
-                    [ case ready.view of
-                        Files ->
+                    [ case model.view of
+                        Files _ ->
                             case model.location.path of
                                 Just _ ->
-                                    repositoryFileView syntaxHighlighting model ready.files
+                                    repositoryFileView syntaxHighlighting model snapshot.files
 
                                 Nothing ->
                                     if model.location.query /= "" then
-                                        repositorySearchView model ready.files
+                                        repositorySearchView model snapshot.files
 
                                     else
                                         div [ class "repository-empty-selection" ]
@@ -1132,8 +1362,8 @@ searchMatchView match =
 
 commitsView : Model -> Html Msg
 commitsView model =
-    case repositoryView model.repository of
-        Just (Commits remote) ->
+    case model.view of
+        Commits (CommitsRemote remote) ->
             case remote of
                 Loading _ ->
                     pageState "Loading commits…" "Reading immutable OIDs from the local checkout."
@@ -1163,6 +1393,9 @@ commitsView model =
                 NotAsked ->
                     text ""
 
+        Commits CommitsWaiting ->
+            localUnavailableView model "Loading commits…"
+
         _ ->
             text ""
 
@@ -1184,8 +1417,8 @@ commitRow commit =
 
 pullsView : Model -> Html Msg
 pullsView model =
-    case repositoryView model.repository of
-        Just (PullRequests pulls) ->
+    case model.view of
+        PullRequests (PullsState pulls) ->
             section [ class "repository-pulls-browser" ]
                 [ header [ class "repository-pulls-heading" ]
                     [ div []
@@ -1296,6 +1529,22 @@ pullRow model pull =
             ]
         , span [ class "commit-open-arrow" ] [ text "→" ]
         ]
+
+
+localUnavailableView : Model -> String -> Html Msg
+localUnavailableView model loadingMessage =
+    case model.local of
+        LocalMissing missing ->
+            cloneOffer missing.error missing.clone
+
+        LocalFailed _ error ->
+            pageState "Could not read this repository" (ApiError.message error)
+
+        LocalResolving _ ->
+            pageState loadingMessage "Resolving an immutable local Git revision."
+
+        LocalReady _ ->
+            pageState loadingMessage "Reading immutable OIDs from the local repository."
 
 
 cloneOffer : ApiError -> CloneState -> Html Msg

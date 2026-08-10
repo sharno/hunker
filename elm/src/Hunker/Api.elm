@@ -71,18 +71,18 @@ checkRevision githubUrl headOid succeeded failed =
         failed
 
 
-fetchRepositoryFiles : String -> (List Repository.File -> msg) -> (ApiError -> msg) -> Effect msg
-fetchRepositoryFiles repository succeeded failed =
+fetchRepositoryFiles : String -> String -> (List Repository.File -> msg) -> (ApiError -> msg) -> Effect msg
+fetchRepositoryFiles repository oid succeeded failed =
     Effect.get
-        ("/api/repository/files?repository=" ++ encode repository)
+        ("/api/repository/files?repository=" ++ encode repository ++ "&oid=" ++ encode oid)
         (Decode.map succeeded Repository.filesDecoder)
         failed
 
 
-fetchRepositoryCommits : String -> (Repository.Commits -> msg) -> (ApiError -> msg) -> Effect msg
-fetchRepositoryCommits repository succeeded failed =
+fetchRepositoryCommits : String -> String -> (Repository.Commits -> msg) -> (ApiError -> msg) -> Effect msg
+fetchRepositoryCommits repository oid succeeded failed =
     Effect.get
-        ("/api/repository/commits?repository=" ++ encode repository)
+        ("/api/repository/commits?repository=" ++ encode repository ++ "&oid=" ++ encode oid)
         (Decode.map succeeded Repository.commitsDecoder)
         failed
 
@@ -101,11 +101,13 @@ fetchRepositoryPulls repository state page succeeded failed =
         failed
 
 
-searchRepository : String -> String -> String -> (Repository.SearchResults -> msg) -> (ApiError -> msg) -> Effect msg
-searchRepository repository search mode succeeded failed =
+searchRepository : String -> String -> String -> String -> (Repository.SearchResults -> msg) -> (ApiError -> msg) -> Effect msg
+searchRepository repository oid search mode succeeded failed =
     Effect.get
         ("/api/repository/search?repository="
             ++ encode repository
+            ++ "&oid="
+            ++ encode oid
             ++ "&query="
             ++ encode search
             ++ "&mode="
@@ -115,10 +117,10 @@ searchRepository repository search mode succeeded failed =
         failed
 
 
-fetchRepositoryFile : String -> String -> (Repository.FileContent -> msg) -> (ApiError -> msg) -> Effect msg
-fetchRepositoryFile repository path succeeded failed =
+fetchRepositoryFile : String -> String -> String -> (Repository.FileContent -> msg) -> (ApiError -> msg) -> Effect msg
+fetchRepositoryFile repository oid path succeeded failed =
     Effect.get
-        ("/api/repository/file?repository=" ++ encode repository ++ "&path=" ++ encode path)
+        ("/api/repository/file?repository=" ++ encode repository ++ "&oid=" ++ encode oid ++ "&path=" ++ encode path)
         (Decode.map succeeded Repository.fileContentDecoder)
         failed
 

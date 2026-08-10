@@ -119,11 +119,11 @@ test("serves Elm on history routes and keeps browser Back and Forward canonical"
     0,
   );
   await page.getByText("effect-ts/effect", { exact: true }).click();
-  await expect(page).toHaveURL("/effect-ts/effect");
+  await expect(page).toHaveURL("/effect-ts/effect/tree/main");
   await page.goBack();
   await expect(page).toHaveURL("/");
   await page.goForward();
-  await expect(page).toHaveURL("/effect-ts/effect");
+  await expect(page).toHaveURL("/effect-ts/effect/tree/main");
 });
 
 test("renders a nested repository tree and a deep-linked local file without header overflow", async ({
