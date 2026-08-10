@@ -37,7 +37,15 @@ node config depth tree =
                     , attribute "style" ("padding-left:" ++ String.fromInt (depth * 14 + 8) ++ "px")
                     , onClick (config.toggleFolder path)
                     ]
-                    [ span [ class "folder-chevron" ] [ text (if collapsed then "›" else "⌄") ]
+                    [ span [ class "folder-chevron" ]
+                        [ text
+                            (if collapsed then
+                                "›"
+
+                             else
+                                "⌄"
+                            )
+                        ]
                     , span [ class "folder-icon" ] [ text "▰" ]
                     , span [] [ text name ]
                     , span [ class "tree-count" ] [ text (String.fromInt (fileCount tree)) ]
@@ -61,7 +69,14 @@ node config depth tree =
                 , onClick (config.selectFile file.path)
                 ]
                 [ span [ class ("file-status status-" ++ Review.fileStatusToString file.status) ]
-                    [ text (if reviewed then "✓" else config.statusGlyph file.status) ]
+                    [ text
+                        (if reviewed then
+                            "✓"
+
+                         else
+                            config.statusGlyph file.status
+                        )
+                    ]
                 , span [ class "file-copy" ] [ span [ class "file-name" ] [ text name ] ]
                 , span [ class "file-delta" ]
                     [ span [ class "plus" ] [ text ("+" ++ String.fromInt file.additions) ]

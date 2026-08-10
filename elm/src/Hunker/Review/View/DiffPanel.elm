@@ -59,7 +59,15 @@ view config file =
     article [ class ("diff-panel" ++ activeClass reviewed), id (fileAnchor file.path) ]
         [ header [ class "diff-file-header" ]
             [ button [ type_ "button", class "file-header-main", onClick (config.actions.toggleFile file.path) ]
-                [ span [ class "file-collapse" ] [ text (if collapsed then "›" else "⌄") ]
+                [ span [ class "file-collapse" ]
+                    [ text
+                        (if collapsed then
+                            "›"
+
+                         else
+                            "⌄"
+                        )
+                    ]
                 , span [ class ("file-status status-" ++ Review.fileStatusToString file.status) ] [ text (statusGlyph file.status) ]
                 , strong [] [ text file.path ]
                 , file.previousPath
@@ -81,7 +89,15 @@ view config file =
                         )
                     ]
                 , a [ href (config.githubFileUrl file), attribute "title" "Open on GitHub" ] [ text "↗" ]
-                , button [ type_ "button", onClick (config.actions.toggleReviewed file.path) ] [ text (if reviewed then "Reviewed" else "Mark reviewed") ]
+                , button [ type_ "button", onClick (config.actions.toggleReviewed file.path) ]
+                    [ text
+                        (if reviewed then
+                            "Reviewed"
+
+                         else
+                            "Mark reviewed"
+                        )
+                    ]
                 ]
             ]
         , if collapsed then
@@ -156,7 +172,15 @@ semanticResultView result =
             div [ class "semantic-banner" ]
                 [ span [ class "semantic-symbol" ] [ text "◎" ]
                 , div []
-                    [ strong [] [ text (if semanticEqual then "Formatting-only semantic change" else semanticCount changes) ]
+                    [ strong []
+                        [ text
+                            (if semanticEqual then
+                                "Formatting-only semantic change"
+
+                             else
+                                semanticCount changes
+                            )
+                        ]
                     , span [] [ text (language ++ " syntax tree") ]
                     ]
                 , div [ class "semantic-chips" ] (List.map semanticChip changes)
@@ -187,12 +211,27 @@ semanticChip change =
 
 semanticCount : List SemanticChange -> String
 semanticCount changes =
-    String.fromInt (List.length changes) ++ " semantic change" ++ (if List.length changes == 1 then "" else "s")
+    String.fromInt (List.length changes)
+        ++ " semantic change"
+        ++ (if List.length changes == 1 then
+                ""
+
+            else
+                "s"
+           )
 
 
 patchDiff : Config msg -> FileChange -> Html msg
 patchDiff config file =
-    div [ class (if config.settings.viewMode == Split then "split-diff" else "unified-diff") ]
+    div
+        [ class
+            (if config.settings.viewMode == Split then
+                "split-diff"
+
+             else
+                "unified-diff"
+            )
+        ]
         (List.map (hunkView config file) (preparedHunks config file.path))
 
 
@@ -204,7 +243,17 @@ hunkView config file hunk =
     in
     section [ class "diff-hunk" ]
         [ button [ type_ "button", class "hunk-header", onClick (config.actions.toggleHunk file.path hunk.id) ]
-            [ span [] [ text (if collapsed then "›" else "⌄") ], code [] [ text hunk.header ] ]
+            [ span []
+                [ text
+                    (if collapsed then
+                        "›"
+
+                     else
+                        "⌄"
+                    )
+                ]
+            , code [] [ text hunk.header ]
+            ]
         , if collapsed then
             text ""
 
@@ -251,10 +300,18 @@ unifiedLineView : Config msg -> FileChange -> DiffLine -> Html msg
 unifiedLineView config file line =
     let
         side =
-            if line.kind == Deletion then LeftSide else RightSide
+            if line.kind == Deletion then
+                LeftSide
+
+            else
+                RightSide
 
         number =
-            if side == LeftSide then Maybe.withDefault 0 line.oldLine else Maybe.withDefault 0 line.newLine
+            if side == LeftSide then
+                Maybe.withDefault 0 line.oldLine
+
+            else
+                Maybe.withDefault 0 line.newLine
 
         decoration =
             moveDecoration config file.path side number
@@ -277,7 +334,11 @@ moveDecoration : Config msg -> String -> CommentSide -> Int -> MoveDecoration ms
 moveDecoration config path side lineNumber =
     let
         endpoint =
-            if side == LeftSide then Source else Destination
+            if side == LeftSide then
+                Source
+
+            else
+                Destination
 
         move =
             case config.analysis of
@@ -294,10 +355,18 @@ moveDecoration config path side lineNumber =
         Just moved ->
             let
                 targetEndpoint =
-                    if endpoint == Source then Destination else Source
+                    if endpoint == Source then
+                        Destination
+
+                    else
+                        Source
 
                 targetPath =
-                    if endpoint == Source then moved.toPath else moved.fromPath
+                    if endpoint == Source then
+                        moved.toPath
+
+                    else
+                        moved.fromPath
             in
             { className = " line-move move-tone-" ++ String.fromInt (SemanticMove.tone moved)
             , anchorId = SemanticMove.anchor moved endpoint
@@ -308,7 +377,14 @@ moveDecoration config path side lineNumber =
                     , attribute "title" ("Jump to moved " ++ moved.kind ++ " " ++ moved.label)
                     , onClick (config.actions.selectMoveTarget targetPath (SemanticMove.anchor moved targetEndpoint))
                     ]
-                    [ text (if endpoint == Source then "Moved →" else "← From") ]
+                    [ text
+                        (if endpoint == Source then
+                            "Moved →"
+
+                         else
+                            "← From"
+                        )
+                    ]
             }
 
 
@@ -348,8 +424,11 @@ rangesToSegments offset source ranges =
 
         range :: remaining ->
             let
-                safeStart = max offset range.start
-                safeEnd = max safeStart range.end
+                safeStart =
+                    max offset range.start
+
+                safeEnd =
+                    max safeStart range.end
             in
             [ text (String.slice offset safeStart source), span [ class "inline-change" ] [ text (String.slice safeStart safeEnd source) ] ]
                 ++ rangesToSegments safeEnd source remaining
@@ -376,14 +455,18 @@ fullUnifiedLines row =
         ( Just left, Just right ) ->
             if left.kind == Context && right.kind == Context then
                 [ { kind = Context, text = right.text, oldLine = left.number, newLine = right.number } ]
+
             else
                 [ { kind = left.kind, text = left.text, oldLine = left.number, newLine = Nothing }
                 , { kind = right.kind, text = right.text, oldLine = Nothing, newLine = right.number }
                 ]
+
         ( Just left, Nothing ) ->
             [ { kind = left.kind, text = left.text, oldLine = left.number, newLine = Nothing } ]
+
         ( Nothing, Just right ) ->
             [ { kind = right.kind, text = right.text, oldLine = Nothing, newLine = right.number } ]
+
         ( Nothing, Nothing ) ->
             []
 
@@ -405,26 +488,43 @@ lastNewLine config path =
 statusGlyph : FileStatus -> String
 statusGlyph status =
     case status of
-        FileAdded -> "A"
-        FileDeleted -> "D"
-        FileRenamed -> "R"
-        FileModified -> "M"
+        FileAdded ->
+            "A"
+
+        FileDeleted ->
+            "D"
+
+        FileRenamed ->
+            "R"
+
+        FileModified ->
+            "M"
 
 
 kindClass : Kind -> String
 kindClass kind =
     case kind of
-        Addition -> "addition"
-        Deletion -> "deletion"
-        Context -> "context"
+        Addition ->
+            "addition"
+
+        Deletion ->
+            "deletion"
+
+        Context ->
+            "context"
 
 
 kindMarker : Kind -> String
 kindMarker kind =
     case kind of
-        Addition -> "+"
-        Deletion -> "−"
-        Context -> " "
+        Addition ->
+            "+"
+
+        Deletion ->
+            "−"
+
+        Context ->
+            " "
 
 
 maybeNumber : Maybe Int -> String
@@ -434,9 +534,22 @@ maybeNumber =
 
 fileAnchor : String -> String
 fileAnchor path =
-    "file-" ++ String.map (\character -> if Char.isAlphaNum character then character else '-') path
+    "file-"
+        ++ String.map
+            (\character ->
+                if Char.isAlphaNum character then
+                    character
+
+                else
+                    '-'
+            )
+            path
 
 
 activeClass : Bool -> String
 activeClass active =
-    if active then " is-active" else ""
+    if active then
+        " is-active"
+
+    else
+        ""

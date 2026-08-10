@@ -121,7 +121,15 @@ threadView actions collaboration comments root =
             )
         ]
         [ button [ type_ "button", class "review-thread-header", onClick (actions.toggleThread root.rootId) ]
-            [ span [] [ text (if collapsed then "›" else "⌄") ]
+            [ span []
+                [ text
+                    (if collapsed then
+                        "›"
+
+                     else
+                        "⌄"
+                    )
+                ]
             , strong [] [ text root.author ]
             , if root.resolved then
                 span [ class "resolved-tag" ] [ text "Resolved" ]
