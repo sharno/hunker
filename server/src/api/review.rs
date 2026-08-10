@@ -5,12 +5,12 @@ use axum::{
     extract::{Query, State},
     routing::{get, post},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     AppState, analysis,
     error::{AppError, AppResult},
-    github::{GitHubTarget, InlineCommentInput, parse_url},
+    github::{GitHubTarget, InlineCommentInput, ReviewComment, parse_url},
     revision,
     types::{FilePair, FileStatus, Oid, PinnedRefs, RelativePath, ReviewBacking, ReviewDocument},
 };
@@ -31,6 +31,77 @@ pub fn routes() -> Router<Arc<AppState>> {
 #[derive(Deserialize)]
 struct UrlQuery {
     url: String,
+}
+
+#[derive(Serialize)]
+#[serde(
+    tag = "source",
+    rename_all = "lowercase",
+    rename_all_fields = "camelCase"
+)]
+enum RevisionResponse {
+    GitHub,
+    Local {
+        path: String,
+        pinned_head_oid: String,
+        latest_head_oid: String,
+        checked_at: u64,
+        current: bool,
+    },
+}
+
+#[derive(Serialize)]
+struct CommitsResponse {
+    commits: Vec<crate::types::PullCommit>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FullFileResponse {
+    old_text: String,
+    new_text: String,
+}
+
+#[derive(Serialize)]
+struct CommentsResponse {
+    comments: Vec<ReviewComment>,
+}
+
+#[derive(Serialize)]
+struct CommentResponse {
+    comment: ReviewComment,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum ReviewEvent {
+    Comment,
+    Approve,
+    RequestChanges,
+}
+
+impl ReviewEvent {
+    fn parse(value: &str) -> AppResult<Self> {
+        match value {
+            "COMMENT" => Ok(Self::Comment),
+            "APPROVE" => Ok(Self::Approve),
+            "REQUEST_CHANGES" => Ok(Self::RequestChanges),
+            _ => Err(AppError::bad_request("The review request body is invalid.")),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Comment => "COMMENT",
+            Self::Approve => "APPROVE",
+            Self::RequestChanges => "REQUEST_CHANGES",
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct SubmitReviewResponse {
+    event: ReviewEvent,
 }
 
 async fn get_diff(
@@ -92,24 +163,29 @@ struct RevisionQuery {
 async fn get_revision(
     State(state): State<Arc<AppState>>,
     Query(query): Query<RevisionQuery>,
-) -> AppResult<Json<serde_json::Value>> {
+) -> AppResult<Json<RevisionResponse>> {
     let target = parse_url(&query.url)?;
     let Some(value) = state
         .local
         .revision(&target, query.head_oid.as_str())
         .await?
     else {
-        return Ok(Json(serde_json::json!({"source": "github"})));
+        return Ok(Json(RevisionResponse::GitHub));
     };
-    Ok(Json(
-        serde_json::json!({"source": "local", "path": value.repository.path, "pinnedHeadOid": value.pinned_head_oid, "latestHeadOid": value.latest_head_oid, "checkedAt": value.checked_at, "current": value.pinned_head_oid == value.latest_head_oid}),
-    ))
+    let current = value.pinned_head_oid == value.latest_head_oid;
+    Ok(Json(RevisionResponse::Local {
+        path: value.repository.path.to_string_lossy().into_owned(),
+        pinned_head_oid: value.pinned_head_oid,
+        latest_head_oid: value.latest_head_oid,
+        checked_at: value.checked_at,
+        current,
+    }))
 }
 
 async fn get_commits(
     State(state): State<Arc<AppState>>,
     Query(query): Query<UrlQuery>,
-) -> AppResult<Json<serde_json::Value>> {
+) -> AppResult<Json<CommitsResponse>> {
     let target = parse_url(&query.url)?;
     if !matches!(target, GitHubTarget::Pull { .. }) {
         return Err(AppError::bad_request(
@@ -121,7 +197,7 @@ async fn get_commits(
         Some(commits) => commits,
         None => state.github.pull_commits(&target).await?,
     };
-    Ok(Json(serde_json::json!({"commits": commits})))
+    Ok(Json(CommitsResponse { commits }))
 }
 
 #[derive(Deserialize)]
@@ -201,12 +277,13 @@ async fn file_pair(
 async fn get_file(
     State(state): State<Arc<AppState>>,
     Query(query): Query<FileQuery>,
-) -> AppResult<Json<serde_json::Value>> {
+) -> AppResult<Json<FullFileResponse>> {
     let target = parse_url(&query.url)?;
     let pair = file_pair(&state, &target, &query).await?;
-    Ok(Json(
-        serde_json::json!({"oldText": pair.old_text, "newText": pair.new_text}),
-    ))
+    Ok(Json(FullFileResponse {
+        old_text: pair.old_text,
+        new_text: pair.new_text,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -273,17 +350,17 @@ async fn get_analysis(
 async fn get_reviews(
     State(state): State<Arc<AppState>>,
     Query(query): Query<UrlQuery>,
-) -> AppResult<Json<serde_json::Value>> {
+) -> AppResult<Json<CommentsResponse>> {
     let target = parse_url(&query.url)?;
-    Ok(Json(
-        serde_json::json!({"comments": state.github.review_comments(&target).await?}),
-    ))
+    Ok(Json(CommentsResponse {
+        comments: state.github.review_comments(&target).await?,
+    }))
 }
 
 async fn post_comment(
     State(state): State<Arc<AppState>>,
     Json(mut body): Json<InlineCommentInput>,
-) -> AppResult<Json<serde_json::Value>> {
+) -> AppResult<Json<CommentResponse>> {
     body.body = body.body.trim().to_owned();
     if body.body.is_empty() {
         return Err(AppError::bad_request("Write a comment before posting."));
@@ -292,9 +369,9 @@ async fn post_comment(
         return Err(AppError::bad_request("The review request body is invalid."));
     }
     let target = parse_url(&body.pull_url)?;
-    Ok(Json(
-        serde_json::json!({"comment": state.github.create_comment(&target, &body).await?}),
-    ))
+    Ok(Json(CommentResponse {
+        comment: state.github.create_comment(&target, &body).await?,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -308,15 +385,15 @@ struct ReplyBody {
 async fn post_reply(
     State(state): State<Arc<AppState>>,
     Json(body): Json<ReplyBody>,
-) -> AppResult<Json<serde_json::Value>> {
+) -> AppResult<Json<CommentResponse>> {
     let text = body.body.trim();
     if text.is_empty() {
         return Err(AppError::bad_request("Write a reply before posting."));
     }
     let target = parse_url(&body.url)?;
-    Ok(Json(
-        serde_json::json!({"comment": state.github.reply(&target, body.comment_id, text).await?}),
-    ))
+    Ok(Json(CommentResponse {
+        comment: state.github.reply(&target, body.comment_id, text).await?,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -329,15 +406,10 @@ struct SubmitBody {
 async fn post_review(
     State(state): State<Arc<AppState>>,
     Json(body): Json<SubmitBody>,
-) -> AppResult<Json<serde_json::Value>> {
-    if !matches!(
-        body.event.as_str(),
-        "COMMENT" | "APPROVE" | "REQUEST_CHANGES"
-    ) {
-        return Err(AppError::bad_request("The review request body is invalid."));
-    }
+) -> AppResult<Json<SubmitReviewResponse>> {
+    let event = ReviewEvent::parse(&body.event)?;
     let text = body.body.trim();
-    if body.event != "APPROVE" && text.is_empty() {
+    if event != ReviewEvent::Approve && text.is_empty() {
         return Err(AppError::bad_request(
             "Comment and request-changes reviews require a summary.",
         ));
@@ -345,7 +417,40 @@ async fn post_review(
     let target = parse_url(&body.url)?;
     state
         .github
-        .submit_review(&target, text, &body.event)
+        .submit_review(&target, text, event.as_str())
         .await?;
-    Ok(Json(serde_json::json!({"event": body.event})))
+    Ok(Json(SubmitReviewResponse { event }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn revision_response_keeps_the_elm_contract_typed() {
+        let response = RevisionResponse::Local {
+            path: "/tmp/acme/demo".to_owned(),
+            pinned_head_oid: "111".to_owned(),
+            latest_head_oid: "222".to_owned(),
+            checked_at: 42,
+            current: false,
+        };
+        assert_eq!(
+            serde_json::to_value(response).unwrap(),
+            serde_json::json!({
+                "source": "local",
+                "path": "/tmp/acme/demo",
+                "pinnedHeadOid": "111",
+                "latestHeadOid": "222",
+                "checkedAt": 42,
+                "current": false
+            })
+        );
+    }
+
+    #[test]
+    fn review_events_parse_once_at_the_transport_boundary() {
+        assert_eq!(ReviewEvent::parse("APPROVE").unwrap(), ReviewEvent::Approve);
+        assert!(ReviewEvent::parse("MERGE").is_err());
+    }
 }

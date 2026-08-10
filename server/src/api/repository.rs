@@ -5,7 +5,7 @@ use axum::{
     extract::{Query, State},
     routing::{get, post},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     AppState,
@@ -33,6 +33,26 @@ struct RepositoryQuery {
     repository: String,
 }
 
+#[derive(Serialize)]
+struct FilesResponse {
+    files: Vec<local::RepositoryFile>,
+}
+
+#[derive(Serialize)]
+struct SourceControlResponse {
+    status: local::SourceControlStatus,
+}
+
+#[derive(Serialize)]
+struct CloneResponse {
+    path: String,
+}
+
+#[derive(Serialize)]
+struct SwitchBranchResponse {
+    status: local::SourceControlStatus,
+}
+
 pub(crate) fn parse_repository(value: &str) -> AppResult<RepositorySlug> {
     RepositorySlug::parse(value).map_err(AppError::bad_request)
 }
@@ -46,10 +66,13 @@ async fn get_repositories(
 async fn get_files(
     State(state): State<Arc<AppState>>,
     Query(query): Query<RepositoryQuery>,
-) -> AppResult<Json<serde_json::Value>> {
-    Ok(Json(
-        serde_json::json!({"files": state.local.list_files(&parse_repository(&query.repository)?).await?}),
-    ))
+) -> AppResult<Json<FilesResponse>> {
+    Ok(Json(FilesResponse {
+        files: state
+            .local
+            .list_files(&parse_repository(&query.repository)?)
+            .await?,
+    }))
 }
 
 async fn get_commits(
@@ -67,10 +90,13 @@ async fn get_commits(
 async fn get_source_control(
     State(state): State<Arc<AppState>>,
     Query(query): Query<RepositoryQuery>,
-) -> AppResult<Json<serde_json::Value>> {
-    Ok(Json(
-        serde_json::json!({"status": state.local.source_control(&parse_repository(&query.repository)?).await?}),
-    ))
+) -> AppResult<Json<SourceControlResponse>> {
+    Ok(Json(SourceControlResponse {
+        status: state
+            .local
+            .source_control(&parse_repository(&query.repository)?)
+            .await?,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -186,7 +212,7 @@ struct CloneBody {
 async fn clone(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CloneBody>,
-) -> AppResult<Json<serde_json::Value>> {
+) -> AppResult<Json<CloneResponse>> {
     if !matches!(body.destination.as_str(), "temporary" | "configured") {
         return Err(AppError::bad_request("Choose a valid clone destination."));
     }
@@ -194,7 +220,9 @@ async fn clone(
         .local
         .clone_repository(&parse_repository(&body.repository)?, &body.destination)
         .await?;
-    Ok(Json(serde_json::json!({"path": path})))
+    Ok(Json(CloneResponse {
+        path: path.to_string_lossy().into_owned(),
+    }))
 }
 
 #[derive(Deserialize)]
@@ -206,13 +234,16 @@ struct BranchBody {
 async fn switch_branch(
     State(state): State<Arc<AppState>>,
     Json(body): Json<BranchBody>,
-) -> AppResult<Json<serde_json::Value>> {
+) -> AppResult<Json<SwitchBranchResponse>> {
     if body.branch.is_empty() {
         return Err(AppError::bad_request("Choose a branch."));
     }
-    Ok(Json(
-        serde_json::json!({"status": state.local.switch_branch(&parse_repository(&body.repository)?, &body.branch).await?}),
-    ))
+    Ok(Json(SwitchBranchResponse {
+        status: state
+            .local
+            .switch_branch(&parse_repository(&body.repository)?, &body.branch)
+            .await?,
+    }))
 }
 
 #[derive(Deserialize)]
