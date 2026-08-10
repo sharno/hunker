@@ -2,10 +2,13 @@ module DomainTest exposing (suite)
 
 import Expect
 import Hunker.Diff as Diff exposing (Kind(..))
+import Hunker.Domain.Repository as Repository
 import Hunker.Domain.Review as Review exposing (MovedBlock)
 import Hunker.FileTree as FileTree exposing (Tree(..))
+import Hunker.Generated.ContractFixtures as ContractFixtures
 import Hunker.Route as Route exposing (PullRequestState(..), RepositoryTab(..), ReviewTab(..), ReviewTarget(..), Route(..), SearchMode(..))
 import Hunker.SemanticMove as SemanticMove exposing (Endpoint(..))
+import Json.Decode as Decode
 import Test exposing (Test, describe, test)
 import Url
 
@@ -143,6 +146,64 @@ suite =
                     , \_ -> Expect.equal True (SemanticMove.tone move >= 0 && SemanticMove.tone move < 3)
                     ]
                     ()
+        , describe "Rust-produced API contracts"
+            [ test "decodes a typed review document" <|
+                \() ->
+                    case Decode.decodeString Review.reviewDecoder ContractFixtures.reviewDocument of
+                        Ok document ->
+                            Expect.all
+                                [ \_ -> Expect.equal "acme/hunker" document.repository
+                                , \_ -> Expect.equal [ "src/main.rs" ] (List.map .path document.files)
+                                , \_ -> Expect.equal "2222222222222222222222222222222222222222" (Review.backingHeadOid document.backing)
+                                ]
+                                ()
+
+                        Err error ->
+                            Expect.fail (Decode.errorToString error)
+            , test "decodes a typed GitHub pull-request page" <|
+                \() ->
+                    case Decode.decodeString Repository.pullRequestsDecoder ContractFixtures.repositoryPulls of
+                        Ok page ->
+                            Expect.all
+                                [ \_ -> Expect.equal "open" page.state
+                                , \_ -> Expect.equal [ 42 ] (List.map .number page.pullRequests)
+                                , \_ -> Expect.equal [ [ "rust", "elm" ] ] (List.map .labels page.pullRequests)
+                                ]
+                                ()
+
+                        Err error ->
+                            Expect.fail (Decode.errorToString error)
+            , test "decodes typed local source-control state" <|
+                \() ->
+                    case Decode.decodeString Repository.sourceControlDecoder ContractFixtures.sourceControl of
+                        Ok status ->
+                            case status.checkout of
+                                Repository.TrackingBranch checkout ->
+                                    Expect.all
+                                        [ \_ -> Expect.equal "main" checkout.name
+                                        , \_ -> Expect.equal 2 checkout.behind
+                                        , \_ -> Expect.equal 3 status.untracked
+                                        ]
+                                        ()
+
+                                _ ->
+                                    Expect.fail "Expected the Rust fixture to remain a tracking branch"
+
+                        Err error ->
+                            Expect.fail (Decode.errorToString error)
+            , test "decodes typed GitHub review comments" <|
+                \() ->
+                    case Decode.decodeString Review.commentsDecoder ContractFixtures.reviewComments of
+                        Ok comments ->
+                            Expect.all
+                                [ \_ -> Expect.equal [ 7 ] (List.map .id comments)
+                                , \_ -> Expect.equal [ Review.RightSide ] (List.map .side comments)
+                                ]
+                                ()
+
+                        Err error ->
+                            Expect.fail (Decode.errorToString error)
+            ]
         ]
 
 

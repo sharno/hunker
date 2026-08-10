@@ -63,8 +63,8 @@ struct FullFileResponse {
 }
 
 #[derive(Serialize)]
-struct CommentsResponse {
-    comments: Vec<ReviewComment>,
+pub(crate) struct CommentsResponse {
+    pub(crate) comments: Vec<ReviewComment>,
 }
 
 #[derive(Serialize)]

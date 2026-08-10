@@ -11,8 +11,10 @@ mod review_source;
 mod reviews;
 mod transport;
 
+pub(crate) use repository::contract_fixture as repository_pulls_contract_fixture;
 pub use repository::{PullRequestState, RepositoryPullsPage};
 pub use review_source::ReviewMetadata;
+pub(crate) use reviews::CommentSide;
 pub use reviews::{InlineCommentInput, ReviewAction, ReviewComment};
 pub use transport::GitHub;
 

@@ -128,3 +128,23 @@ pub struct RepositoryPullsPage {
     pub has_more: bool,
     pub pull_requests: Vec<RepositoryPullRequest>,
 }
+
+pub(crate) fn contract_fixture() -> RepositoryPullsPage {
+    RepositoryPullsPage {
+        state: PullRequestState::Open,
+        page: 1,
+        has_more: false,
+        pull_requests: vec![RepositoryPullRequest {
+            number: 42,
+            title: "Keep contracts typed".to_owned(),
+            author: "agent".to_owned(),
+            avatar_url: "https://avatars.example/agent".to_owned(),
+            state: "open".to_owned(),
+            draft: false,
+            updated_at: "2026-08-10T12:00:00Z".to_owned(),
+            base: "main".to_owned(),
+            head: "agent:typed-contracts".to_owned(),
+            labels: vec!["rust".to_owned(), "elm".to_owned()],
+        }],
+    }
+}

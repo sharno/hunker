@@ -46,8 +46,8 @@ struct FilesResponse {
 }
 
 #[derive(Serialize)]
-struct SourceControlResponse {
-    status: local::SourceControlStatus,
+pub(crate) struct SourceControlResponse {
+    pub(crate) status: local::SourceControlStatus,
 }
 
 #[derive(Serialize)]

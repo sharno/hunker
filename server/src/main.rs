@@ -2,6 +2,7 @@ mod analysis;
 mod api;
 mod character_diff;
 mod command;
+mod contracts;
 mod diff;
 mod error;
 mod frontend;
@@ -44,6 +45,11 @@ async fn main() -> AppResult<()> {
                 .unwrap_or_else(|_| "hunker_server=info,tower_http=info".into()),
         )
         .init();
+    match env::args().nth(1).as_deref() {
+        Some("--write-contract-fixtures") => return contracts::write(),
+        Some("--check-contract-fixtures") => return contracts::check(),
+        _ => {}
+    }
     let state = Arc::new(AppState {
         analysis: analysis::AnalysisCache::default(),
         github: GitHub::new().await?,

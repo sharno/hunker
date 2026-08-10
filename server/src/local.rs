@@ -185,3 +185,29 @@ pub struct PullRevision {
     pub latest_head_oid: String,
     pub checked_at: u64,
 }
+
+pub(crate) fn source_control_contract_fixture() -> SourceControlStatus {
+    SourceControlStatus {
+        path: "/Users/example/src/hunker".to_owned(),
+        checkout: Checkout::TrackingBranch {
+            name: "main".to_owned(),
+            oid: "2222222222222222222222222222222222222222".to_owned(),
+            upstream: "origin/main".to_owned(),
+            ahead: 1,
+            behind: 2,
+        },
+        branches: vec![Branch {
+            name: "main".to_owned(),
+            local: true,
+            remote: true,
+        }],
+        changes: WorkingTreeChanges {
+            staged: 1,
+            unstaged: 2,
+            untracked: 3,
+        },
+        remote: RemoteState::RemoteCurrent {
+            checked_at: 1_786_363_200_000,
+        },
+    }
+}
