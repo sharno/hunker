@@ -11,32 +11,30 @@ module Hunker.Page.Review exposing
     , view
     )
 
-import Dict exposing (Dict)
-import Html exposing (Html, a, article, aside, button, code, div, footer, form, h1, h2, header, input, label, main_, option, p, pre, section, select, span, strong, text, textarea)
-import Html.Attributes exposing (attribute, checked, class, disabled, href, id, placeholder, selected, type_, value)
-import Html.Events exposing (onCheck, onClick, onInput, onSubmit)
+import Html exposing (Html, a, aside, button, code, div, h1, header, main_, p, section, span, strong, text)
+import Html.Attributes exposing (attribute, class, href, type_)
+import Html.Events exposing (onClick)
 import Hunker.Api as Api
 import Hunker.ApiError as ApiError exposing (ApiError)
-import Hunker.Diff as Diff exposing (DiffLine, Hunk, Kind(..), SideLine, SplitRow)
-import Hunker.Domain.Review as Review exposing (AnalysisFeature(..), AnalysisSnapshot, CharacterRange, CommentSide(..), FileChange, FileStatus(..), FullFile, MovedBlock, PullCommit, ReviewComment, ReviewDocument, Revision(..), SemanticChange(..), SemanticResult(..))
+import Hunker.Domain.Review as Review exposing (AnalysisSnapshot, CommentSide, FileChange, FileStatus(..), FullFile, PullCommit, ReviewComment, ReviewDocument, Revision(..))
 import Hunker.Domain.Settings as Settings exposing (InlineDiffMode(..), ReviewScope(..), Settings, ViewMode(..))
 import Hunker.Effect as Effect exposing (Effect)
-import Hunker.FileTree as FileTree exposing (Tree(..))
-import Hunker.PreparedDiff as PreparedDiff exposing (PreparedFile)
+import Hunker.FileTree as FileTree
+import Hunker.PreparedDiff exposing (PreparedFile)
 import Hunker.Remote as Remote exposing (Remote(..))
 import Hunker.Review.Analysis as Analysis
 import Hunker.Review.Collaboration as Collaboration
 import Hunker.Review.DiffView as DiffView exposing (SearchMode(..))
 import Hunker.Review.FileIndex as FileIndex exposing (FileIndex)
 import Hunker.Review.Session as Session
+import Hunker.Review.View.Collaboration as CollaborationView
+import Hunker.Review.View.DiffPanel as DiffPanelView
+import Hunker.Review.View.FileTree as FileTreeView
+import Hunker.Review.View.Toolbar as ToolbarView
 import Hunker.Route as Route exposing (ReviewTab(..), ReviewTarget(..))
-import Hunker.SemanticMove as SemanticMove exposing (Endpoint(..))
-import Hunker.Syntax as Syntax
-import Markdown
 import Regex
 import Set exposing (Set)
 import Time
-import Url
 
 
 type alias Model =
@@ -1035,62 +1033,23 @@ reviewToolbar settings model =
         filter =
             diff |> Maybe.map DiffView.filter |> Maybe.withDefault ""
     in
-    section
-        [ class "compact-review-toolbar" ]
-        [ div [ class "review-tab-picker" ]
-            [ segment (currentLocation.tab == ReviewFiles) (SelectedTab ReviewFiles) "Files"
-            , if Route.isPullRequest currentLocation.target then
-                segment (currentLocation.tab == ReviewCommits) (SelectedTab ReviewCommits) "Commits"
-
-              else
-                text ""
-            ]
-        , label [ class "review-search" ]
-            [ span [] [ text "⌕" ]
-            , select [ onInput (searchModeFromString >> SelectedSearchMode) ]
-                [ option [ value "literal", selected (filterMode == Literal) ] [ text "Text" ]
-                , option [ value "regex", selected (filterMode == Regex) ] [ text "Regex" ]
-                ]
-            , input [ type_ "search", attribute "aria-label" "Search this change", placeholder "Search this change", value filter, onInput ChangedFilter ] []
-            ]
-        , div [ class "diff-options" ]
-            [ select [ attribute "aria-label" "Diff scope", onInput (scopeFromString >> SelectedScope) ]
-                [ option [ value "file", selected (settings.reviewScope == OneFile) ] [ text "One file" ]
-                , option [ value "full", selected (settings.reviewScope == FullDiff) ] [ text "Full diff" ]
-                ]
-            , select [ attribute "aria-label" "Diff layout", onInput (viewModeFromString >> SelectedViewMode) ]
-                [ option [ value "split", selected (settings.viewMode == Split) ] [ text "Side by side" ]
-                , option [ value "unified", selected (settings.viewMode == Unified) ] [ text "Unified" ]
-                ]
-            , toggle "Ignore whitespace" settings.ignoreWhitespace ToggledWhitespace
-            , toggle "Semantic" settings.semantic ToggledSemantic
-            , select [ attribute "aria-label" "Inline diff", onInput (Settings.inlineDiffModeFromString >> SelectedInlineMode) ]
-                [ option [ value "token", selected (settings.inlineDiffMode == Token) ] [ text "Word diff" ]
-                , option [ value "character", selected (settings.inlineDiffMode == Character) ] [ text "Character diff" ]
-                , option [ value "off", selected (settings.inlineDiffMode == InlineOff) ] [ text "Inline off" ]
-                ]
-            , toggle "Syntax" settings.syntaxHighlighting ToggledSyntax
-            , if Route.isPullRequest currentLocation.target then
-                toggle "GitHub reviews" settings.showGitHubReviews ToggledReviews
-
-              else
-                text ""
-            ]
-        ]
-
-
-toggle : String -> Bool -> (Bool -> Msg) -> Html Msg
-toggle labelText current toMsg =
-    label [ class ("filter-toggle" ++ activeClass current) ]
-        [ input [ type_ "checkbox", checked current, onCheck toMsg ] []
-        , span [ class "toggle-dot" ] []
-        , text labelText
-        ]
-
-
-segment : Bool -> Msg -> String -> Html Msg
-segment active message labelText =
-    button [ type_ "button", class ("segmented-button" ++ activeClass active), onClick message ] [ text labelText ]
+    ToolbarView.view
+        { settings = settings
+        , pullRequest = Route.isPullRequest currentLocation.target
+        , tab = currentLocation.tab
+        , filter = filter
+        , searchMode = filterMode
+        , selectTab = SelectedTab
+        , changeFilter = ChangedFilter
+        , selectSearchMode = SelectedSearchMode
+        , selectScope = SelectedScope
+        , selectViewMode = SelectedViewMode
+        , toggleWhitespace = ToggledWhitespace
+        , toggleSemantic = ToggledSemantic
+        , selectInlineMode = SelectedInlineMode
+        , toggleSyntax = ToggledSyntax
+        , toggleReviews = ToggledReviews
+        }
 
 
 reviewWorkspace : Settings -> Model -> Html Msg
@@ -1155,654 +1114,55 @@ reviewWorkspace settings model =
                 [ div [ class "empty-diff" ] [ h1 [] [ text "No matching files" ], p [] [ text "Change or clear the review search." ] ] ]
 
              else
-                List.map (fileDiff settings model) (visibleFiles settings model)
+                List.map (renderFileDiff settings model) (visibleFiles settings model)
             )
         ]
 
 
-reviewFileTree : Model -> List (Tree FileChange) -> Html Msg
+renderFileDiff : Settings -> Model -> FileChange -> Html Msg
+renderFileDiff settings model file =
+    case readyState model of
+        Just ready ->
+            DiffPanelView.view
+                { settings = settings
+                , pullRequest = Route.isPullRequest ready.request.location.target
+                , files = ready.files
+                , analysis = ready.analysis
+                , diff = ready.diff
+                , collaboration = ready.collaboration
+                , comments = Collaboration.comments ready.collaboration
+                , githubFileUrl = \changedFile -> "https://github.com/" ++ ready.document.repository ++ "/blob/" ++ Review.backingHeadOid ready.document.backing ++ "/" ++ changedFile.path
+                , actions =
+                    { toggleFile = ToggledFile
+                    , toggleFullFile = ToggledFullFile
+                    , toggleReviewed = ToggledReviewed
+                    , toggleHunk = ToggledHunk
+                    , selectMoveTarget = SelectedMoveTarget
+                    , openInlineComposer = OpenedInlineComposer
+                    , collaboration = collaborationActions
+                    }
+                }
+                file
+
+        Nothing ->
+            text ""
+
+
+reviewFileTree : Model -> List (FileTree.Tree FileChange) -> Html Msg
 reviewFileTree model forest =
-    div [ class "file-tree" ] (List.map (reviewTreeNode model 0) forest)
-
-
-reviewTreeNode : Model -> Int -> Tree FileChange -> Html Msg
-reviewTreeNode model depth tree =
-    case tree of
-        Folder name path children ->
-            let
-                collapsed =
-                    reviewDiff model
-                        |> Maybe.map (DiffView.isFolderCollapsed path)
-                        |> Maybe.withDefault False
-            in
-            div [ class "file-tree-folder" ]
-                [ button
-                    [ type_ "button"
-                    , class "folder-row"
-                    , attribute "style" ("padding-left:" ++ String.fromInt (depth * 14 + 8) ++ "px")
-                    , onClick (ToggledFolder path)
-                    ]
-                    [ span [ class "folder-chevron" ]
-                        [ text
-                            (if collapsed then
-                                "›"
-
-                             else
-                                "⌄"
-                            )
-                        ]
-                    , span [ class "folder-icon" ] [ text "▰" ]
-                    , span [] [ text name ]
-                    , span [ class "tree-count" ] [ text (String.fromInt (treeFileCount tree)) ]
-                    ]
-                , if collapsed then
-                    text ""
-
-                  else
-                    div [] (List.map (reviewTreeNode model (depth + 1)) children)
-                ]
-
-        Leaf name file ->
-            let
-                selectedPath =
-                    Maybe.withDefault "" (reviewRequest model).location.path
-
-                reviewed =
-                    reviewDiff model
-                        |> Maybe.map (DiffView.isReviewed file.path)
-                        |> Maybe.withDefault False
-            in
-            button
-                [ type_ "button"
-                , class ("file-row" ++ activeClass (file.path == selectedPath))
-                , attribute "style" ("padding-left:" ++ String.fromInt (depth * 14 + 20) ++ "px")
-                , onClick (SelectedFile file.path)
-                ]
-                [ span [ class ("file-status status-" ++ Review.fileStatusToString file.status) ]
-                    [ text
-                        (if reviewed then
-                            "✓"
-
-                         else
-                            statusGlyph file.status
-                        )
-                    ]
-                , span [ class "file-copy" ] [ span [ class "file-name" ] [ text name ] ]
-                , span [ class "file-delta" ] [ span [ class "plus" ] [ text ("+" ++ String.fromInt file.additions) ], span [ class "minus" ] [ text ("−" ++ String.fromInt file.deletions) ] ]
-                ]
-
-
-fileDiff : Settings -> Model -> FileChange -> Html Msg
-fileDiff settings model file =
     let
-        collapsed =
+        diff =
             reviewDiff model
-                |> Maybe.map (DiffView.isFileCollapsed file.path)
-                |> Maybe.withDefault False
-
-        fullFile =
-            reviewDiff model |> Maybe.andThen (DiffView.fullFile file.path)
-
-        reviewed =
-            reviewDiff model
-                |> Maybe.map (DiffView.isReviewed file.path)
-                |> Maybe.withDefault False
     in
-    article [ class ("diff-panel" ++ activeClass reviewed), id (fileAnchor file.path) ]
-        [ header [ class "diff-file-header" ]
-            [ button [ type_ "button", class "file-header-main", onClick (ToggledFile file.path) ]
-                [ span [ class "file-collapse" ]
-                    [ text
-                        (if collapsed then
-                            "›"
-
-                         else
-                            "⌄"
-                        )
-                    ]
-                , span [ class ("file-status status-" ++ Review.fileStatusToString file.status) ] [ text (statusGlyph file.status) ]
-                , strong [] [ text file.path ]
-                , file.previousPath
-                    |> Maybe.map (\path -> span [ class "previous-path" ] [ text ("from " ++ path) ])
-                    |> Maybe.withDefault (text "")
-                ]
-            , div [ class "file-actions", attribute "data-ignore-file-collapse" "true" ]
-                [ button [ type_ "button", onClick (ToggledFullFile file) ]
-                    [ text
-                        (case fullFile of
-                            Just (Loading _) ->
-                                "Loading…"
-
-                            Just (Success _ _) ->
-                                "Patch"
-
-                            _ ->
-                                "Full file"
-                        )
-                    ]
-                , a [ href (githubFileUrl model file), attribute "title" "Open on GitHub" ] [ text "↗" ]
-                , button [ type_ "button", onClick (ToggledReviewed file.path) ]
-                    [ text
-                        (if reviewed then
-                            "Reviewed"
-
-                         else
-                            "Mark reviewed"
-                        )
-                    ]
-                ]
-            ]
-        , if collapsed then
-            text ""
-
-          else
-            div []
-                [ semanticSummary settings model file
-                , case fullFile of
-                    Just (Success _ full) ->
-                        fullFileDiff settings model file full
-
-                    Just (Failure _ error) ->
-                        div [ class "diff-error" ] [ text (ApiError.message error) ]
-
-                    _ ->
-                        patchDiff settings model file
-                , detachedThreads model file.path
-                , inlineComposerFor model file.path
-                , footer [ class "diff-footer" ]
-                    [ span [] [ text "End of patch" ]
-                    , if Route.isPullRequest (reviewRequest model).location.target then
-                        button [ type_ "button", onClick (OpenedInlineComposer file.path (lastNewLine model file.path) RightSide) ] [ text "+ Add a review comment" ]
-
-                      else
-                        text ""
-                    ]
-                ]
-        ]
-
-
-semanticSummary : Settings -> Model -> FileChange -> Html Msg
-semanticSummary settings model file =
-    if not settings.semantic then
-        text ""
-
-    else
-        case reviewAnalysis model of
-            Analysis.InFlight _ ->
-                div [ class "semantic-banner is-loading" ] [ span [ class "loading-spinner" ] [], text "Analyzing syntax tree…" ]
-
-            Analysis.Failure _ error ->
-                div [ class "semantic-banner is-error" ] [ text (ApiError.message error) ]
-
-            Analysis.Complete _ snapshot ->
-                snapshot.files
-                    |> Dict.get file.path
-                    |> Maybe.map (.semantic >> semanticFeatureView)
-                    |> Maybe.withDefault (text "")
-
-            Analysis.Disabled ->
-                text ""
-
-
-semanticFeatureView : AnalysisFeature SemanticResult -> Html msg
-semanticFeatureView feature =
-    case feature of
-        FeatureDisabled ->
-            text ""
-
-        FeatureSkipped reason ->
-            div [ class "semantic-banner is-muted" ] [ strong [] [ text "Syntax analysis skipped" ], span [] [ text reason ] ]
-
-        FeatureComplete result ->
-            semanticResultView result
-
-
-semanticResultView : SemanticResult -> Html msg
-semanticResultView result =
-    case result of
-        SemanticParsed _ language semanticEqual changes ->
-            div [ class "semantic-banner" ]
-                [ span [ class "semantic-symbol" ] [ text "◎" ]
-                , div []
-                    [ strong []
-                        [ text
-                            (if semanticEqual then
-                                "Formatting-only semantic change"
-
-                             else
-                                semanticCount changes
-                            )
-                        ]
-                    , span [] [ text (language ++ " syntax tree") ]
-                    ]
-                , div [ class "semantic-chips" ] (List.map semanticChip changes)
-                ]
-
-        SemanticUnsupported _ reason ->
-            div [ class "semantic-banner is-muted" ] [ strong [] [ text "Syntax analysis skipped" ], span [] [ text reason ] ]
-
-        SemanticParseFailed _ language reason ->
-            div [ class "semantic-banner is-error" ] [ strong [] [ text (language ++ " parse failed") ], span [] [ text reason ] ]
-
-
-semanticChip : SemanticChange -> Html msg
-semanticChip change =
-    case change of
-        Inserted kind label _ _ ->
-            span [ class "semantic-chip is-added" ] [ text ("+ " ++ kind ++ " " ++ label) ]
-
-        Deleted kind label _ _ ->
-            span [ class "semantic-chip is-deleted" ] [ text ("− " ++ kind ++ " " ++ label) ]
-
-        Updated kind label _ _ _ ->
-            span [ class "semantic-chip is-updated" ] [ text ("~ " ++ kind ++ " " ++ label) ]
-
-        Renamed kind oldLabel newLabel _ _ _ ->
-            span [ class "semantic-chip is-renamed" ] [ text (kind ++ " " ++ oldLabel ++ " → " ++ newLabel) ]
-
-
-semanticCount : List SemanticChange -> String
-semanticCount changes =
-    String.fromInt (List.length changes)
-        ++ " semantic change"
-        ++ (if List.length changes == 1 then
-                ""
-
-            else
-                "s"
-           )
-
-
-patchDiff : Settings -> Model -> FileChange -> Html Msg
-patchDiff settings model file =
-    div
-        [ class
-            (if settings.viewMode == Split then
-                "split-diff"
-
-             else
-                "unified-diff"
-            )
-        ]
-        (List.map (hunkView settings model file) (preparedHunks model file.path))
-
-
-hunkView : Settings -> Model -> FileChange -> Hunk -> Html Msg
-hunkView settings model file hunk =
-    let
-        collapsed =
-            reviewDiff model
-                |> Maybe.map (DiffView.isHunkCollapsed file.path hunk.id)
-                |> Maybe.withDefault False
-    in
-    section [ class "diff-hunk" ]
-        [ button [ type_ "button", class "hunk-header", onClick (ToggledHunk file.path hunk.id) ]
-            [ span []
-                [ text
-                    (if collapsed then
-                        "›"
-
-                     else
-                        "⌄"
-                    )
-                ]
-            , code [] [ text hunk.header ]
-            ]
-        , if collapsed then
-            text ""
-
-          else if settings.viewMode == Split then
-            div [ class "split-lines" ] (List.map (splitRowView settings model file) (Diff.splitRows settings.ignoreWhitespace hunk))
-
-          else
-            div [ class "unified-lines" ] (hunk.lines |> List.filter (keepLine settings.ignoreWhitespace) |> List.map (unifiedLineView settings model file))
-        ]
-
-
-keepLine : Bool -> DiffLine -> Bool
-keepLine _ _ =
-    True
-
-
-splitRowView : Settings -> Model -> FileChange -> SplitRow -> Html Msg
-splitRowView settings model file row =
-    div [ class "split-row" ]
-        [ splitCell settings model file LeftSide "left" row.left
-        , splitCell settings model file RightSide "right" row.right
-        ]
-
-
-splitCell : Settings -> Model -> FileChange -> CommentSide -> String -> Maybe SideLine -> Html Msg
-splitCell settings model file side sideClass maybeLine =
-    case maybeLine of
-        Nothing ->
-            div [ class ("split-cell " ++ sideClass ++ " is-empty") ] [ span [ class "line-number" ] [], span [ class "line-marker" ] [], code [ class "line-code" ] [] ]
-
-        Just line ->
-            let
-                number =
-                    Maybe.withDefault 0 line.number
-
-                decoration =
-                    moveDecoration model file.path side number
-            in
-            div
-                [ class ("split-cell " ++ sideClass ++ " " ++ kindClass line.kind ++ decoration.className)
-                , id decoration.anchorId
-                ]
-                [ lineNumberButton model file.path side number line.number
-                , span [ class "line-marker" ] [ text (kindMarker line.kind) ]
-                , code [ class "line-code" ] (highlightedLine settings model file.path side number line.text)
-                , decoration.button
-                , lineThreads model file.path side number
-                ]
-
-
-unifiedLineView : Settings -> Model -> FileChange -> DiffLine -> Html Msg
-unifiedLineView settings model file line =
-    let
-        side =
-            if line.kind == Deletion then
-                LeftSide
-
-            else
-                RightSide
-
-        number =
-            case side of
-                LeftSide ->
-                    Maybe.withDefault 0 line.oldLine
-
-                RightSide ->
-                    Maybe.withDefault 0 line.newLine
-
-        decoration =
-            moveDecoration model file.path side number
-    in
-    div [ class ("unified-line " ++ kindClass line.kind ++ decoration.className), id decoration.anchorId ]
-        [ span [ class "line-number old" ] [ text (maybeNumber line.oldLine) ]
-        , lineNumberButton model file.path side number line.newLine
-        , span [ class "line-marker" ] [ text (kindMarker line.kind) ]
-        , code [ class "line-code" ] (highlightedLine settings model file.path side number line.text)
-        , decoration.button
-        , lineThreads model file.path side number
-        ]
-
-
-type alias MoveDecoration =
-    { className : String
-    , anchorId : String
-    , button : Html Msg
-    }
-
-
-moveDecoration : Model -> String -> CommentSide -> Int -> MoveDecoration
-moveDecoration model path side lineNumber =
-    let
-        endpoint =
-            case side of
-                LeftSide ->
-                    Source
-
-                RightSide ->
-                    Destination
-
-        move =
-            case reviewAnalysis model of
-                Analysis.Complete _ snapshot ->
-                    List.filter (SemanticMove.containsLine path lineNumber endpoint) snapshot.moves |> List.head
-
-                _ ->
-                    Nothing
-    in
-    case move of
-        Nothing ->
-            { className = "", anchorId = "", button = text "" }
-
-        Just moved ->
-            let
-                targetEndpoint =
-                    if endpoint == Source then
-                        Destination
-
-                    else
-                        Source
-
-                targetPath =
-                    if endpoint == Source then
-                        moved.toPath
-
-                    else
-                        moved.fromPath
-
-                ownAnchor =
-                    SemanticMove.anchor moved endpoint
-
-                targetAnchor =
-                    SemanticMove.anchor moved targetEndpoint
-            in
-            { className = " line-move move-tone-" ++ String.fromInt (SemanticMove.tone moved)
-            , anchorId = ownAnchor
-            , button =
-                button
-                    [ type_ "button"
-                    , class "semantic-move-link"
-                    , attribute "title" ("Jump to moved " ++ moved.kind ++ " " ++ moved.label)
-                    , onClick (SelectedMoveTarget targetPath targetAnchor)
-                    ]
-                    [ text
-                        (if endpoint == Source then
-                            "Moved →"
-
-                         else
-                            "← From"
-                        )
-                    ]
-            }
-
-
-lineNumberButton : Model -> String -> CommentSide -> Int -> Maybe Int -> Html Msg
-lineNumberButton model path side number maybeNumberValue =
-    if Route.isPullRequest (reviewRequest model).location.target && maybeNumberValue /= Nothing then
-        button [ type_ "button", class "line-number comment-trigger", attribute "title" "Add a GitHub review comment", onClick (OpenedInlineComposer path number side) ] [ text (maybeNumber maybeNumberValue) ]
-
-    else
-        span [ class "line-number" ] [ text (maybeNumber maybeNumberValue) ]
-
-
-highlightedLine : Settings -> Model -> String -> CommentSide -> Int -> String -> List (Html Msg)
-highlightedLine settings model path side number source =
-    case readyState model |> Maybe.andThen (.files >> FileIndex.get path) of
-        Just prepared ->
-            rangedSyntax settings.syntaxHighlighting path source (PreparedDiff.rangesFor side number prepared)
-
-        Nothing ->
-            Syntax.line settings.syntaxHighlighting path source
-
-
-rangedSyntax : Bool -> String -> String -> List CharacterRange -> List (Html Msg)
-rangedSyntax syntax path source ranges =
-    if List.isEmpty ranges then
-        Syntax.line syntax path source
-
-    else
-        ranges
-            |> List.sortBy .start
-            |> rangesToSegments 0 source
-
-
-rangesToSegments : Int -> String -> List CharacterRange -> List (Html msg)
-rangesToSegments offset source ranges =
-    case ranges of
-        [] ->
-            [ text (String.dropLeft offset source) ]
-
-        range :: remaining ->
-            let
-                safeStart =
-                    max offset range.start
-
-                safeEnd =
-                    max safeStart range.end
-            in
-            [ text (String.slice offset safeStart source)
-            , span [ class "inline-change" ] [ text (String.slice safeStart safeEnd source) ]
-            ]
-                ++ rangesToSegments safeEnd source remaining
-
-
-lineThreads : Model -> String -> CommentSide -> Int -> Html Msg
-lineThreads model path side lineNumber =
-    case reviewComments model of
-        Success _ comments ->
-            comments
-                |> rootComments
-                |> List.filter (\comment -> comment.path == path && comment.side == side && comment.line == Just lineNumber)
-                |> List.map (threadView model comments)
-                |> div [ class "inline-review-threads" ]
-
-        _ ->
-            text ""
-
-
-detachedThreads : Model -> String -> Html Msg
-detachedThreads model path =
-    case reviewComments model of
-        Success _ comments ->
-            comments
-                |> rootComments
-                |> List.filter (\comment -> comment.path == path && comment.line == Nothing)
-                |> List.map (threadView model comments)
-                |> div [ class "detached-review-threads" ]
-
-        Failure _ error ->
-            div [ class "review-comments-error" ] [ text (ApiError.message error) ]
-
-        _ ->
-            text ""
-
-
-rootComments : List ReviewComment -> List ReviewComment
-rootComments =
-    List.filter (\comment -> comment.id == comment.rootId)
-
-
-threadView : Model -> List ReviewComment -> ReviewComment -> Html Msg
-threadView model comments root =
-    let
-        collapsed =
-            reviewCollaboration model
-                |> Maybe.map (Collaboration.isThreadCollapsed root.rootId)
-                |> Maybe.withDefault False
-
-        replies =
-            List.filter (\comment -> comment.rootId == root.rootId && comment.id /= root.id) comments
-    in
-    article
-        [ class
-            ("github-review-thread"
-                ++ (if root.resolved then
-                        " is-resolved"
-
-                    else
-                        ""
-                   )
-            )
-        ]
-        [ button [ type_ "button", class "review-thread-header", onClick (ToggledThread root.rootId) ]
-            [ span []
-                [ text
-                    (if collapsed then
-                        "›"
-
-                     else
-                        "⌄"
-                    )
-                ]
-            , strong [] [ text root.author ]
-            , if root.resolved then
-                span [ class "resolved-tag" ] [ text "Resolved" ]
-
-              else
-                text ""
-            , span [] [ text root.createdAt ]
-            ]
-        , if collapsed then
-            text ""
-
-          else
-            div [ class "review-thread-body" ]
-                (Markdown.toHtml [ class "github-markdown" ] root.body
-                    :: List.map (commentBody False) replies
-                    ++ [ replyComposer model root.rootId ]
-                )
-        ]
-
-
-commentBody : Bool -> ReviewComment -> Html msg
-commentBody _ comment =
-    div [ class "github-review-reply" ]
-        [ header [] [ strong [] [ text comment.author ], span [] [ text comment.createdAt ] ]
-        , Markdown.toHtml [ class "github-markdown" ] comment.body
-        ]
-
-
-replyComposer : Model -> Int -> Html Msg
-replyComposer model commentId =
-    let
-        collaboration =
-            reviewCollaboration model
-
-        draft =
-            collaboration
-                |> Maybe.map (Collaboration.replyDraft commentId)
-                |> Maybe.withDefault ""
-
-        loading =
-            collaboration
-                |> Maybe.map (Collaboration.replyLoading commentId)
-                |> Maybe.withDefault False
-
-        error =
-            collaboration |> Maybe.andThen (Collaboration.replyError commentId)
-    in
-    form [ class "review-reply-composer", onSubmit (SubmittedReply commentId) ]
-        [ textarea [ placeholder "Reply on GitHub…", value draft, onInput (ChangedReply commentId) ] []
-        , button [ type_ "submit", disabled loading ] [ text "Reply" ]
-        , apiErrorView error
-        ]
-
-
-inlineComposerFor : Model -> String -> Html Msg
-inlineComposerFor model path =
-    case reviewCollaboration model of
-        Nothing ->
-            text ""
-
-        Just collaboration ->
-            inlineComposerView collaboration path
-
-
-inlineComposerView : Collaboration.Model -> String -> Html Msg
-inlineComposerView collaboration path =
-    case Collaboration.inlineComposer collaboration of
-        Just composer ->
-            if composer.path /= path then
-                text ""
-
-            else
-                form [ class "inline-comment-composer", onSubmit SubmittedInlineComment ]
-                    [ header [] [ strong [] [ text ("Comment on " ++ path ++ ":" ++ String.fromInt composer.line) ], span [] [ text (Review.commentSideToString composer.side) ] ]
-                    , textarea [ id ("inline-comment-" ++ fileAnchor path), placeholder "Leave a review comment on GitHub…", value composer.body, onInput ChangedInlineBody ] []
-                    , div []
-                        [ button [ type_ "button", onClick CancelledInlineComposer ] [ text "Cancel" ]
-                        , button [ type_ "submit", disabled (Collaboration.inlineLoading collaboration) ] [ text "Add comment" ]
-                        ]
-                    , apiErrorView (Collaboration.inlineError collaboration)
-                    ]
-
-        Nothing ->
-            text ""
+    FileTreeView.view
+        { selectedPath = Maybe.withDefault "" (reviewRequest model).location.path
+        , isReviewed = \path -> diff |> Maybe.map (DiffView.isReviewed path) |> Maybe.withDefault False
+        , isCollapsed = \path -> diff |> Maybe.map (DiffView.isFolderCollapsed path) |> Maybe.withDefault False
+        , toggleFolder = ToggledFolder
+        , selectFile = SelectedFile
+        , statusGlyph = statusGlyph
+        }
+        forest
 
 
 commitsView : Model -> Html Msg
@@ -1852,81 +1212,20 @@ reviewComposer model =
             text ""
 
         Just collaboration ->
-            form [ class "github-review-composer" ]
-                [ h2 [] [ text "Submit review" ]
-                , textarea [ placeholder "Leave an overall review…", value (Collaboration.reviewBody collaboration), onInput ChangedReviewBody ] []
-                , div []
-                    [ button [ type_ "button", onClick (SubmittedReview "COMMENT") ] [ text "Comment" ]
-                    , button [ type_ "button", onClick (SubmittedReview "APPROVE") ] [ text "Approve" ]
-                    , button [ type_ "button", onClick (SubmittedReview "REQUEST_CHANGES") ] [ text "Request changes" ]
-                    ]
-                , apiErrorView (Collaboration.reviewError collaboration)
-                ]
+            CollaborationView.reviewComposer collaborationActions collaboration
 
 
-fullFileDiff : Settings -> Model -> FileChange -> FullFile -> Html Msg
-fullFileDiff settings model file full =
-    let
-        rows =
-            Diff.fullFileRowsPrepared (preparedHunks model file.path) full.oldText full.newText
-    in
-    div [ class "full-file-diff" ]
-        (if settings.viewMode == Split then
-            List.map (splitRowView settings model file) rows
-
-         else
-            rows
-                |> List.concatMap fullUnifiedLines
-                |> List.map (unifiedLineView settings model file)
-        )
-
-
-fullUnifiedLines : SplitRow -> List DiffLine
-fullUnifiedLines row =
-    case ( row.left, row.right ) of
-        ( Just left, Just right ) ->
-            if left.kind == Context && right.kind == Context then
-                [ { kind = Context, text = right.text, oldLine = left.number, newLine = right.number } ]
-
-            else
-                [ { kind = left.kind, text = left.text, oldLine = left.number, newLine = Nothing }
-                , { kind = right.kind, text = right.text, oldLine = Nothing, newLine = right.number }
-                ]
-
-        ( Just left, Nothing ) ->
-            [ { kind = left.kind, text = left.text, oldLine = left.number, newLine = Nothing } ]
-
-        ( Nothing, Just right ) ->
-            [ { kind = right.kind, text = right.text, oldLine = Nothing, newLine = right.number } ]
-
-        ( Nothing, Nothing ) ->
-            []
-
-
-githubFileUrl : Model -> FileChange -> String
-githubFileUrl model file =
-    case readyReview model of
-        Just reviewData ->
-            "https://github.com/" ++ reviewData.repository ++ "/blob/" ++ Review.backingHeadOid reviewData.backing ++ "/" ++ file.path
-
-        Nothing ->
-            "#"
-
-
-preparedHunks : Model -> String -> List Hunk
-preparedHunks model path =
-    readyState model
-        |> Maybe.map (.files >> FileIndex.hunks path)
-        |> Maybe.withDefault []
-
-
-lastNewLine : Model -> String -> Int
-lastNewLine model path =
-    preparedHunks model path
-        |> List.reverse
-        |> List.head
-        |> Maybe.andThen (.lines >> List.reverse >> List.filterMap .newLine >> List.head)
-        |> Maybe.withDefault 1
+collaborationActions : CollaborationView.Actions Msg
+collaborationActions =
+    { toggleThread = ToggledThread
+    , changeReply = ChangedReply
+    , submitReply = SubmittedReply
+    , changeInlineBody = ChangedInlineBody
+    , cancelInline = CancelledInlineComposer
+    , submitInline = SubmittedInlineComment
+    , changeReviewBody = ChangedReviewBody
+    , submitReview = SubmittedReview
+    }
 
 
 statusGlyph : FileStatus -> String
@@ -1945,98 +1244,9 @@ statusGlyph status =
             "M"
 
 
-kindClass : Kind -> String
-kindClass kind =
-    case kind of
-        Addition ->
-            "addition"
-
-        Deletion ->
-            "deletion"
-
-        Context ->
-            "context"
-
-
-kindMarker : Kind -> String
-kindMarker kind =
-    case kind of
-        Addition ->
-            "+"
-
-        Deletion ->
-            "−"
-
-        Context ->
-            " "
-
-
-maybeNumber : Maybe Int -> String
-maybeNumber =
-    Maybe.map String.fromInt >> Maybe.withDefault ""
-
-
-fileAnchor : String -> String
-fileAnchor path =
-    "file-" ++ Url.percentEncode path
-
-
-scopeFromString : String -> ReviewScope
-scopeFromString encoded =
-    if encoded == "full" then
-        FullDiff
-
-    else
-        OneFile
-
-
-viewModeFromString : String -> ViewMode
-viewModeFromString encoded =
-    if encoded == "unified" then
-        Unified
-
-    else
-        Split
-
-
-searchModeFromString : String -> SearchMode
-searchModeFromString encoded =
-    if encoded == "regex" then
-        Regex
-
-    else
-        Literal
-
-
-activeClass : Bool -> String
-activeClass active =
-    if active then
-        " is-active"
-
-    else
-        ""
-
-
-apiErrorView : Maybe ApiError -> Html msg
-apiErrorView maybeError =
-    maybeError
-        |> Maybe.map (ApiError.message >> text >> List.singleton >> span [ class "form-error" ])
-        |> Maybe.withDefault (text "")
-
-
 pageState : String -> Html msg
 pageState message =
     div [ class "page-state" ] [ span [ class "loading-spinner" ] [], text message ]
-
-
-treeFileCount : Tree value -> Int
-treeFileCount tree =
-    case tree of
-        Leaf _ _ ->
-            1
-
-        Folder _ _ children ->
-            List.sum (List.map treeFileCount children)
 
 
 unchanged : Model -> ( Model, Effect Msg )
