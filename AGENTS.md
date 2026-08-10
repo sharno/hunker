@@ -5,9 +5,10 @@
 - The browser application is Elm 0.19.2 under `elm/src`; Rust/Axum owns the
   local API and serves the compiled Elm and Tailwind assets from the same
   process. Do not introduce a second frontend runtime or development server.
-- Keep `Hunker.Route.Route` as the sole authority for rendered location. Browser
-  Back, Forward, cold loads, and pasted GitHub URLs must enter the same
-  exhaustive route transition.
+- Keep exactly one routed application state. Boot states own their pending
+  `Route`; ready page constructors own their typed location. Do not cache the
+  route beside the page model. Browser Back, Forward, cold loads, and pasted
+  GitHub URLs must enter the same exhaustive route transition.
 - Keep Elm domain state independent of `Browser.Navigation.Key` and `Cmd`.
   Updates return `Hunker.Effect.Effect`; the browser runtime and
   `elm-program-test` interpret that same ADT.

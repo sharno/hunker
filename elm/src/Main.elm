@@ -33,8 +33,7 @@ type Page
 
 
 type alias Model =
-    { route : Route
-    , state : AppState
+    { state : AppState
     , githubInput : String
     , githubInputError : String
     }
@@ -80,8 +79,7 @@ init _ url _ =
         route =
             Route.fromUrl url
     in
-    ( { route = route
-      , state = Booting route
+    ( { state = Booting route
       , githubInput = ""
       , githubInputError = ""
       }
@@ -149,12 +147,12 @@ update msg model =
                                 ( updated, effect ) =
                                     Review.navigate reviewLocation review
                             in
-                            ( { model | route = route, state = Ready settingsState (ReviewPage updated) }
+                            ( { model | state = Ready settingsState (ReviewPage updated) }
                             , Effect.map ReviewMsg effect
                             )
 
                         _ ->
-                            startRoute settingsState route { model | route = route }
+                            startRoute settingsState route model
 
                 Ready settingsState (RepositoryPage repository) ->
                     case route of
@@ -163,27 +161,37 @@ update msg model =
                                 ( updated, effect ) =
                                     Repository.navigate repositoryLocation repository
                             in
-                            ( { model | route = route, state = Ready settingsState (RepositoryPage updated) }
+                            ( { model | state = Ready settingsState (RepositoryPage updated) }
                             , Effect.map RepositoryMsg effect
                             )
 
                         _ ->
-                            startRoute settingsState route { model | route = route }
+                            startRoute settingsState route model
 
                 Ready settingsState _ ->
-                    startRoute settingsState route { model | route = route }
+                    startRoute settingsState route model
 
                 BootFailed _ error ->
-                    ( { model | route = route, state = BootFailed route error }, Effect.none )
+                    ( { model | state = BootFailed route error }, Effect.none )
 
                 Booting _ ->
-                    ( { model | route = route, state = Booting route }, Effect.none )
+                    ( { model | state = Booting route }, Effect.none )
 
         SettingsLoaded document ->
-            startRoute (SettingsSync.loaded document) model.route model
+            case bootRoute model.state of
+                Just route ->
+                    startRoute (SettingsSync.loaded document) route model
+
+                Nothing ->
+                    unchanged model
 
         SettingsLoadFailed error ->
-            ( { model | state = BootFailed model.route error }, Effect.none )
+            case bootRoute model.state of
+                Just route ->
+                    ( { model | state = BootFailed route error }, Effect.none )
+
+                Nothing ->
+                    unchanged model
 
         SettingsSaved revision document ->
             finishSettingsSave revision document model
@@ -192,7 +200,12 @@ update msg model =
             failSettingsSave revision error model
 
         RetriedBootstrap ->
-            ( { model | state = Booting model.route }, Api.loadSettings SettingsLoaded SettingsLoadFailed )
+            case model.state of
+                BootFailed route _ ->
+                    ( { model | state = Booting route }, Api.loadSettings SettingsLoaded SettingsLoadFailed )
+
+                _ ->
+                    unchanged model
 
         ChangedGitHubInput githubInput ->
             ( { model | githubInput = githubInput, githubInputError = "" }, Effect.none )
@@ -317,7 +330,7 @@ startRoute settingsState route model =
                 ( home, effect ) =
                     Home.init
             in
-            ( { model | route = route, state = Ready settingsState (HomePage home) }
+            ( { model | state = Ready settingsState (HomePage home) }
             , Effect.map HomeMsg effect
             )
 
@@ -326,7 +339,7 @@ startRoute settingsState route model =
                 ( settingsModel, effect ) =
                     SettingsPage.init settings
             in
-            ( { model | route = route, state = Ready settingsState (SettingsPage settingsModel) }
+            ( { model | state = Ready settingsState (SettingsPage settingsModel) }
             , Effect.map SettingsMsg effect
             )
 
@@ -335,7 +348,7 @@ startRoute settingsState route model =
                 ( repository, effect ) =
                     Repository.init repositoryLocation
             in
-            ( { model | route = route, state = Ready settingsState (RepositoryPage repository) }
+            ( { model | state = Ready settingsState (RepositoryPage repository) }
             , Effect.map RepositoryMsg effect
             )
 
@@ -344,12 +357,25 @@ startRoute settingsState route model =
                 ( review, effect ) =
                     Review.init reviewLocation
             in
-            ( { model | route = route, state = Ready settingsState (ReviewPage review) }
+            ( { model | state = Ready settingsState (ReviewPage review) }
             , Effect.map ReviewMsg effect
             )
 
         Route.NotFound path ->
-            ( { model | route = route, state = Ready settingsState (NotFoundPage path) }, Effect.none )
+            ( { model | state = Ready settingsState (NotFoundPage path) }, Effect.none )
+
+
+bootRoute : AppState -> Maybe Route
+bootRoute state =
+    case state of
+        Booting route ->
+            Just route
+
+        BootFailed route _ ->
+            Just route
+
+        Ready _ _ ->
+            Nothing
 
 
 queueSettings : Settings -> Model -> ( Model, Effect Msg )
