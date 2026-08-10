@@ -10,20 +10,24 @@ module Hunker.Page.Repository exposing
     , view
     )
 
-import Html exposing (Html, a, aside, button, code, div, form, h1, h2, header, img, input, label, main_, option, p, pre, section, select, small, span, strong, text)
-import Html.Attributes exposing (attribute, class, disabled, href, id, placeholder, selected, src, title, type_, value)
+import Html exposing (Html, button, div, form, input, main_, text)
+import Html.Attributes exposing (attribute, class, placeholder, title, type_, value)
 import Html.Events exposing (onClick, onInput, onSubmit)
 import Hunker.Api as Api
 import Hunker.ApiError as ApiError exposing (ApiError)
-import Hunker.Domain.Repository as Repository exposing (Checkout(..), Commit, File, FileContent, PullRequest, PullRequestsPage, SearchResults, SourceControlStatus)
+import Hunker.Domain.Repository as Repository exposing (Checkout(..), Commit, File, FileContent, PullRequestsPage, SearchResults, SourceControlStatus)
 import Hunker.Effect as Effect exposing (Effect)
-import Hunker.FileTree as FileTree exposing (Tree(..))
 import Hunker.Remote as Remote exposing (Remote(..))
 import Hunker.Repository.Files as RepositoryFiles
 import Hunker.Repository.Pulls as RepositoryPulls
 import Hunker.Repository.SourceControl as SourceControl
+import Hunker.Repository.View.Commits as CommitsView
+import Hunker.Repository.View.Files as FilesView
+import Hunker.Repository.View.Local as LocalView
+import Hunker.Repository.View.PullRequests as PullRequestsView
+import Hunker.Repository.View.SourceControl as SourceControlView
+import Hunker.Repository.View.Toolbar as ToolbarView
 import Hunker.Route as Route exposing (PullRequestState(..), RepositoryTab(..), SearchMode(..))
-import Hunker.Syntax as Syntax
 import Time
 import Url
 
@@ -942,26 +946,11 @@ repositoryPath model tab path query mode pullState =
 
 toolbar : Model -> List (Html Msg)
 toolbar model =
-    [ div [ class "repository-identity" ]
-        [ span [] [ text "Local repository" ]
-        , strong [] [ text (repositoryName model) ]
-        ]
-    , div [ class "segmented repository-view-tabs", attribute "role" "group", attribute "aria-label" "Repository view" ]
-        [ tabButton "Files" RepositoryFiles model.location.tab
-        , tabButton "Pull requests" RepositoryPulls model.location.tab
-        , tabButton "Commits" RepositoryCommits model.location.tab
-        ]
-    ]
-
-
-tabButton : String -> RepositoryTab -> RepositoryTab -> Html Msg
-tabButton label tab active =
-    button
-        [ type_ "button"
-        , class ("segmented-button" ++ activeClass (tab == active))
-        , onClick (SelectedTab tab)
-        ]
-        [ text label ]
+    ToolbarView.view
+        { repository = repositoryName model
+        , activeTab = model.location.tab
+        , selectedTab = SelectedTab
+        }
 
 
 searchForm : Model -> Html Msg
@@ -1016,7 +1005,12 @@ view syntaxHighlighting model =
 
           else
             text ""
-        , sourceControlView model
+        , SourceControlView.view
+            { state = localSourceControl model
+            , selectedBranch = SelectedBranch
+            , requestedRefresh = RequestedSourceRefresh
+            , requestedPull = RequestedPull
+            }
         , case model.location.tab of
             RepositoryPulls ->
                 pullsView model
@@ -1029,599 +1023,108 @@ view syntaxHighlighting model =
         ]
 
 
-sourceControlView : Model -> Html Msg
-sourceControlView model =
-    case localSourceControl model of
-        Just (SourceControl.Loading _) ->
-            section [ class "repository-source-control", attribute "role" "status" ]
-                [ span [ class "source-control-loading" ] [ text "Reading Git state…" ] ]
-
-        Just (SourceControl.Unavailable _ error) ->
-            section [ class "repository-source-control" ]
-                [ span [ class "source-control-feedback is-error", attribute "role" "alert" ] [ text (ApiError.message error) ]
-                , button [ type_ "button", onClick RequestedSourceRefresh ] [ text "Retry" ]
-                ]
-
-        Just (SourceControl.Ready source) ->
-            sourceReady source
-
-        Nothing ->
-            text ""
-
-
-sourceReady : SourceControl.Snapshot -> Html Msg
-sourceReady source =
-    let
-        status =
-            source.status
-
-        branchState =
-            case status.checkout of
-                TrackingBranch checkout ->
-                    { branch = checkout.name, ahead = checkout.ahead, behind = checkout.behind, canPull = checkout.behind > 0 }
-
-                UntrackedBranch checkout ->
-                    { branch = checkout.name, ahead = 0, behind = 0, canPull = False }
-
-                DetachedHead _ ->
-                    { branch = "", ahead = 0, behind = 0, canPull = False }
-
-        busy =
-            SourceControl.busy source.activity
-    in
-    section [ class "repository-source-control" ]
-        [ label [ class "source-control-branch" ]
-            [ span [] [ text "Branch" ]
-            , select [ value branchState.branch, disabled busy, attribute "aria-label" "Checked-out repository branch", onInput SelectedBranch ]
-                ((case status.checkout of
-                    DetachedHead checkout ->
-                        [ option [ value "" ] [ text ("Detached at " ++ String.left 7 checkout.oid) ] ]
-
-                    _ ->
-                        []
-                 )
-                    ++ List.map
-                        (\candidate ->
-                            option [ value candidate.name, selected (candidate.name == branchState.branch) ]
-                                [ text
-                                    (candidate.name
-                                        ++ (if candidate.local then
-                                                ""
-
-                                            else
-                                                " · remote"
-                                           )
-                                    )
-                                ]
-                        )
-                        status.branches
-                )
-            ]
-        , if branchState.ahead > 0 then
-            span [ class "source-control-count is-ahead" ] [ text (String.fromInt branchState.ahead ++ " ↑") ]
-
-          else
-            text ""
-        , if branchState.behind > 0 then
-            span [ class "source-control-count is-behind" ] [ text (String.fromInt branchState.behind ++ " ↓") ]
-
-          else
-            text ""
-        , span [ class "source-control-changes" ]
-            [ text
-                (String.fromInt status.staged
-                    ++ " staged · "
-                    ++ String.fromInt status.unstaged
-                    ++ " changed · "
-                    ++ String.fromInt status.untracked
-                    ++ " untracked"
-                )
-            ]
-        , sourceFeedback source.activity status.path
-        , button
-            [ type_ "button", class "source-control-refresh", disabled busy, attribute "aria-label" "Refresh repository source control", onClick RequestedSourceRefresh ]
-            [ text "↻" ]
-        , button [ type_ "button", class "source-control-pull", disabled (busy || not branchState.canPull), onClick RequestedPull ]
-            [ text
-                (case source.activity of
-                    SourceControl.PullInFlight ->
-                        "Pulling…"
-
-                    SourceControl.PullSynchronizing count ->
-                        SourceControl.pulledMessage count ++ " Refreshing status…"
-
-                    _ ->
-                        if branchState.behind > 0 then
-                            "Pull " ++ String.fromInt branchState.behind ++ " ↓"
-
-                        else
-                            "Up to date"
-                )
-            ]
-        ]
-
-
-sourceFeedback : SourceControl.Activity -> String -> Html Msg
-sourceFeedback action path =
-    case action of
-        SourceControl.Succeeded message ->
-            span [ class "source-control-feedback is-success" ] [ text message ]
-
-        _ ->
-            span [ class "source-control-path" ] [ text path ]
-
-
 filesView : Bool -> Model -> Html Msg
 filesView syntaxHighlighting model =
+    FilesView.view { state = filesViewState syntaxHighlighting model }
+
+
+filesViewState : Bool -> Model -> FilesView.State Msg
+filesViewState syntaxHighlighting model =
     case model.local of
-        LocalMissing missing ->
-            cloneOffer missing.error missing.clone
-
-        LocalResolving _ ->
-            pageState "Reading repository files…" "Using the current local checkout without switching other tabs."
-
-        LocalFailed _ error ->
-            pageState "Could not read this repository" (ApiError.message error)
-
         LocalReady snapshot ->
-            let
-                files =
-                    RepositoryFiles.catalog snapshot.files
-            in
-            div [ class "repository-workspace" ]
-                [ aside [ class "repository-file-sidebar" ]
-                    [ header [] [ strong [] [ text "Files" ], span [ class "count-badge" ] [ text (String.fromInt (List.length files)) ] ]
-                    , fileTree model snapshot.files (FileTree.build .path files)
-                    ]
-                , section [ class "repository-results" ]
-                    [ case model.view of
-                        Files _ ->
-                            case model.location.path of
-                                Just _ ->
-                                    repositoryFileView syntaxHighlighting model snapshot.files
+            FilesView.FilesReady
+                { syntaxHighlighting = syntaxHighlighting
+                , selectedPath = model.location.path
+                , query = model.location.query
+                , searchMode = model.location.searchMode
+                , files = snapshot.files
+                , selectedFile = SelectedFile
+                , closedFile = ClosedFile
+                , toggledFolder = ToggledFolder
+                }
 
-                                Nothing ->
-                                    if model.location.query /= "" then
-                                        repositorySearchView model snapshot.files
-
-                                    else
-                                        div [ class "repository-empty-selection" ]
-                                            [ h1 [] [ text "Choose a file" ]
-                                            , p [] [ text "Browse the collapsed tree or search literal text, regular expressions, or FFF fuzzy matches." ]
-                                            ]
-
-                        _ ->
-                            text ""
-                    ]
-                ]
-
-
-fileTree : Model -> RepositoryFiles.Model -> List (Tree File) -> Html Msg
-fileTree model files forest =
-    div [ class "file-tree" ] (List.map (fileTreeNode model files 0) forest)
-
-
-fileTreeNode : Model -> RepositoryFiles.Model -> Int -> Tree File -> Html Msg
-fileTreeNode model files depth tree =
-    case tree of
-        Folder name path children ->
-            let
-                collapsed =
-                    RepositoryFiles.isFolderCollapsed path files
-            in
-            div [ class "file-tree-folder" ]
-                [ button
-                    [ type_ "button"
-                    , class "folder-row"
-                    , attribute "style" ("padding-left:" ++ String.fromInt (depth * 16 + 10) ++ "px")
-                    , onClick (ToggledFolder path)
-                    ]
-                    [ span []
-                        [ text
-                            (if collapsed then
-                                "›"
-
-                             else
-                                "⌄"
-                            )
-                        ]
-                    , strong [] [ text name ]
-                    , small [] [ text (String.fromInt (leafCount children)) ]
-                    ]
-                , if collapsed then
-                    text ""
-
-                  else
-                    div [] (List.map (fileTreeNode model files (depth + 1)) children)
-                ]
-
-        Leaf name file ->
-            button
-                [ type_ "button"
-                , class ("repository-file-row" ++ activeClass (model.location.path == Just file.path))
-                , attribute "style" ("padding-left:" ++ String.fromInt (depth * 16 + 28) ++ "px")
-                , onClick (SelectedFile file.path)
-                ]
-                [ span [ class ("file-status is-" ++ file.gitStatus) ] [ text (statusMark file.gitStatus) ]
-                , strong [] [ text name ]
-                , small [] [ text (formatSize file.size) ]
-                ]
-
-
-leafCount : List (Tree item) -> Int
-leafCount forest =
-    List.sum
-        (List.map
-            (\tree ->
-                case tree of
-                    Leaf _ _ ->
-                        1
-
-                    Folder _ _ children ->
-                        leafCount children
-            )
-            forest
-        )
-
-
-repositoryFileView : Bool -> Model -> RepositoryFiles.Model -> Html Msg
-repositoryFileView syntaxHighlighting model files =
-    case RepositoryFiles.selectedFile files of
-        Loading _ ->
-            pageState ("Opening " ++ Maybe.withDefault "file" model.location.path ++ "…") ""
-
-        Failure _ error ->
-            section [ class "page-state is-error" ] [ h1 [] [ text "Could not open file" ], p [] [ text (ApiError.message error) ] ]
-
-        Success _ file ->
-            section [ class "repository-file-view" ]
-                [ div [ class "repository-file-heading" ]
-                    [ button [ type_ "button", class "commit-back", onClick ClosedFile ]
-                        [ text
-                            (if model.location.query == "" then
-                                "← File list"
-
-                             else
-                                "← Search results"
-                            )
-                        ]
-                    , strong [] [ text file.path ]
-                    , if file.truncated then
-                        span [] [ text "First 500k characters shown" ]
-
-                      else
-                        text ""
-                    ]
-                , pre [ class "repository-source" ]
-                    [ code []
-                        (file.content
-                            |> String.lines
-                            |> List.indexedMap
-                                (\index sourceLine ->
-                                    span [ class "source-line" ]
-                                        [ span [ class "line-number" ] [ text (String.fromInt (index + 1)) ]
-                                        , span [ class "line-code" ] (Syntax.line syntaxHighlighting file.path sourceLine)
-                                        ]
-                                )
-                        )
-                    ]
-                ]
-
-        NotAsked ->
-            text ""
-
-
-repositorySearchView : Model -> RepositoryFiles.Model -> Html Msg
-repositorySearchView model files =
-    case RepositoryFiles.search files of
-        Loading _ ->
-            pageState ("Searching for “" ++ model.location.query ++ "”…") (searchDescription model.location.searchMode)
-
-        Failure _ error ->
-            section [ class "page-state is-error" ] [ h1 [] [ text "Search failed" ], p [] [ text (ApiError.message error) ] ]
-
-        Success _ results ->
-            div [ class "repository-search-results" ]
-                [ section []
-                    [ h2 [] [ text ("Filename matches · " ++ String.fromInt (List.length results.files)) ]
-                    , div [ class "repository-filename-results" ]
-                        (List.map
-                            (\file ->
-                                button [ type_ "button", class "repository-file-row", onClick (SelectedFile file.path) ]
-                                    [ strong [] [ text file.path ] ]
-                            )
-                            results.files
-                        )
-                    ]
-                , section []
-                    [ h2 [] [ text ("Content matches · " ++ String.fromInt (List.length results.matches)) ]
-                    , div [ class "repository-content-results" ]
-                        (List.map searchMatchView results.matches)
-                    ]
-                ]
-
-        NotAsked ->
-            text ""
-
-
-searchMatchView : Repository.SearchMatch -> Html Msg
-searchMatchView match =
-    button [ type_ "button", class "repository-search-match", onClick (SelectedFile match.path) ]
-        [ span [ class "repository-match-heading" ]
-            [ strong [] [ text match.path ], code [] [ text (":" ++ String.fromInt match.line) ] ]
-        , pre []
-            [ code []
-                [ text
-                    (String.join "\n"
-                        (match.contextBefore ++ [ match.lineContent ] ++ match.contextAfter)
-                    )
-                ]
-            ]
-        ]
+        _ ->
+            FilesView.LocalUnavailable (localUnavailable "Reading repository files…" model)
 
 
 commitsView : Model -> Html Msg
 commitsView model =
+    CommitsView.view
+        { state = commitsViewState model
+        , selectedCommit = SelectedCommit
+        }
+
+
+commitsViewState : Model -> CommitsView.State SnapshotIdentity Msg
+commitsViewState model =
     case model.view of
         Commits (CommitsRemote remote) ->
-            case remote of
-                Loading _ ->
-                    pageState "Loading commits…" "Reading immutable OIDs from the local checkout."
-
-                Failure _ error ->
-                    section [ class "page-state is-error" ] [ h1 [] [ text "Could not load commits" ], p [] [ text (ApiError.message error) ] ]
-
-                Success _ data ->
-                    section [ class "commits-browser repository-commits-browser" ]
-                        [ header [ class "commits-heading" ]
-                            [ div [] [ h2 [] [ text ("Commits on " ++ data.ref) ], p [] [ text "Select an immutable commit to open its diff." ] ]
-                            , span []
-                                [ text
-                                    (String.fromInt (List.length data.commits)
-                                        ++ (if data.shallow then
-                                                " · shallow"
-
-                                            else
-                                                ""
-                                           )
-                                    )
-                                ]
-                            ]
-                        , div [ class "commit-list" ] (List.map commitRow data.commits)
-                        ]
-
-                NotAsked ->
-                    text ""
+            CommitsView.CommitsRemote remote
 
         Commits CommitsWaiting ->
-            localUnavailableView model "Loading commits…"
+            CommitsView.LocalUnavailable (localUnavailable "Loading commits…" model)
 
         _ ->
-            text ""
-
-
-commitRow : Commit -> Html Msg
-commitRow commit =
-    button [ type_ "button", class "commit-row repository-commit-row", onClick (SelectedCommit commit) ]
-        [ span [ class "commit-avatar" ] [ text (String.left 2 (String.toUpper commit.authorName)) ]
-        , span [ class "commit-copy" ]
-            [ strong [] [ text commit.subject ]
-            , span [] [ text (commit.authorName ++ " · " ++ commit.authoredAt) ]
-            ]
-        , span [ class "commit-action" ]
-            [ code [ class "commit-sha" ] [ text (String.left 7 commit.sha) ]
-            , span [ class "commit-open-arrow" ] [ text "→" ]
-            ]
-        ]
+            CommitsView.LocalUnavailable (LocalView.Resolving "Loading commits…" "Resolving an immutable local Git revision.")
 
 
 pullsView : Model -> Html Msg
 pullsView model =
     case model.view of
         PullRequests (PullsState pulls) ->
-            section [ class "repository-pulls-browser" ]
-                [ header [ class "repository-pulls-heading" ]
-                    [ div []
-                        [ span [] [ text "GitHub" ]
-                        , h1 [] [ text ("Pull requests for " ++ repositoryName model) ]
-                        , p [] [ text "Open a pull request directly in Hunker’s diff view." ]
-                        ]
-                    , div [ class "segmented repository-pull-filters" ]
-                        (List.map (pullFilter model.location.pullState) [ OpenPulls, ClosedPulls, AllPulls ])
-                    ]
-                , case RepositoryPulls.request pulls of
-                    Loading _ ->
-                        if List.isEmpty (RepositoryPulls.rows pulls) then
-                            pageState "Loading pull requests…" "Reading pull requests through your GitHub login."
-
-                        else
-                            pullRowsView model pulls True
-
-                    Failure _ error ->
-                        if List.isEmpty (RepositoryPulls.rows pulls) then
-                            section [ class "page-state is-error" ] [ h1 [] [ text "Could not load pull requests" ], p [] [ text (ApiError.message error) ] ]
-
-                        else
-                            div [] [ pullRowsView model pulls False, p [ class "repository-pull-page-error" ] [ text (ApiError.message error) ] ]
-
-                    Success _ _ ->
-                        pullRowsView model pulls False
-
-                    NotAsked ->
-                        text ""
-                ]
+            PullRequestsView.view
+                { repository = repositoryName model
+                , owner = model.location.owner
+                , name = model.location.repository
+                , activeState = model.location.pullState
+                , pulls = pulls
+                , selectedState = SelectedPullState
+                , requestedMore = RequestedMorePulls
+                }
 
         _ ->
             text ""
 
 
-pullFilter : PullRequestState -> PullRequestState -> Html Msg
-pullFilter active state =
-    button [ type_ "button", class ("segmented-button" ++ activeClass (active == state)), onClick (SelectedPullState state) ]
-        [ text
-            (case state of
-                AllPulls ->
-                    "All"
-
-                ClosedPulls ->
-                    "Closed"
-
-                OpenPulls ->
-                    "Open"
-            )
-        ]
-
-
-pullRowsView : Model -> RepositoryPulls.Model -> Bool -> Html Msg
-pullRowsView model pulls loading =
-    div [ class "repository-pull-list" ]
-        (List.map (pullRow model) (RepositoryPulls.rows pulls)
-            ++ (if RepositoryPulls.hasMore pulls then
-                    [ button [ type_ "button", class "repository-pull-load-more", disabled loading, onClick RequestedMorePulls ]
-                        [ text
-                            (if loading then
-                                "Loading more…"
-
-                             else
-                                "Load more"
-                            )
-                        ]
-                    ]
-
-                else
-                    []
-               )
-        )
-
-
-pullRow : Model -> PullRequest -> Html Msg
-pullRow model pull =
-    a
-        [ class "repository-pull-row"
-        , href
-            ("/"
-                ++ Url.percentEncode model.location.owner
-                ++ "/"
-                ++ Url.percentEncode model.location.repository
-                ++ "/pull/"
-                ++ String.fromInt pull.number
-                ++ "/files"
-            )
-        ]
-        [ if pull.avatarUrl == "" then
-            span [ class "repository-pull-avatar" ] [ text (String.left 2 (String.toUpper pull.author)) ]
-
-          else
-            img [ class "repository-pull-avatar", src pull.avatarUrl, attribute "alt" "" ] []
-        , span [ class "repository-pull-copy" ]
-            [ span [ class "repository-pull-title" ] [ strong [] [ text pull.title ], code [] [ text ("#" ++ String.fromInt pull.number) ] ]
-            , small [] [ text (pull.author ++ " · " ++ pull.head ++ " → " ++ pull.base) ]
-            , span [ class "repository-pull-labels" ] (List.map (\tag -> span [] [ text tag ]) pull.labels)
-            ]
-        , span [ class ("repository-pull-state is-" ++ pull.state) ]
-            [ text
-                (if pull.draft then
-                    "Draft"
-
-                 else
-                    titleCase pull.state
-                )
-            ]
-        , span [ class "commit-open-arrow" ] [ text "→" ]
-        ]
-
-
-localUnavailableView : Model -> String -> Html Msg
-localUnavailableView model loadingMessage =
+localUnavailable : String -> Model -> LocalView.Unavailable Msg
+localUnavailable loadingMessage model =
     case model.local of
         LocalMissing missing ->
-            cloneOffer missing.error missing.clone
+            LocalView.Missing (cloneOffer missing)
 
         LocalFailed _ error ->
-            pageState "Could not read this repository" (ApiError.message error)
+            LocalView.Failed "Could not read this repository" error
 
         LocalResolving _ ->
-            pageState loadingMessage "Resolving an immutable local Git revision."
+            LocalView.Resolving loadingMessage "Resolving an immutable local Git revision."
 
         LocalReady _ ->
-            pageState loadingMessage "Reading immutable OIDs from the local repository."
+            LocalView.Resolving loadingMessage "Reading immutable OIDs from the local repository."
 
 
-cloneOffer : ApiError -> CloneState -> Html Msg
-cloneOffer error clone =
-    section [ class "repository-clone-offer" ]
-        [ span [ class "repository-clone-mark" ] [ text "git" ]
-        , h1 [] [ text "Clone this repository for local browsing" ]
-        , p [] [ text (ApiError.message error) ]
-        , cloneFeedback clone
-        , div [ class "repository-clone-actions" ]
-            [ button [ type_ "button", disabled (isCloneLoading clone), onClick (RequestedClone "temporary") ] [ text "Clone to /tmp" ]
-            , button [ type_ "button", disabled (isCloneLoading clone), onClick (RequestedClone "configured") ] [ text "Clone to repos root" ]
-            ]
-        , small [] [ text "Clones start shallow and use your local GitHub authentication for private repositories." ]
-        ]
+cloneOffer : MissingRepository -> LocalView.CloneOffer Msg
+cloneOffer missing =
+    { error = missing.error
+    , loading =
+        case missing.clone of
+            CloneInFlight _ ->
+                True
 
+            _ ->
+                False
+    , feedback =
+        case missing.clone of
+            CloneInFlight _ ->
+                Just (Ok "Cloning…")
 
-cloneFeedback : CloneState -> Html Msg
-cloneFeedback clone =
-    case clone of
-        CloneInFlight _ ->
-            p [ class "repository-clone-feedback" ] [ text "Cloning…" ]
+            CloneFailure _ error ->
+                Just (Err error)
 
-        CloneFailure _ error ->
-            p [ class "repository-clone-error" ] [ text (ApiError.message error) ]
-
-        CloneIdle ->
-            text ""
-
-
-isCloneLoading : CloneState -> Bool
-isCloneLoading clone =
-    case clone of
-        CloneInFlight _ ->
-            True
-
-        _ ->
-            False
-
-
-pageState : String -> String -> Html Msg
-pageState heading detail =
-    section [ class "page-state" ] [ span [ class "loading-spinner" ] [], h1 [] [ text heading ], p [] [ text detail ] ]
-
-
-statusMark : String -> String
-statusMark status =
-    if status == "clean" || status == "" then
-        "·"
-
-    else
-        String.left 1 status
-
-
-formatSize : Int -> String
-formatSize size =
-    if size > 1000000 then
-        String.fromInt (size // 1000000) ++ " MB"
-
-    else if size > 1000 then
-        String.fromInt (size // 1000) ++ " KB"
-
-    else
-        String.fromInt size ++ " B"
-
-
-searchDescription : SearchMode -> String
-searchDescription mode =
-    case mode of
-        FuzzySearch ->
-            "Ranking filenames with FFF and scanning nearby content."
-
-        RegexSearch ->
-            "Matching a regular expression with ripgrep."
-
-        LiteralSearch ->
-            "Matching literal text with ripgrep."
+            CloneIdle ->
+                Nothing
+    , cloneTemporary = RequestedClone "temporary"
+    , cloneConfigured = RequestedClone "configured"
+    }
 
 
 activeClass : Bool -> String
@@ -1631,8 +1134,3 @@ activeClass active =
 
     else
         ""
-
-
-titleCase : String -> String
-titleCase value =
-    String.left 1 (String.toUpper value) ++ String.dropLeft 1 value
