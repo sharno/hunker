@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AppState,
     error::{AppError, AppResult},
+    github::PullRequestState,
     local,
     types::{Oid, RelativePath, RepositorySlug},
 };
@@ -112,24 +113,6 @@ struct PullsQuery {
     page: Option<usize>,
 }
 
-#[derive(Clone, Copy, Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum PullRequestState {
-    Open,
-    Closed,
-    All,
-}
-
-impl PullRequestState {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Open => "open",
-            Self::Closed => "closed",
-            Self::All => "all",
-        }
-    }
-}
-
 async fn get_pulls(
     State(state): State<Arc<AppState>>,
     Query(query): Query<PullsQuery>,
@@ -144,7 +127,7 @@ async fn get_pulls(
     Ok(Json(
         state
             .github
-            .repository_pulls(&parse_repository(&query.repository)?, filter.as_str(), page)
+            .repository_pulls(&parse_repository(&query.repository)?, filter, page)
             .await?,
     ))
 }

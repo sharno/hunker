@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AppState, analysis,
     error::{AppError, AppResult},
-    github::{GitHubTarget, InlineCommentInput, ReviewComment, parse_url},
+    github::{GitHubTarget, InlineCommentInput, ReviewAction, ReviewComment, parse_url},
     revision,
     types::{FilePair, FileStatus, Oid, PinnedRefs, RelativePath, ReviewBacking, ReviewDocument},
 };
@@ -72,36 +72,9 @@ struct CommentResponse {
     comment: ReviewComment,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum ReviewEvent {
-    Comment,
-    Approve,
-    RequestChanges,
-}
-
-impl ReviewEvent {
-    fn parse(value: &str) -> AppResult<Self> {
-        match value {
-            "COMMENT" => Ok(Self::Comment),
-            "APPROVE" => Ok(Self::Approve),
-            "REQUEST_CHANGES" => Ok(Self::RequestChanges),
-            _ => Err(AppError::bad_request("The review request body is invalid.")),
-        }
-    }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Comment => "COMMENT",
-            Self::Approve => "APPROVE",
-            Self::RequestChanges => "REQUEST_CHANGES",
-        }
-    }
-}
-
 #[derive(Serialize)]
 struct SubmitReviewResponse {
-    event: ReviewEvent,
+    event: ReviewAction,
 }
 
 async fn get_diff(
@@ -400,25 +373,22 @@ async fn post_reply(
 struct SubmitBody {
     url: String,
     body: String,
-    event: String,
+    event: ReviewAction,
 }
 
 async fn post_review(
     State(state): State<Arc<AppState>>,
     Json(body): Json<SubmitBody>,
 ) -> AppResult<Json<SubmitReviewResponse>> {
-    let event = ReviewEvent::parse(&body.event)?;
+    let event = body.event;
     let text = body.body.trim();
-    if event != ReviewEvent::Approve && text.is_empty() {
+    if event != ReviewAction::Approve && text.is_empty() {
         return Err(AppError::bad_request(
             "Comment and request-changes reviews require a summary.",
         ));
     }
     let target = parse_url(&body.url)?;
-    state
-        .github
-        .submit_review(&target, text, event.as_str())
-        .await?;
+    state.github.submit_review(&target, text, event).await?;
     Ok(Json(SubmitReviewResponse { event }))
 }
 
@@ -446,11 +416,5 @@ mod tests {
                 "current": false
             })
         );
-    }
-
-    #[test]
-    fn review_events_parse_once_at_the_transport_boundary() {
-        assert_eq!(ReviewEvent::parse("APPROVE").unwrap(), ReviewEvent::Approve);
-        assert!(ReviewEvent::parse("MERGE").is_err());
     }
 }

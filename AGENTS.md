@@ -137,6 +137,11 @@
   reads repositories, `search` owns literal/regex/FFF indexing, `review_backing`
   owns immutable revision materialization, and `source_control` owns checkout
   inspection. Shared `local.rs` contains state and public result types only.
+- Keep GitHub responsibilities split the same way: `transport` owns credentials
+  and HTTP errors, `review_source` loads immutable review material, `reviews`
+  owns collaboration mutations, and `repository` owns repository queries. Every
+  outbound body is a typed `Serialize` payload; never pass a `serde_json::Value`
+  through the client.
 
 ## Tooling
 
