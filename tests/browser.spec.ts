@@ -135,7 +135,22 @@ test("renders a nested repository tree and a deep-linked local file without head
   await expect(page.getByRole("button", { name: /src/ })).toBeVisible();
   await expect(page.getByRole("button", { name: /nested/ })).toBeVisible();
   await expect(page.locator(".repository-file-view")).toContainText(
-    'export const greeting = "hello";',
+    "export function greeting() {",
+  );
+  await expect(
+    page.locator(".repository-file-view .syntax-keyword").first(),
+  ).toHaveText("export");
+  await expect(page.locator(".repository-file-view .source-line")).toHaveCount(
+    5,
+  );
+  await page.getByTitle("Collapse greeting").click();
+  await expect(page.locator(".repository-file-view .source-line")).toHaveCount(
+    2,
+  );
+  await expect(page.locator(".source-fold-summary")).toHaveText(" … 3 lines");
+  await page.getByTitle("Expand greeting").click();
+  await expect(page.locator(".repository-file-view .source-line")).toHaveCount(
+    5,
   );
   const layout = await page.locator(".app-bar").evaluate((bar) => ({
     clientWidth: bar.clientWidth,
@@ -229,6 +244,9 @@ test("shows loading instead of stale review data and preserves a single fetched 
   await expect(
     page.getByRole("heading", { name: "Improve the greeting" }),
   ).toBeVisible();
+  await expect(
+    page.locator(".split-cell.right .syntax-keyword.inline-change"),
+  ).toHaveText("export");
 
   const lineLayout = await page
     .locator(".split-row")
@@ -443,8 +461,29 @@ async function mockRepository(page: Page) {
       contentType: "application/json",
       json: {
         path: "src/nested/greet.ts",
-        content: 'export const greeting = "hello";\n',
+        content:
+          'export function greeting() {\n  const value = "hello";\n  return value;\n}\n',
         truncated: false,
+        presentation: sourcePresentation(
+          "TypeScript",
+          [
+            { line: 1, startCharacter: 0, endCharacter: 6, kind: "keyword" },
+            { line: 1, startCharacter: 7, endCharacter: 15, kind: "keyword" },
+            { line: 1, startCharacter: 16, endCharacter: 24, kind: "function" },
+            { line: 2, startCharacter: 2, endCharacter: 7, kind: "keyword" },
+            { line: 2, startCharacter: 16, endCharacter: 23, kind: "string" },
+            { line: 3, startCharacter: 2, endCharacter: 8, kind: "keyword" },
+          ],
+          [
+            {
+              id: "function:1:4:greeting",
+              kind: "function",
+              label: "greeting",
+              startLine: 1,
+              endLine: 4,
+            },
+          ],
+        ),
       },
     }),
   );
@@ -506,15 +545,38 @@ async function mockReviewAnalysis(page: Page) {
     const file = (path: string) => ({
       path,
       semantic: {
-        _tag: "Unsupported",
-        path,
+        _tag: "Skipped",
         reason: "Fixture uses patch fallback.",
+      },
+      syntax: {
+        _tag: "Complete",
+        value: {
+          old: sourcePresentation("TypeScript", []),
+          new: sourcePresentation("TypeScript", [
+            {
+              line: 1,
+              startCharacter: 0,
+              endCharacter: 6,
+              kind: "keyword",
+            },
+          ]),
+        },
       },
       wordDiff: {
         path,
         ignoreWhitespace: query.get("whitespace") === "ignore",
         mode: query.get("mode"),
-        rows: [],
+        rows:
+          path === "src/long.ts"
+            ? [
+                {
+                  oldLine: 1,
+                  newLine: 1,
+                  oldRanges: [],
+                  newRanges: [{ start: 0, end: 6 }],
+                },
+              ]
+            : [],
       },
     });
     return route.fulfill({
@@ -528,6 +590,7 @@ async function mockReviewAnalysis(page: Page) {
           options: {
             ignoreWhitespace: query.get("whitespace") === "ignore",
             semantic: query.get("semantic") === "true",
+            syntax: query.get("syntax") === "true",
             inlineDiff: query.get("mode"),
           },
         },
@@ -557,4 +620,26 @@ async function mockReviewAnalysis(page: Page) {
       json: { source: "github" },
     }),
   );
+}
+
+function sourcePresentation(
+  language: string,
+  highlights: Array<{
+    line: number;
+    startCharacter: number;
+    endCharacter: number;
+    kind: string;
+  }>,
+  folds: Array<{
+    id: string;
+    kind: string;
+    label: string;
+    startLine: number;
+    endLine: number;
+  }> = [],
+) {
+  return {
+    _tag: "Complete",
+    value: { language, highlights, folds },
+  };
 }

@@ -91,6 +91,7 @@ type Msg
     | ToggledFullFile FileChange
     | ToggledFile String
     | ToggledHunk String String
+    | ToggledSourceFold String
     | ToggledReviewed String
     | SelectedMoveTarget String String
     | CommentsLoaded Session.Id (List ReviewComment)
@@ -378,7 +379,7 @@ update settings msg model =
             beginAnalysis settings model
 
         ToggledSyntax value ->
-            unchanged model
+            beginAnalysis settings model
 
         ToggledReviews value ->
             if value then
@@ -435,6 +436,9 @@ update settings msg model =
 
         ToggledHunk path hunkId ->
             ( mapDiff (DiffView.toggleHunk path hunkId) model, Effect.none )
+
+        ToggledSourceFold fold ->
+            ( mapDiff (DiffView.toggleSourceFold fold) model, Effect.none )
 
         ToggledReviewed path ->
             ( mapDiff (DiffView.toggleReviewed path) model, Effect.none )
@@ -664,7 +668,7 @@ beginAnalysis settings model =
             ( model, Effect.none )
 
         Just ready ->
-            if not settings.semantic && settings.inlineDiffMode == InlineOff then
+            if not settings.semantic && not settings.syntaxHighlighting && settings.inlineDiffMode == InlineOff then
                 ( mapReady (\current -> { current | analysis = Analysis.disable current.analysis }) model
                 , Effect.none
                 )
@@ -678,6 +682,7 @@ beginAnalysis settings model =
                             (Review.backingHeadOid ready.document.backing)
                             settings.ignoreWhitespace
                             settings.semantic
+                            settings.syntaxHighlighting
                             settings.inlineDiffMode
                 in
                 ( mapReady (\current -> { current | analysis = Analysis.inFlight identity current.analysis }) model
@@ -685,6 +690,7 @@ beginAnalysis settings model =
                     ready.document.backing
                     settings.ignoreWhitespace
                     settings.semantic
+                    settings.syntaxHighlighting
                     (Analysis.inlineDiff identity)
                     (AnalysisLoaded identity)
                     (AnalysisFailed identity)
@@ -1120,6 +1126,7 @@ renderFileDiff settings model file =
                     , toggleFullFile = ToggledFullFile
                     , toggleReviewed = ToggledReviewed
                     , toggleHunk = ToggledHunk
+                    , toggleSourceFold = ToggledSourceFold
                     , selectMoveTarget = SelectedMoveTarget
                     , openInlineComposer = OpenedInlineComposer
                     , collaboration = collaborationActions

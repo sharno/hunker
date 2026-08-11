@@ -49,7 +49,7 @@ pub struct RevisionSnapshot {
     target: GitHubTarget,
     source: RevisionSource,
     pairs: OnceCell<Arc<Vec<FilePair>>>,
-    semantic: OnceCell<Arc<PreparedReview>>,
+    parsed: OnceCell<Arc<PreparedReview>>,
 }
 
 impl RevisionSnapshot {
@@ -102,12 +102,9 @@ impl RevisionSnapshot {
         Ok(Arc::clone(pairs))
     }
 
-    pub async fn semantic_forest(
-        &self,
-        pairs: Arc<Vec<FilePair>>,
-    ) -> AppResult<Arc<PreparedReview>> {
+    pub async fn parsed_forest(&self, pairs: Arc<Vec<FilePair>>) -> AppResult<Arc<PreparedReview>> {
         let prepared = self
-            .semantic
+            .parsed
             .get_or_try_init(|| async move {
                 tokio::task::spawn_blocking(move || Arc::new(PreparedReview::new(&pairs)))
                     .await
@@ -196,7 +193,7 @@ pub async fn load(
         target,
         source,
         pairs: OnceCell::new(),
-        semantic: OnceCell::new(),
+        parsed: OnceCell::new(),
     })
 }
 
@@ -256,7 +253,7 @@ mod tests {
             },
             source: RevisionSource::GitHub,
             pairs: OnceCell::new(),
-            semantic: OnceCell::new(),
+            parsed: OnceCell::new(),
         }
     }
 
@@ -293,8 +290,8 @@ mod tests {
             old_text: "fn before() {}".to_owned(),
             new_text: "fn after() {}".to_owned(),
         }]);
-        let first = revision.semantic_forest(Arc::clone(&pairs)).await.unwrap();
-        let second = revision.semantic_forest(pairs).await.unwrap();
+        let first = revision.parsed_forest(Arc::clone(&pairs)).await.unwrap();
+        let second = revision.parsed_forest(pairs).await.unwrap();
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(first.file_results().len(), 1);
     }

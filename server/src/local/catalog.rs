@@ -141,10 +141,22 @@ impl Local {
             .pop()
             .ok_or_else(|| AppError::not_found(format!("Could not read {relative}.")))?;
         let truncated = content.chars().count() > MAX_FILE_CHARACTERS;
+        let content = content
+            .chars()
+            .take(MAX_FILE_CHARACTERS)
+            .collect::<String>();
+        let presentation_path = relative.to_owned();
+        let presentation_source = content.clone();
+        let presentation = tokio::task::spawn_blocking(move || {
+            crate::semantic::source_presentation(&presentation_path, &presentation_source)
+        })
+        .await
+        .map_err(|error| AppError::internal(format!("Syntax highlighting stopped: {error}")))?;
         Ok(RepositoryFileContent {
             path: relative.to_owned(),
-            content: content.chars().take(MAX_FILE_CHARACTERS).collect(),
+            content,
             truncated,
+            presentation,
         })
     }
 

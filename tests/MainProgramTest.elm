@@ -344,7 +344,7 @@ repositoryFileRequest =
 repositoryFileJson : String
 repositoryFileJson =
     """{"path":"README.md","content":"# Local file contents
-","truncated":false}"""
+","truncated":false,"presentation":{"_tag":"Unsupported","reason":"Markdown is not highlighted."}}"""
 
 
 repositoryCommitsJson : String

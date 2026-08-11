@@ -4,6 +4,7 @@ import Expect
 import Hunker.Diff as Diff exposing (Kind(..))
 import Hunker.Domain.Repository as Repository
 import Hunker.Domain.Review as Review exposing (MovedBlock)
+import Hunker.Domain.Source as Source
 import Hunker.FileTree as FileTree exposing (Tree(..))
 import Hunker.Generated.ContractFixtures as ContractFixtures
 import Hunker.Route as Route exposing (PullRequestState(..), RepositoryTab(..), ReviewTab(..), ReviewTarget(..), Route(..), SearchMode(..))
@@ -146,6 +147,42 @@ suite =
                     , \_ -> Expect.equal True (SemanticMove.tone move >= 0 && SemanticMove.tone move < 3)
                     ]
                     ()
+        , test "decodes Rust source annotations and derives fold visibility" <|
+            \() ->
+                case Decode.decodeString Source.decoder sourcePresentationFixture of
+                    Ok presentation ->
+                        let
+                            fold =
+                                Source.foldAt 1 presentation
+                        in
+                        Expect.all
+                            [ \_ ->
+                                Source.highlightsAt 1 presentation
+                                    |> List.map (.kind >> Source.highlightClass)
+                                    |> Expect.equal [ "syntax-keyword", "syntax-function" ]
+                            , \_ ->
+                                fold
+                                    |> Maybe.map (Source.foldKey "new")
+                                    |> Expect.equal (Just "new::function:1:3:greet")
+                            , \_ ->
+                                Source.isLineHidden
+                                    ((==) "new::function:1:3:greet")
+                                    "new"
+                                    2
+                                    presentation
+                                    |> Expect.equal True
+                            , \_ ->
+                                Source.isLineHidden
+                                    ((==) "new::function:1:3:greet")
+                                    "new"
+                                    1
+                                    presentation
+                                    |> Expect.equal False
+                            ]
+                            ()
+
+                    Err error ->
+                        Expect.fail (Decode.errorToString error)
         , describe "Rust-produced API contracts"
             [ test "decodes a typed review document" <|
                 \() ->
@@ -239,3 +276,8 @@ semanticMove =
     , confidence = 0.8
     , changed = True
     }
+
+
+sourcePresentationFixture : String
+sourcePresentationFixture =
+    """{"_tag":"Complete","value":{"language":"Rust","highlights":[{"line":1,"startCharacter":0,"endCharacter":2,"kind":"keyword"},{"line":1,"startCharacter":3,"endCharacter":8,"kind":"function"}],"folds":[{"id":"function:1:3:greet","kind":"function","label":"greet","startLine":1,"endLine":3}]}}"""

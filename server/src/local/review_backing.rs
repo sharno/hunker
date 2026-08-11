@@ -135,48 +135,6 @@ impl Local {
         Ok(Some((repository, diff)))
     }
 
-    pub async fn load_file_pair(
-        &self,
-        target: &GitHubTarget,
-        base: &str,
-        head: &str,
-        path: &str,
-        previous_path: &str,
-        status: FileStatus,
-    ) -> AppResult<Option<FilePair>> {
-        let file = crate::types::FileChange {
-            path: path.to_owned(),
-            previous_path: (!previous_path.is_empty()).then(|| previous_path.to_owned()),
-            status,
-            additions: 0,
-            deletions: 0,
-            patch: String::new(),
-        };
-        Ok(self
-            .load_file_pairs(target, base, head, &[file])
-            .await?
-            .and_then(|pairs| pairs.into_iter().next()))
-    }
-
-    pub async fn load_file_pairs(
-        &self,
-        target: &GitHubTarget,
-        base: &str,
-        head: &str,
-        files: &[crate::types::FileChange],
-    ) -> AppResult<Option<Vec<FilePair>>> {
-        let Some(repository) = self
-            .prepare(&target.repository(), base, head, target.pull_number())
-            .await?
-        else {
-            return Ok(None);
-        };
-        Ok(Some(
-            self.load_file_pairs_at(&repository, base, head, files)
-                .await?,
-        ))
-    }
-
     pub async fn load_file_pairs_at(
         &self,
         repository: &LocalGitRepository,

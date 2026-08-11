@@ -249,12 +249,6 @@ pub struct LocalGitRepository {
     pub kind: &'static str,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct PinnedRefs<'a> {
-    pub base: &'a str,
-    pub head: &'a str,
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceRange {

@@ -15,6 +15,7 @@ module Hunker.Review.DiffView exposing
     , isFolderCollapsed
     , isHunkCollapsed
     , isReviewed
+    , isSourceFoldCollapsed
     , requestPath
     , requestUrl
     , revealFile
@@ -24,6 +25,7 @@ module Hunker.Review.DiffView exposing
     , toggleFullFile
     , toggleHunk
     , toggleReviewed
+    , toggleSourceFold
     )
 
 import Dict exposing (Dict)
@@ -47,6 +49,7 @@ type alias Details =
     , collapsedFiles : Set String
     , collapsedHunks : Set String
     , reviewedFiles : Set String
+    , collapsedSourceFolds : Set String
     }
 
 
@@ -70,6 +73,7 @@ init session =
         , collapsedFiles = Set.empty
         , collapsedHunks = Set.empty
         , reviewedFiles = Set.empty
+        , collapsedSourceFolds = Set.empty
         }
 
 
@@ -198,6 +202,16 @@ toggleReviewed path (Model details) =
 isReviewed : String -> Model -> Bool
 isReviewed path (Model details) =
     Set.member path details.reviewedFiles
+
+
+toggleSourceFold : String -> Model -> Model
+toggleSourceFold fold (Model details) =
+    Model { details | collapsedSourceFolds = toggleSet fold details.collapsedSourceFolds }
+
+
+isSourceFoldCollapsed : String -> Model -> Bool
+isSourceFoldCollapsed fold (Model details) =
+    Set.member fold details.collapsedSourceFolds
 
 
 collapseFolder : String -> Model -> Model

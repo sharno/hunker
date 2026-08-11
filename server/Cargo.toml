@@ -13,6 +13,12 @@ ast-grep-language = { version = "0.45.0", default-features = false, features = [
   "tree-sitter-rust",
   "tree-sitter-typescript",
 ] }
+tree-sitter = "0.26.11"
+tree-sitter-hcl = "1.1.0"
+tree-sitter-javascript = "0.25.0"
+tree-sitter-python = "0.25.0"
+tree-sitter-rust = "0.24.2"
+tree-sitter-typescript = "0.23.2"
 axum = { version = "0.8.9", features = ["json"] }
 dirs = "6.0.0"
 futures = "0.3.31"

@@ -40,6 +40,7 @@ module Hunker.Domain.Review exposing
 
 import Dict exposing (Dict)
 import Hunker.Domain.Settings as Settings exposing (InlineDiffMode)
+import Hunker.Domain.Source as Source exposing (FilePresentation)
 import Json.Decode as Decode exposing (Decoder)
 
 
@@ -156,6 +157,7 @@ type alias CharacterDiff =
 type alias AnalysisOptions =
     { ignoreWhitespace : Bool
     , semantic : Bool
+    , syntax : Bool
     , inlineDiff : InlineDiffMode
     }
 
@@ -171,6 +173,7 @@ type alias AnalysisSnapshotKey =
 type alias AnalysisFile =
     { path : String
     , semantic : AnalysisFeature SemanticResult
+    , syntax : AnalysisFeature FilePresentation
     , wordDiff : Maybe CharacterDiff
     }
 
@@ -191,6 +194,7 @@ type alias AnalysisSnapshot =
 type alias FullFile =
     { oldText : String
     , newText : String
+    , presentation : FilePresentation
     }
 
 
@@ -546,9 +550,10 @@ analysisSnapshotKeyDecoder =
 
 analysisOptionsDecoder : Decoder AnalysisOptions
 analysisOptionsDecoder =
-    Decode.map3 AnalysisOptions
+    Decode.map4 AnalysisOptions
         (Decode.field "ignoreWhitespace" Decode.bool)
         (Decode.field "semantic" Decode.bool)
+        (Decode.field "syntax" Decode.bool)
         (Decode.field "inlineDiff" inlineDiffModeDecoder)
 
 
@@ -574,9 +579,10 @@ inlineDiffModeDecoder =
 
 analysisFileDecoder : Decoder AnalysisFile
 analysisFileDecoder =
-    Decode.map3 AnalysisFile
+    Decode.map4 AnalysisFile
         (Decode.field "path" Decode.string)
         (Decode.field "semantic" (analysisFeatureDecoder semanticDecoder))
+        (Decode.field "syntax" (analysisFeatureDecoder Source.fileDecoder))
         (Decode.field "wordDiff" (Decode.nullable characterDiffDecoder))
 
 
@@ -618,9 +624,10 @@ characterRangeDecoder =
 
 fullFileDecoder : Decoder FullFile
 fullFileDecoder =
-    Decode.map2 FullFile
+    Decode.map3 FullFile
         (Decode.field "oldText" Decode.string)
         (Decode.field "newText" Decode.string)
+        (Decode.field "presentation" Source.fileDecoder)
 
 
 commentsDecoder : Decoder (List ReviewComment)

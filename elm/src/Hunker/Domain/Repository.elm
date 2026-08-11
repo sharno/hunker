@@ -25,6 +25,7 @@ module Hunker.Domain.Repository exposing
     , switchedDecoder
     )
 
+import Hunker.Domain.Source as Source exposing (Presentation)
 import Json.Decode as Decode exposing (Decoder)
 
 
@@ -54,6 +55,7 @@ type alias FileContent =
     { path : String
     , content : String
     , truncated : Bool
+    , presentation : Presentation
     }
 
 
@@ -175,10 +177,11 @@ fileDecoder =
 
 fileContentDecoder : Decoder FileContent
 fileContentDecoder =
-    Decode.map3 FileContent
+    Decode.map4 FileContent
         (Decode.field "path" Decode.string)
         (Decode.field "content" Decode.string)
         (Decode.field "truncated" Decode.bool)
+        (Decode.field "presentation" Source.decoder)
 
 
 searchDecoder : Decoder SearchResults

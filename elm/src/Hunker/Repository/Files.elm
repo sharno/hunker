@@ -11,6 +11,7 @@ module Hunker.Repository.Files exposing
     , fileRepository
     , init
     , isFolderCollapsed
+    , isSourceFoldCollapsed
     , navigate
     , requestSearchMode
     , search
@@ -24,6 +25,7 @@ module Hunker.Repository.Files exposing
     , selectSearchMode
     , selectedFile
     , toggleFolder
+    , toggleSourceFold
     )
 
 import Hunker.ApiError exposing (ApiError)
@@ -47,6 +49,7 @@ type alias Details =
     , collapsedFolders : Set String
     , searchDraft : String
     , searchMode : SearchMode
+    , collapsedSourceFolds : Set String
     }
 
 
@@ -68,6 +71,7 @@ init revision files path query mode =
         , collapsedFolders = collapsedFor path files
         , searchDraft = query
         , searchMode = mode
+        , collapsedSourceFolds = Set.empty
         }
 
 
@@ -126,6 +130,16 @@ toggleFolder path (Model details) =
 isFolderCollapsed : String -> Model -> Bool
 isFolderCollapsed path (Model details) =
     Set.member path details.collapsedFolders
+
+
+toggleSourceFold : String -> Model -> Model
+toggleSourceFold fold (Model details) =
+    Model { details | collapsedSourceFolds = toggleSet fold details.collapsedSourceFolds }
+
+
+isSourceFoldCollapsed : String -> Model -> Bool
+isSourceFoldCollapsed fold (Model details) =
+    Set.member fold details.collapsedSourceFolds
 
 
 fileLoaded : FileRequest -> FileContent -> Model -> Model

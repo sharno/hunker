@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use regex::Regex;
 
 use crate::types::{FileChange, FileStatus};
@@ -77,6 +79,57 @@ pub fn generated(path: &str) -> bool {
     )
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct PatchLines {
+    pub old: BTreeSet<usize>,
+    pub new: BTreeSet<usize>,
+}
+
+pub fn patch_lines(patch: &str) -> PatchLines {
+    let header = Regex::new(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+        .expect("valid hunk-header expression");
+    let mut result = PatchLines::default();
+    let mut old_line = 0;
+    let mut new_line = 0;
+    let mut inside_hunk = false;
+    for line in patch.lines() {
+        if let Some(captures) = header.captures(line) {
+            old_line = captures
+                .get(1)
+                .and_then(|value| value.as_str().parse().ok())
+                .unwrap_or(0);
+            new_line = captures
+                .get(2)
+                .and_then(|value| value.as_str().parse().ok())
+                .unwrap_or(0);
+            inside_hunk = true;
+            continue;
+        }
+        if !inside_hunk {
+            continue;
+        }
+        match line.as_bytes().first() {
+            Some(b' ') => {
+                result.old.insert(old_line);
+                result.new.insert(new_line);
+                old_line += 1;
+                new_line += 1;
+            }
+            Some(b'-') => {
+                result.old.insert(old_line);
+                old_line += 1;
+            }
+            Some(b'+') => {
+                result.new.insert(new_line);
+                new_line += 1;
+            }
+            Some(b'\\') => {}
+            _ => inside_hunk = false,
+        }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,5 +150,12 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path, "test.rs");
         assert_eq!(files[0].status, FileStatus::Modified);
+    }
+
+    #[test]
+    fn indexes_visible_patch_lines_by_side() {
+        let lines = patch_lines("@@ -4,3 +8,4 @@\n context\n-old\n+new\n+extra\n context");
+        assert_eq!(lines.old, BTreeSet::from([4, 5, 6]));
+        assert_eq!(lines.new, BTreeSet::from([8, 9, 10, 11]));
     }
 }

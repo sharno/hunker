@@ -3,13 +3,16 @@ use std::{
     sync::OnceLock,
 };
 
-use ast_grep_core::tree_sitter::{LanguageExt, StrDoc};
-use ast_grep_core::{Doc, Node};
+use ast_grep_core::tree_sitter::StrDoc;
+use ast_grep_core::{AstGrep, Doc, Node};
 use ast_grep_language::SupportLang;
 use regex::Regex;
 use serde::Serialize;
 
-use crate::types::{FilePair, FileStatus, SourceRange};
+use crate::{
+    source_presentation::{self, FilePresentation, FoldSeed, SourcePresentationResult},
+    types::{FilePair, FileStatus, SourceRange},
+};
 
 #[derive(Debug, Clone, Copy)]
 struct SupportedLanguage {
@@ -67,6 +70,9 @@ struct Parsed {
     parse_failed: bool,
     fingerprint: String,
     units: Vec<AstUnit>,
+    language: SupportedLanguage,
+    source: String,
+    tree: tree_sitter::Tree,
 }
 
 #[derive(Debug)]
@@ -110,6 +116,43 @@ impl PreparedReview {
 
     pub fn moves(&self) -> Vec<MovedBlock> {
         analyze_prepared_review(&self.files)
+    }
+
+    pub fn file_presentations(&self) -> Vec<(String, FilePresentation)> {
+        self.files
+            .iter()
+            .map(|file| {
+                (
+                    file.path.clone(),
+                    FilePresentation {
+                        old: file
+                            .before
+                            .as_ref()
+                            .map_or_else(source_presentation::unsupported, presentation),
+                        new: file
+                            .after
+                            .as_ref()
+                            .map_or_else(source_presentation::unsupported, presentation),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    pub fn file_presentation(&self, path: &str) -> Option<FilePresentation> {
+        self.files
+            .iter()
+            .find(|file| file.path == path)
+            .map(|file| FilePresentation {
+                old: file
+                    .before
+                    .as_ref()
+                    .map_or_else(source_presentation::unsupported, presentation),
+                new: file
+                    .after
+                    .as_ref()
+                    .map_or_else(source_presentation::unsupported, presentation),
+            })
     }
 }
 
@@ -319,7 +362,10 @@ fn collect_units(root: &SgNode<'_>) -> Vec<AstUnit> {
 }
 
 fn parse_units(language: SupportedLanguage, source: &str) -> Parsed {
-    let grep = language.language.ast_grep(source);
+    let document = StrDoc::new(source, language.language);
+    let tree = document.tree.clone();
+    let source = document.src.clone();
+    let grep = AstGrep::doc(document);
     let root = grep.root();
     let parse_failed = root
         .dfs()
@@ -330,7 +376,31 @@ fn parse_units(language: SupportedLanguage, source: &str) -> Parsed {
         parse_failed,
         fingerprint: fingerprint.join("|"),
         units: collect_units(&root),
+        language,
+        source,
+        tree,
     }
+}
+
+fn presentation(parsed: &Parsed) -> SourcePresentationResult {
+    source_presentation::build(
+        parsed.language.language,
+        parsed.language.name,
+        &parsed.source,
+        &parsed.tree,
+        parsed.units.iter().map(|unit| FoldSeed {
+            kind: unit.kind.clone(),
+            label: unit.label.clone(),
+            start_line: unit.range.start_line,
+            end_line: unit.range.end_line,
+        }),
+    )
+}
+
+pub fn source_presentation(path: &str, source: &str) -> SourcePresentationResult {
+    language_for_path(path).map_or_else(source_presentation::unsupported, |language| {
+        presentation(&parse_units(language, source))
+    })
 }
 
 fn unique_by<F>(units: &[AstUnit], remaining: &[bool], key: F) -> HashMap<String, usize>

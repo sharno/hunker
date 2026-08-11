@@ -175,6 +175,7 @@ type Msg
     | SelectedFile String
     | ClosedFile
     | ToggledFolder String
+    | ToggledSourceFold String
     | SelectedPullState PullRequestState
     | RequestedMorePulls
     | SelectedBranch String
@@ -749,6 +750,9 @@ update msg model =
         ToggledFolder path ->
             ( mapFilesView (RepositoryFiles.toggleFolder path) model, Effect.none )
 
+        ToggledSourceFold fold ->
+            ( mapFilesView (RepositoryFiles.toggleSourceFold fold) model, Effect.none )
+
         SelectedPullState state ->
             ( model, Effect.PushUrl (repositoryPath model RepositoryPulls Nothing "" LiteralSearch state) )
 
@@ -1184,6 +1188,7 @@ filesViewState syntaxHighlighting location model =
                 , selectedFile = SelectedFile
                 , closedFile = ClosedFile
                 , toggledFolder = ToggledFolder
+                , toggledSourceFold = ToggledSourceFold
                 }
 
         _ ->

@@ -4,6 +4,7 @@ import Dict
 import Expect
 import Hunker.Domain.Review exposing (CommentSide(..), FileChange, FileStatus(..), ReviewComment)
 import Hunker.Domain.Settings exposing (InlineDiffMode(..))
+import Hunker.Domain.Source as Source
 import Hunker.Remote exposing (Remote(..))
 import Hunker.Review.Analysis as Analysis
 import Hunker.Review.Collaboration as Collaboration
@@ -82,6 +83,7 @@ suite =
                                     DiffView.fileLoaded value
                                         { oldText = "old"
                                         , newText = "new"
+                                        , presentation = Source.filePresentation Source.unsupported Source.unsupported
                                         }
                                         second
                                 )
@@ -92,10 +94,10 @@ suite =
             \() ->
                 let
                     current =
-                        Analysis.identity "current" "111" "222" True True Token
+                        Analysis.identity "current" "111" "222" True True True Token
 
                     stale =
-                        Analysis.identity "stale" "000" "111" True True Token
+                        Analysis.identity "stale" "000" "111" True True True Token
 
                     state =
                         FileIndex.fromChanges [ changedFile ]
@@ -106,7 +108,7 @@ suite =
                                     { repository = "example/repo"
                                     , baseOid = "000"
                                     , headOid = "111"
-                                    , options = { ignoreWhitespace = True, semantic = True, inlineDiff = Token }
+                                    , options = { ignoreWhitespace = True, semantic = True, syntax = True, inlineDiff = Token }
                                     }
                                 , files = Dict.empty
                                 , moves = []

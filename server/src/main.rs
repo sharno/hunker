@@ -11,6 +11,7 @@ mod local;
 mod revision;
 mod semantic;
 mod settings;
+mod source_presentation;
 mod types;
 
 use std::{env, sync::Arc};

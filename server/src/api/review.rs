@@ -12,7 +12,7 @@ use crate::{
     error::{AppError, AppResult},
     github::{GitHubTarget, InlineCommentInput, ReviewAction, ReviewComment, parse_url},
     revision,
-    types::{FilePair, FileStatus, Oid, PinnedRefs, RelativePath, ReviewBacking, ReviewDocument},
+    types::{Oid, RelativePath, ReviewBacking, ReviewDocument},
 };
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -60,6 +60,7 @@ struct CommitsResponse {
 struct FullFileResponse {
     old_text: String,
     new_text: String,
+    presentation: crate::source_presentation::FilePresentation,
 }
 
 #[derive(Serialize)]
@@ -178,73 +179,8 @@ async fn get_commits(
 struct FileQuery {
     url: String,
     path: RelativePath,
-    previous_path: Option<RelativePath>,
-    status: FileStatus,
-    base_oid: Option<Oid>,
-    head_oid: Option<Oid>,
-}
-
-impl FileQuery {
-    fn pinned(&self) -> Option<PinnedRefs<'_>> {
-        match (&self.base_oid, &self.head_oid) {
-            (Some(base), Some(head)) => Some(PinnedRefs {
-                base: base.as_str(),
-                head: head.as_str(),
-            }),
-            _ => None,
-        }
-    }
-}
-
-async fn file_pair(
-    state: &AppState,
-    target: &GitHubTarget,
-    query: &FileQuery,
-) -> AppResult<FilePair> {
-    let previous = query
-        .previous_path
-        .as_ref()
-        .map_or("", RelativePath::as_str);
-    if let Some(refs) = query.pinned() {
-        if let Some(pair) = state
-            .local
-            .load_file_pair(
-                target,
-                refs.base,
-                refs.head,
-                query.path.as_str(),
-                previous,
-                query.status,
-            )
-            .await?
-        {
-            return Ok(pair);
-        }
-        state
-            .github
-            .file_pair(
-                target,
-                refs.base,
-                refs.head,
-                query.path.as_str(),
-                previous,
-                query.status,
-            )
-            .await
-    } else {
-        let metadata = state.github.metadata(target).await?;
-        state
-            .github
-            .file_pair(
-                target,
-                &metadata.base_oid,
-                &metadata.head_oid,
-                query.path.as_str(),
-                previous,
-                query.status,
-            )
-            .await
-    }
+    base_oid: Oid,
+    head_oid: Oid,
 }
 
 async fn get_file(
@@ -252,10 +188,43 @@ async fn get_file(
     Query(query): Query<FileQuery>,
 ) -> AppResult<Json<FullFileResponse>> {
     let target = parse_url(&query.url)?;
-    let pair = file_pair(&state, &target, &query).await?;
+    let revision_key =
+        revision::RevisionKey::new(target.repository(), query.base_oid, query.head_oid);
+    let build_key = revision_key.clone();
+    let build_target = target.clone();
+    let local = state.local.clone();
+    let github = state.github.clone();
+    let snapshot = state
+        .revisions
+        .get_or_build(revision_key, || async move {
+            revision::load(&local, &github, build_target, build_key).await
+        })
+        .await?;
+    let pairs = snapshot.file_pairs(&state.local, &state.github).await?;
+    let pair = pairs
+        .iter()
+        .find(|pair| pair.path == query.path.as_str())
+        .cloned()
+        .ok_or_else(|| {
+            AppError::not_found(format!(
+                "{} was not found in this immutable review.",
+                query.path.as_str()
+            ))
+        })?;
+    let presentation = snapshot
+        .parsed_forest(pairs)
+        .await?
+        .file_presentation(query.path.as_str())
+        .ok_or_else(|| {
+            AppError::not_found(format!(
+                "{} has no source presentation in this immutable review.",
+                query.path.as_str()
+            ))
+        })?;
     Ok(Json(FullFileResponse {
         old_text: pair.old_text,
         new_text: pair.new_text,
+        presentation,
     }))
 }
 
@@ -267,6 +236,7 @@ struct AnalysisQuery {
     head_oid: Oid,
     whitespace: analysis::WhitespaceMode,
     semantic: bool,
+    syntax: bool,
     mode: analysis::InlineDiff,
 }
 
@@ -282,6 +252,7 @@ async fn get_analysis(
         analysis::AnalysisOptions {
             ignore_whitespace: query.whitespace.ignore(),
             semantic: query.semantic,
+            syntax: query.syntax,
             inline_diff: query.mode,
         },
     );

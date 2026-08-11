@@ -8,6 +8,7 @@ import Hunker.ApiError as ApiError exposing (ApiError)
 import Hunker.Diff as Diff exposing (DiffLine, Hunk, Kind(..), SideLine, SplitRow)
 import Hunker.Domain.Review as Review exposing (AnalysisFeature(..), CharacterRange, CommentSide(..), FileChange, FileStatus(..), FullFile, ReviewComment, SemanticChange(..), SemanticResult(..))
 import Hunker.Domain.Settings exposing (Settings, ViewMode(..))
+import Hunker.Domain.Source as Source exposing (FilePresentation, FoldRegion, Presentation)
 import Hunker.PreparedDiff as PreparedDiff
 import Hunker.Remote exposing (Remote(..))
 import Hunker.Review.Analysis as Analysis
@@ -17,7 +18,7 @@ import Hunker.Review.FileIndex as FileIndex
 import Hunker.Review.Session as Session
 import Hunker.Review.View.Collaboration as CollaborationView
 import Hunker.SemanticMove as SemanticMove exposing (Endpoint(..))
-import Hunker.Syntax as Syntax
+import Hunker.SourceView as SourceView
 
 
 type alias Actions msg =
@@ -25,6 +26,7 @@ type alias Actions msg =
     , toggleFullFile : FileChange -> msg
     , toggleReviewed : String -> msg
     , toggleHunk : String -> String -> msg
+    , toggleSourceFold : String -> msg
     , selectMoveTarget : String -> String -> msg
     , openInlineComposer : String -> Int -> CommentSide -> msg
     , collaboration : CollaborationView.Actions msg
@@ -266,14 +268,19 @@ hunkView config file hunk =
 
 splitRowView : Config msg -> FileChange -> SplitRow -> Html msg
 splitRowView config file row =
+    splitRowViewWith config file (analysisPresentation config file.path) row
+
+
+splitRowViewWith : Config msg -> FileChange -> (CommentSide -> Presentation) -> SplitRow -> Html msg
+splitRowViewWith config file sourceForSide row =
     div [ class "split-row" ]
-        [ splitCell config file LeftSide "left" row.left
-        , splitCell config file RightSide "right" row.right
+        [ splitCell config file LeftSide "left" (sourceForSide LeftSide) row.left
+        , splitCell config file RightSide "right" (sourceForSide RightSide) row.right
         ]
 
 
-splitCell : Config msg -> FileChange -> CommentSide -> String -> Maybe SideLine -> Html msg
-splitCell config file side sideClass maybeLine =
+splitCell : Config msg -> FileChange -> CommentSide -> String -> Presentation -> Maybe SideLine -> Html msg
+splitCell config file side sideClass presentation maybeLine =
     case maybeLine of
         Nothing ->
             div [ class ("split-cell " ++ sideClass ++ " is-empty") ] [ span [ class "line-number" ] [], span [ class "line-marker" ] [], code [ class "line-code" ] [] ]
@@ -285,18 +292,38 @@ splitCell config file side sideClass maybeLine =
 
                 decoration =
                     moveDecoration config file.path side number
+
+                foldedAway =
+                    Source.isLineHidden
+                        (\fold -> DiffView.isSourceFoldCollapsed fold config.diff)
+                        (sourceNamespace file.path side)
+                        number
+                        presentation
             in
-            div [ class ("split-cell " ++ sideClass ++ " " ++ kindClass line.kind ++ decoration.className), id decoration.anchorId ]
-                [ lineNumberButton config file.path side number line.number
-                , span [ class "line-marker" ] [ text (kindMarker line.kind) ]
-                , code [ class "line-code" ] (highlightedLine config file.path side number line.text)
-                , decoration.button
-                , CollaborationView.lineThreads config.actions.collaboration config.collaboration config.comments file.path side number
-                ]
+            if foldedAway then
+                div [ class ("split-cell " ++ sideClass ++ " is-empty is-folded-away") ]
+                    [ span [ class "line-number" ] [], span [ class "line-marker" ] [], code [ class "line-code" ] [] ]
+
+            else
+                div [ class ("split-cell " ++ sideClass ++ " " ++ kindClass line.kind ++ decoration.className), id decoration.anchorId ]
+                    [ lineNumberButton config file.path side number line.number
+                    , foldMarker config file.path side presentation number line.kind
+                    , code [ class "line-code" ]
+                        (highlightedLine config file.path side presentation number line.text
+                            ++ foldSummary config file.path side presentation number
+                        )
+                    , decoration.button
+                    , CollaborationView.lineThreads config.actions.collaboration config.collaboration config.comments file.path side number
+                    ]
 
 
 unifiedLineView : Config msg -> FileChange -> DiffLine -> Html msg
 unifiedLineView config file line =
+    unifiedLineViewWith config file (analysisPresentation config file.path) line
+
+
+unifiedLineViewWith : Config msg -> FileChange -> (CommentSide -> Presentation) -> DiffLine -> Html msg
+unifiedLineViewWith config file sourceForSide line =
     let
         side =
             if line.kind == Deletion then
@@ -314,12 +341,18 @@ unifiedLineView config file line =
 
         decoration =
             moveDecoration config file.path side number
+
+        presentation =
+            sourceForSide side
     in
     div [ class ("unified-line " ++ kindClass line.kind ++ decoration.className), id decoration.anchorId ]
         [ span [ class "line-number old" ] [ text (maybeNumber line.oldLine) ]
         , lineNumberButton config file.path side number line.newLine
-        , span [ class "line-marker" ] [ text (kindMarker line.kind) ]
-        , code [ class "line-code" ] (highlightedLine config file.path side number line.text)
+        , foldMarker config file.path side presentation number line.kind
+        , code [ class "line-code" ]
+            (highlightedLine config file.path side presentation number line.text
+                ++ foldSummary config file.path side presentation number
+            )
         , decoration.button
         , CollaborationView.lineThreads config.actions.collaboration config.collaboration config.comments file.path side number
         ]
@@ -396,41 +429,20 @@ lineNumberButton config path side number maybeNumberValue =
         span [ class "line-number" ] [ text (maybeNumber maybeNumberValue) ]
 
 
-highlightedLine : Config msg -> String -> CommentSide -> Int -> String -> List (Html msg)
-highlightedLine config path side number source =
+highlightedLine : Config msg -> String -> CommentSide -> Presentation -> Int -> String -> List (Html msg)
+highlightedLine config path side presentation number source =
     case FileIndex.get path (Analysis.files config.analysis) of
         Just prepared ->
-            rangedSyntax config.settings.syntaxHighlighting path source (PreparedDiff.rangesFor side number prepared)
+            SourceView.line
+                config.settings.syntaxHighlighting
+                path
+                presentation
+                number
+                source
+                (PreparedDiff.rangesFor side number prepared)
 
         Nothing ->
-            Syntax.line config.settings.syntaxHighlighting path source
-
-
-rangedSyntax : Bool -> String -> String -> List CharacterRange -> List (Html msg)
-rangedSyntax syntax path source ranges =
-    if List.isEmpty ranges then
-        Syntax.line syntax path source
-
-    else
-        ranges |> List.sortBy .start |> rangesToSegments 0 source
-
-
-rangesToSegments : Int -> String -> List CharacterRange -> List (Html msg)
-rangesToSegments offset source ranges =
-    case ranges of
-        [] ->
-            [ text (String.dropLeft offset source) ]
-
-        range :: remaining ->
-            let
-                safeStart =
-                    max offset range.start
-
-                safeEnd =
-                    max safeStart range.end
-            in
-            [ text (String.slice offset safeStart source), span [ class "inline-change" ] [ text (String.slice safeStart safeEnd source) ] ]
-                ++ rangesToSegments safeEnd source remaining
+            SourceView.line config.settings.syntaxHighlighting path presentation number source []
 
 
 fullFileDiff : Config msg -> FileChange -> FullFile -> Html msg
@@ -441,11 +453,172 @@ fullFileDiff config file full =
     in
     div [ class "full-file-diff" ]
         (if config.settings.viewMode == Split then
-            List.map (splitRowView config file) rows
+            rows
+                |> List.filter (fullRowVisible config file.path (fullPresentation full.presentation))
+                |> List.map (splitRowViewWith config file (fullPresentation full.presentation))
 
          else
-            rows |> List.concatMap fullUnifiedLines |> List.map (unifiedLineView config file)
+            rows
+                |> List.concatMap fullUnifiedLines
+                |> List.filter (fullLineVisible config file.path (fullPresentation full.presentation))
+                |> List.map (unifiedLineViewWith config file (fullPresentation full.presentation))
         )
+
+
+fullRowVisible : Config msg -> String -> (CommentSide -> Presentation) -> SplitRow -> Bool
+fullRowVisible config path sourceForSide row =
+    [ ( LeftSide, row.left ), ( RightSide, row.right ) ]
+        |> List.filterMap
+            (\( side, maybeLine ) ->
+                maybeLine
+                    |> Maybe.andThen .number
+                    |> Maybe.map
+                        (\number ->
+                            not
+                                (Source.isLineHidden
+                                    (\fold -> DiffView.isSourceFoldCollapsed fold config.diff)
+                                    (sourceNamespace path side)
+                                    number
+                                    (sourceForSide side)
+                                )
+                        )
+            )
+        |> List.any identity
+
+
+fullLineVisible : Config msg -> String -> (CommentSide -> Presentation) -> DiffLine -> Bool
+fullLineVisible config path sourceForSide line =
+    let
+        side =
+            if line.kind == Deletion then
+                LeftSide
+
+            else
+                RightSide
+
+        number =
+            if side == LeftSide then
+                line.oldLine
+
+            else
+                line.newLine
+    in
+    number
+        |> Maybe.map
+            (\value ->
+                not
+                    (Source.isLineHidden
+                        (\fold -> DiffView.isSourceFoldCollapsed fold config.diff)
+                        (sourceNamespace path side)
+                        value
+                        (sourceForSide side)
+                    )
+            )
+        |> Maybe.withDefault True
+
+
+foldMarker : Config msg -> String -> CommentSide -> Presentation -> Int -> Kind -> Html msg
+foldMarker config path side presentation number kind =
+    case Source.foldAt number presentation of
+        Nothing ->
+            span [ class "line-marker" ] [ text (kindMarker kind) ]
+
+        Just fold ->
+            let
+                key =
+                    Source.foldKey (sourceNamespace path side) fold
+
+                collapsed =
+                    DiffView.isSourceFoldCollapsed key config.diff
+            in
+            button
+                [ type_ "button"
+                , class "line-marker diff-fold-toggle"
+                , attribute "title"
+                    ((if collapsed then
+                        "Expand "
+
+                      else
+                        "Collapse "
+                     )
+                        ++ fold.label
+                    )
+                , onClick (config.actions.toggleSourceFold key)
+                ]
+                [ text
+                    (if collapsed then
+                        "›"
+
+                     else
+                        "⌄"
+                    )
+                ]
+
+
+foldSummary : Config msg -> String -> CommentSide -> Presentation -> Int -> List (Html msg)
+foldSummary config path side presentation number =
+    Source.foldAt number presentation
+        |> Maybe.andThen
+            (\fold ->
+                if DiffView.isSourceFoldCollapsed (Source.foldKey (sourceNamespace path side) fold) config.diff then
+                    Just
+                        (span [ class "source-fold-summary" ]
+                            [ text (" … " ++ String.fromInt (fold.endLine - fold.startLine) ++ " lines") ]
+                        )
+
+                else
+                    Nothing
+            )
+        |> Maybe.map List.singleton
+        |> Maybe.withDefault []
+
+
+sourceNamespace : String -> CommentSide -> String
+sourceNamespace path side =
+    path
+        ++ (case side of
+                LeftSide ->
+                    ":left"
+
+                RightSide ->
+                    ":right"
+           )
+
+
+analysisPresentation : Config msg -> String -> CommentSide -> Presentation
+analysisPresentation config path side =
+    case Analysis.status config.analysis of
+        Analysis.AnalysisComplete snapshot ->
+            snapshot.files
+                |> Dict.get path
+                |> Maybe.andThen
+                    (\file ->
+                        case file.syntax of
+                            FeatureComplete presentation ->
+                                Just (presentationForSide side presentation)
+
+                            _ ->
+                                Nothing
+                    )
+                |> Maybe.withDefault Source.unsupported
+
+        _ ->
+            Source.unsupported
+
+
+fullPresentation : FilePresentation -> CommentSide -> Presentation
+fullPresentation presentation side =
+    presentationForSide side presentation
+
+
+presentationForSide : CommentSide -> FilePresentation -> Presentation
+presentationForSide side presentation =
+    case side of
+        LeftSide ->
+            Source.fileOld presentation
+
+        RightSide ->
+            Source.fileNew presentation
 
 
 fullUnifiedLines : SplitRow -> List DiffLine

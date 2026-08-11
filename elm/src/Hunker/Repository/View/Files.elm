@@ -10,7 +10,7 @@ import Hunker.Remote exposing (Remote(..))
 import Hunker.Repository.Files as Files
 import Hunker.Repository.View.Local as Local
 import Hunker.Route exposing (SearchMode(..))
-import Hunker.Syntax as Syntax
+import Hunker.SourceView as SourceView
 
 
 type alias Config msg =
@@ -31,6 +31,7 @@ type alias ReadyConfig msg =
     , selectedFile : String -> msg
     , closedFile : msg
     , toggledFolder : String -> msg
+    , toggledSourceFold : String -> msg
     }
 
 
@@ -179,15 +180,15 @@ fileView config =
                     ]
                 , pre [ class "repository-source" ]
                     [ code []
-                        (file.content
-                            |> String.lines
-                            |> List.indexedMap
-                                (\index sourceLine ->
-                                    span [ class "source-line" ]
-                                        [ span [ class "line-number" ] [ text (String.fromInt (index + 1)) ]
-                                        , span [ class "line-code" ] (Syntax.line config.syntaxHighlighting file.path sourceLine)
-                                        ]
-                                )
+                        (SourceView.file
+                            { syntax = config.syntaxHighlighting
+                            , namespace = file.path
+                            , path = file.path
+                            , presentation = file.presentation
+                            , isCollapsed = \fold -> Files.isSourceFoldCollapsed fold config.files
+                            , toggleFold = config.toggledSourceFold
+                            }
+                            file.content
                         )
                     ]
                 ]

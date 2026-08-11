@@ -93,6 +93,11 @@
 - Prepare immutable hunks when a diff loads and index inline ranges by side and
   line before rendering. Never parse patches or linearly scan all word-diff rows
   inside a per-line view function.
+- Derive syntax spans and AST fold regions from the Rust revision's retained
+  Tree-sitter forest. Elm renders the typed character ranges and owns only the
+  collapsed fold identities; do not parse source syntax in the browser.
+- Compose syntax highlighting and inline word changes as independent overlays on
+  one segmented source line. Enabling one must never discard the other.
 - Exercise a 100+ file, 10k+ changed-line fixture before shipping review data
   pipeline changes. One route must issue one analysis request and apply one
   model update for one immutable snapshot.
@@ -131,6 +136,9 @@
   caches. The revision cache owns the Rust-parsed file changes and lazily loaded
   file pairs; all analysis-option snapshots reuse it. Prepare each syntax tree
   once per revision and use the same forest for per-file semantics and moves.
+- Keep patch presentation proportional to the diff: return highlights only for
+  visible patch lines and reserve full syntax spans and fold regions for the
+  explicit full-file response.
 - Rust is the sole Git diff parser. `/api/diff` returns a typed review document;
   Elm must never reinterpret raw Git patch boundaries into file changes.
 - Fall back from local Git to GitHub only on `Ok(None)`. A local `Err` is a real

@@ -10,7 +10,10 @@ use tokio::sync::Mutex;
 
 use fff_search::SharedFilePicker;
 
-use crate::{command, error::AppResult, types::LocalGitRepository};
+use crate::{
+    command, error::AppResult, source_presentation::SourcePresentationResult,
+    types::LocalGitRepository,
+};
 
 const MAX_FILE_CHARACTERS: usize = 500_000;
 const FETCH_INTERVAL_MS: u64 = 120_000;
@@ -88,6 +91,7 @@ pub struct RepositoryFileContent {
     pub path: String,
     pub content: String,
     pub truncated: bool,
+    pub presentation: SourcePresentationResult,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

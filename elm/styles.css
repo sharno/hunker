@@ -575,7 +575,7 @@
   }
 
   .repository-source .line-number {
-    @apply min-h-6 py-0.5 leading-5;
+    @apply min-h-6 justify-between py-0.5 pr-2 pl-1 leading-5;
   }
 
   .repository-source .line-code {
@@ -982,6 +982,54 @@
 
   .syntax-type {
     @apply text-orange-700;
+  }
+
+  .syntax-function {
+    @apply font-medium text-blue-700;
+  }
+
+  .syntax-property,
+  .syntax-attribute,
+  .syntax-tag {
+    @apply text-cyan-800;
+  }
+
+  .syntax-constant {
+    @apply text-fuchsia-700;
+  }
+
+  .syntax-module {
+    @apply font-medium text-teal-700;
+  }
+
+  .syntax-operator,
+  .syntax-punctuation {
+    @apply text-slate-600;
+  }
+
+  .syntax-variable {
+    @apply text-ink;
+  }
+
+  .source-fold-toggle,
+  .diff-fold-toggle {
+    @apply grid size-5 shrink-0 cursor-pointer place-items-center rounded border-0 bg-transparent p-0 font-mono text-[11px] text-slate-500 hover:bg-violet-100 hover:text-violet-800;
+  }
+
+  .source-fold-spacer {
+    @apply block size-5 shrink-0;
+  }
+
+  .source-fold-summary {
+    @apply ml-2 rounded bg-violet-100 px-2 py-0.5 font-sans text-[10px] font-semibold text-violet-700 select-none;
+  }
+
+  .source-line.is-folded .line-code {
+    @apply bg-violet-50/50;
+  }
+
+  .line-marker.diff-fold-toggle {
+    @apply h-full min-h-6 w-6 rounded-none pt-0;
   }
 
   .line-move {

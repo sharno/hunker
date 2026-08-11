@@ -42,18 +42,20 @@ type Identity
         , headOid : String
         , ignoreWhitespace : Bool
         , semantic : Bool
+        , syntax : Bool
         , inlineDiff : InlineDiffMode
         }
 
 
-identity : String -> String -> String -> Bool -> Bool -> InlineDiffMode -> Identity
-identity requestUrl baseOid headOid ignoreWhitespace semantic inlineMode =
+identity : String -> String -> String -> Bool -> Bool -> Bool -> InlineDiffMode -> Identity
+identity requestUrl baseOid headOid ignoreWhitespace semantic syntax inlineMode =
     Identity
         { requestUrl = requestUrl
         , baseOid = baseOid
         , headOid = headOid
         , ignoreWhitespace = ignoreWhitespace
         , semantic = semantic
+        , syntax = syntax
         , inlineDiff = inlineMode
         }
 

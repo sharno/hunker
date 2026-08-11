@@ -181,8 +181,8 @@ saveSettings settings succeeded failed =
         failed
 
 
-fetchAnalysis : String -> Review.ReviewBacking -> Bool -> Bool -> Settings.InlineDiffMode -> (Review.AnalysisSnapshot -> msg) -> (ApiError -> msg) -> Effect msg
-fetchAnalysis githubUrl backing ignoreWhitespace semantic inlineDiff succeeded failed =
+fetchAnalysis : String -> Review.ReviewBacking -> Bool -> Bool -> Bool -> Settings.InlineDiffMode -> (Review.AnalysisSnapshot -> msg) -> (ApiError -> msg) -> Effect msg
+fetchAnalysis githubUrl backing ignoreWhitespace semantic syntax inlineDiff succeeded failed =
     Effect.get
         ("/api/analysis?url="
             ++ encode githubUrl
@@ -199,6 +199,13 @@ fetchAnalysis githubUrl backing ignoreWhitespace semantic inlineDiff succeeded f
                )
             ++ "&semantic="
             ++ (if semantic then
+                    "true"
+
+                else
+                    "false"
+               )
+            ++ "&syntax="
+            ++ (if syntax then
                     "true"
 
                 else
@@ -282,8 +289,6 @@ fileQuery : String -> Review.FileChange -> Review.ReviewBacking -> String
 fileQuery githubUrl file backing =
     [ ( "url", githubUrl )
     , ( "path", file.path )
-    , ( "previousPath", Maybe.withDefault "" file.previousPath )
-    , ( "status", Review.fileStatusToString file.status )
     , ( "baseOid", Review.backingBaseOid backing )
     , ( "headOid", Review.backingHeadOid backing )
     ]
