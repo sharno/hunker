@@ -5,7 +5,7 @@ use std::{
 };
 
 use futures::{StreamExt, stream};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, OnceCell};
 
 use crate::{
@@ -21,7 +21,7 @@ use crate::{
 const SNAPSHOT_CACHE_SIZE: usize = 16;
 const FILE_ANALYSIS_CONCURRENCY: usize = 6;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum InlineDiff {
     Off,
@@ -30,23 +30,25 @@ pub enum InlineDiff {
 }
 
 impl InlineDiff {
-    pub fn from_query(value: &str) -> AppResult<Self> {
-        match value {
-            "off" => Ok(Self::Off),
-            "token" => Ok(Self::Token),
-            "character" => Ok(Self::Character),
-            _ => Err(AppError::bad_request(
-                "Inline diff mode must be off, token, or character.",
-            )),
-        }
-    }
-
     fn mode(self) -> Option<DiffMode> {
         match self {
             Self::Off => None,
             Self::Token => Some(DiffMode::Token),
             Self::Character => Some(DiffMode::Character),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WhitespaceMode {
+    Ignore,
+    Show,
+}
+
+impl WhitespaceMode {
+    pub fn ignore(self) -> bool {
+        matches!(self, Self::Ignore)
     }
 }
 
@@ -278,6 +280,20 @@ fn semantic_path(result: &SemanticResult) -> &str {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn analysis_options_decode_as_closed_types() {
+        assert_eq!(
+            serde_json::from_str::<WhitespaceMode>(r#""ignore""#).unwrap(),
+            WhitespaceMode::Ignore
+        );
+        assert!(serde_json::from_str::<WhitespaceMode>(r#""trim""#).is_err());
+        assert_eq!(
+            serde_json::from_str::<InlineDiff>(r#""token""#).unwrap(),
+            InlineDiff::Token
+        );
+        assert!(serde_json::from_str::<InlineDiff>(r#""line""#).is_err());
+    }
 
     #[tokio::test]
     async fn concurrent_callers_share_one_immutable_snapshot() {

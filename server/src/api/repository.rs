@@ -12,7 +12,7 @@ use crate::{
     error::{AppError, AppResult},
     github::PullRequestState,
     local,
-    types::{Oid, RelativePath, RepositorySlug},
+    types::{BranchName, CloneDestination, Oid, RelativePath, RepositorySlug, SearchMode},
 };
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -31,12 +31,12 @@ pub fn routes() -> Router<Arc<AppState>> {
 
 #[derive(Deserialize)]
 struct RepositoryQuery {
-    repository: String,
+    repository: RepositorySlug,
 }
 
 #[derive(Deserialize)]
 struct RevisionQuery {
-    repository: String,
+    repository: RepositorySlug,
     oid: Oid,
 }
 
@@ -60,10 +60,6 @@ struct SwitchBranchResponse {
     status: local::SourceControlStatus,
 }
 
-pub(crate) fn parse_repository(value: &str) -> AppResult<RepositorySlug> {
-    RepositorySlug::parse(value).map_err(AppError::bad_request)
-}
-
 async fn get_repositories(
     State(state): State<Arc<AppState>>,
 ) -> AppResult<Json<local::LocalRepositories>> {
@@ -77,7 +73,7 @@ async fn get_files(
     Ok(Json(FilesResponse {
         files: state
             .local
-            .list_files(&parse_repository(&query.repository)?, &query.oid)
+            .list_files(&query.repository, &query.oid)
             .await?,
     }))
 }
@@ -89,7 +85,7 @@ async fn get_commits(
     Ok(Json(
         state
             .local
-            .list_commits(&parse_repository(&query.repository)?, &query.oid)
+            .list_commits(&query.repository, &query.oid)
             .await?,
     ))
 }
@@ -99,16 +95,13 @@ async fn get_source_control(
     Query(query): Query<RepositoryQuery>,
 ) -> AppResult<Json<SourceControlResponse>> {
     Ok(Json(SourceControlResponse {
-        status: state
-            .local
-            .source_control(&parse_repository(&query.repository)?)
-            .await?,
+        status: state.local.source_control(&query.repository).await?,
     }))
 }
 
 #[derive(Deserialize)]
 struct PullsQuery {
-    repository: String,
+    repository: RepositorySlug,
     state: Option<PullRequestState>,
     page: Option<usize>,
 }
@@ -127,35 +120,17 @@ async fn get_pulls(
     Ok(Json(
         state
             .github
-            .repository_pulls(&parse_repository(&query.repository)?, filter, page)
+            .repository_pulls(&query.repository, filter, page)
             .await?,
     ))
 }
 
 #[derive(Deserialize)]
 struct SearchQuery {
-    repository: String,
+    repository: RepositorySlug,
     oid: Oid,
     query: String,
     mode: Option<SearchMode>,
-}
-
-#[derive(Clone, Copy, Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum SearchMode {
-    Literal,
-    Regex,
-    Fuzzy,
-}
-
-impl SearchMode {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Literal => "literal",
-            Self::Regex => "regex",
-            Self::Fuzzy => "fuzzy",
-        }
-    }
 }
 
 async fn get_search(
@@ -166,19 +141,14 @@ async fn get_search(
     Ok(Json(
         state
             .local
-            .search(
-                &parse_repository(&query.repository)?,
-                &query.oid,
-                &query.query,
-                mode.as_str(),
-            )
+            .search(&query.repository, &query.oid, &query.query, mode)
             .await?,
     ))
 }
 
 #[derive(Deserialize)]
 struct FileQuery {
-    repository: String,
+    repository: RepositorySlug,
     oid: Oid,
     path: RelativePath,
 }
@@ -190,31 +160,24 @@ async fn get_file(
     Ok(Json(
         state
             .local
-            .read_file(
-                &parse_repository(&query.repository)?,
-                &query.oid,
-                query.path.as_str(),
-            )
+            .read_file(&query.repository, &query.oid, query.path.as_str())
             .await?,
     ))
 }
 
 #[derive(Deserialize)]
 struct CloneBody {
-    repository: String,
-    destination: String,
+    repository: RepositorySlug,
+    destination: CloneDestination,
 }
 
 async fn clone(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CloneBody>,
 ) -> AppResult<Json<CloneResponse>> {
-    if !matches!(body.destination.as_str(), "temporary" | "configured") {
-        return Err(AppError::bad_request("Choose a valid clone destination."));
-    }
     let path = state
         .local
-        .clone_repository(&parse_repository(&body.repository)?, &body.destination)
+        .clone_repository(&body.repository, body.destination)
         .await?;
     Ok(Json(CloneResponse {
         path: path.to_string_lossy().into_owned(),
@@ -223,38 +186,30 @@ async fn clone(
 
 #[derive(Deserialize)]
 struct BranchBody {
-    repository: String,
-    branch: String,
+    repository: RepositorySlug,
+    branch: BranchName,
 }
 
 async fn switch_branch(
     State(state): State<Arc<AppState>>,
     Json(body): Json<BranchBody>,
 ) -> AppResult<Json<SwitchBranchResponse>> {
-    if body.branch.is_empty() {
-        return Err(AppError::bad_request("Choose a branch."));
-    }
     Ok(Json(SwitchBranchResponse {
         status: state
             .local
-            .switch_branch(&parse_repository(&body.repository)?, &body.branch)
+            .switch_branch(&body.repository, &body.branch)
             .await?,
     }))
 }
 
 #[derive(Deserialize)]
 struct PullBody {
-    repository: String,
+    repository: RepositorySlug,
 }
 
 async fn pull(
     State(state): State<Arc<AppState>>,
     Json(body): Json<PullBody>,
 ) -> AppResult<Json<local::PullResult>> {
-    Ok(Json(
-        state
-            .local
-            .pull(&parse_repository(&body.repository)?)
-            .await?,
-    ))
+    Ok(Json(state.local.pull(&body.repository).await?))
 }

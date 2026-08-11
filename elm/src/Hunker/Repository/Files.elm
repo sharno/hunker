@@ -30,6 +30,7 @@ import Hunker.ApiError exposing (ApiError)
 import Hunker.Domain.Repository exposing (File, FileContent, SearchResults)
 import Hunker.FileTree as FileTree
 import Hunker.Remote as Remote exposing (Remote(..))
+import Hunker.Repository.Revision as Revision exposing (Revision)
 import Hunker.Route exposing (SearchMode)
 import Set exposing (Set)
 
@@ -39,8 +40,7 @@ type Model
 
 
 type alias Details =
-    { repository : String
-    , oid : String
+    { revision : Revision
     , catalog : List File
     , selectedFile : Remote FileRequest ApiError FileContent
     , search : Remote SearchRequest ApiError SearchResults
@@ -51,21 +51,20 @@ type alias Details =
 
 
 type FileRequest
-    = FileRequest String String String
+    = FileRequest Revision String
 
 
 type SearchRequest
-    = SearchRequest String String String SearchMode
+    = SearchRequest Revision String SearchMode
 
 
-init : String -> String -> List File -> Maybe String -> String -> SearchMode -> Model
-init repository oid files path query mode =
+init : Revision -> List File -> Maybe String -> String -> SearchMode -> Model
+init revision files path query mode =
     Model
-        { repository = repository
-        , oid = oid
+        { revision = revision
         , catalog = files
-        , selectedFile = selectedRequest repository oid path
-        , search = searchRequest repository oid query mode
+        , selectedFile = selectedRequest revision path
+        , search = searchRequest revision query mode
         , collapsedFolders = collapsedFor path files
         , searchDraft = query
         , searchMode = mode
@@ -76,8 +75,8 @@ navigate : Maybe String -> String -> SearchMode -> Model -> Model
 navigate path query mode (Model details) =
     Model
         { details
-            | selectedFile = selectedRequest details.repository details.oid path
-            , search = searchRequest details.repository details.oid query mode
+            | selectedFile = selectedRequest details.revision path
+            , search = searchRequest details.revision query mode
             , collapsedFolders = reveal path details.collapsedFolders
             , searchDraft = query
             , searchMode = mode
@@ -150,54 +149,54 @@ searchFailed request error =
 
 
 fileRepository : FileRequest -> String
-fileRepository (FileRequest repository _ _) =
-    repository
+fileRepository (FileRequest revision _) =
+    Revision.repository revision
 
 
 fileOid : FileRequest -> String
-fileOid (FileRequest _ oid _) =
-    oid
+fileOid (FileRequest revision _) =
+    Revision.oid revision
 
 
 filePath : FileRequest -> String
-filePath (FileRequest _ _ path) =
+filePath (FileRequest _ path) =
     path
 
 
 searchRepository : SearchRequest -> String
-searchRepository (SearchRequest repository _ _ _) =
-    repository
+searchRepository (SearchRequest revision _ _) =
+    Revision.repository revision
 
 
 searchOid : SearchRequest -> String
-searchOid (SearchRequest _ oid _ _) =
-    oid
+searchOid (SearchRequest revision _ _) =
+    Revision.oid revision
 
 
 searchQuery : SearchRequest -> String
-searchQuery (SearchRequest _ _ query _) =
+searchQuery (SearchRequest _ query _) =
     query
 
 
 requestSearchMode : SearchRequest -> SearchMode
-requestSearchMode (SearchRequest _ _ _ mode) =
+requestSearchMode (SearchRequest _ _ mode) =
     mode
 
 
-selectedRequest : String -> String -> Maybe String -> Remote FileRequest error value
-selectedRequest repository oid path =
+selectedRequest : Revision -> Maybe String -> Remote FileRequest error value
+selectedRequest revision path =
     path
-        |> Maybe.map (FileRequest repository oid >> Loading)
+        |> Maybe.map (FileRequest revision >> Loading)
         |> Maybe.withDefault NotAsked
 
 
-searchRequest : String -> String -> String -> SearchMode -> Remote SearchRequest error value
-searchRequest repository oid query mode =
+searchRequest : Revision -> String -> SearchMode -> Remote SearchRequest error value
+searchRequest revision query mode =
     if query == "" then
         NotAsked
 
     else
-        Loading (SearchRequest repository oid query mode)
+        Loading (SearchRequest revision query mode)
 
 
 collapsedFor : Maybe String -> List File -> Set String

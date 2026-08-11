@@ -1,4 +1,5 @@
 use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
+use std::fmt;
 use url::Url;
 
 use crate::{
@@ -18,12 +19,36 @@ pub(crate) use reviews::CommentSide;
 pub use reviews::{InlineCommentInput, ReviewAction, ReviewComment};
 pub use transport::GitHub;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PullNumber(u32);
+
+impl PullNumber {
+    fn parse(value: &str) -> AppResult<Self> {
+        value
+            .parse::<u32>()
+            .ok()
+            .filter(|number| *number > 0)
+            .map(Self)
+            .ok_or_else(|| AppError::bad_request("Choose a valid GitHub pull request number."))
+    }
+
+    pub fn as_u32(self) -> u32 {
+        self.0
+    }
+}
+
+impl fmt::Display for PullNumber {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GitHubTarget {
     Pull {
         owner: String,
         repo: String,
-        number: String,
+        number: PullNumber,
     },
     Compare {
         owner: String,
@@ -61,7 +86,7 @@ impl GitHubTarget {
         }
     }
 
-    pub fn pull_number(&self) -> Option<&str> {
+    pub fn pull_number(&self) -> Option<&PullNumber> {
         match self {
             Self::Pull { number, .. } => Some(number),
             _ => None,
@@ -123,10 +148,10 @@ pub fn parse_url(input: &str) -> AppResult<GitHubTarget> {
     };
     let decoded = percent_decode_str(id).decode_utf8_lossy().into_owned();
     match *resource {
-        "pull" if id.chars().all(|value| value.is_ascii_digit()) => Ok(GitHubTarget::Pull {
+        "pull" => Ok(GitHubTarget::Pull {
             owner: (*owner).to_owned(),
             repo: (*repo).to_owned(),
-            number: (*id).to_owned(),
+            number: PullNumber::parse(id)?,
         }),
         "compare" if id.len() > 2 => Ok(GitHubTarget::Compare {
             owner: (*owner).to_owned(),
@@ -160,12 +185,13 @@ mod tests {
     #[test]
     fn parses_supported_github_locations() {
         assert!(
-            matches!(parse_url("https://github.com/acme/demo/pull/42").unwrap(), GitHubTarget::Pull { number, .. } if number == "42")
+            matches!(parse_url("https://github.com/acme/demo/pull/42").unwrap(), GitHubTarget::Pull { number, .. } if number.as_u32() == 42)
         );
         assert!(matches!(
             parse_url("https://github.com/acme/demo/commit/abcdef1").unwrap(),
             GitHubTarget::Commit { .. }
         ));
         assert!(parse_url("https://example.com/acme/demo/pull/42").is_err());
+        assert!(parse_url("https://github.com/acme/demo/pull/0").is_err());
     }
 }

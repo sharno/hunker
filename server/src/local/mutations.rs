@@ -4,7 +4,7 @@ use crate::{
     command,
     error::{AppError, AppResult},
     settings,
-    types::RepositorySlug,
+    types::{BranchName, CloneDestination, RepositorySlug},
 };
 
 use super::{Checkout, Local, PullResult, SourceControlStatus, source_control, valid_segment};
@@ -13,21 +13,19 @@ impl Local {
     pub async fn clone_repository(
         &self,
         repository: &RepositorySlug,
-        destination: &str,
+        destination: CloneDestination,
     ) -> AppResult<PathBuf> {
         if !valid_segment(&repository.owner) || !valid_segment(&repository.name) {
             return Err(AppError::bad_request("That repository name is not valid."));
         }
         let settings = settings::load().await?.settings;
-        let root = if destination == "configured" {
-            settings::resolve_path(&settings.repositories_root)
-        } else {
-            settings::resolve_path(&settings.cache_root)
+        let root = match destination {
+            CloneDestination::Configured => settings::resolve_path(&settings.repositories_root),
+            CloneDestination::Temporary => settings::resolve_path(&settings.cache_root),
         };
-        let target = if destination == "configured" {
-            root.join(&repository.name)
-        } else {
-            root.join(&repository.owner).join(&repository.name)
+        let target = match destination {
+            CloneDestination::Configured => root.join(&repository.name),
+            CloneDestination::Temporary => root.join(&repository.owner).join(&repository.name),
         };
         if target.exists() {
             return Ok(target);
@@ -58,7 +56,11 @@ impl Local {
     }
 }
 
-pub(super) async fn switch_branch(root: &Path, branch: &str) -> AppResult<SourceControlStatus> {
+pub(super) async fn switch_branch(
+    root: &Path,
+    branch: &BranchName,
+) -> AppResult<SourceControlStatus> {
+    let branch = branch.as_str();
     action(root, &["check-ref-format", "--branch", branch]).await?;
     let current = source_control::inspect(root, true).await?;
     let target = current

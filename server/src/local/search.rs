@@ -11,7 +11,7 @@ use walkdir::WalkDir;
 use crate::{
     command,
     error::{AppError, AppResult},
-    types::{Oid, RepositorySlug},
+    types::{Oid, RepositorySlug, SearchMode},
 };
 
 use super::{Local, RepositoryFile, RepositorySearchMatch, SearchResults};
@@ -22,7 +22,7 @@ impl Local {
         repository: &RepositorySlug,
         oid: &Oid,
         query: &str,
-        mode: &str,
+        mode: SearchMode,
     ) -> AppResult<SearchResults> {
         let root = self.repository_path(repository).await?;
         let head = command::git(&root, &["rev-parse", "HEAD"]).await?;
@@ -34,11 +34,13 @@ impl Local {
         if query.trim().is_empty() {
             return Err(AppError::bad_request("Enter a search query."));
         }
-        if mode == "fuzzy" {
-            let picker = self.fuzzy_index(&root).await?;
-            return fuzzy_search(&root, query, picker).await;
+        match mode {
+            SearchMode::Fuzzy => {
+                let picker = self.fuzzy_index(&root).await?;
+                fuzzy_search(&root, query, picker).await
+            }
+            SearchMode::Literal | SearchMode::Regex => text_search(&root, query, mode).await,
         }
-        text_search(&root, query, mode).await
     }
 
     async fn fuzzy_index(&self, root: &Path) -> AppResult<SharedFilePicker> {
@@ -65,8 +67,12 @@ impl Local {
     }
 }
 
-pub(super) async fn text_search(root: &Path, query: &str, mode: &str) -> AppResult<SearchResults> {
-    let expression = if mode == "regex" {
+pub(super) async fn text_search(
+    root: &Path,
+    query: &str,
+    mode: SearchMode,
+) -> AppResult<SearchResults> {
+    let expression = if mode == SearchMode::Regex {
         Regex::new(query).map_err(|error| AppError::bad_request(error.to_string()))?
     } else {
         Regex::new(&regex::escape(query))
@@ -106,13 +112,13 @@ pub(super) async fn text_search(root: &Path, query: &str, mode: &str) -> AppResu
         "!.git",
         "--smart-case",
     ];
-    if mode == "literal" {
+    if mode == SearchMode::Literal {
         arguments.push("--fixed-strings");
     }
     arguments.extend(["--", query, "."]);
     let result = command::output("rg", &arguments, Some(root)).await?;
     if !result.status.success() && result.status.code() != Some(1) {
-        return Err(if mode == "regex" {
+        return Err(if mode == SearchMode::Regex {
             AppError::bad_request(String::from_utf8_lossy(&result.stderr).trim().to_owned())
         } else {
             AppError::upstream("ripgrep could not search this repository.")

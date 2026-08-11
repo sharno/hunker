@@ -33,7 +33,7 @@ impl GitHub {
                 Ok(ReviewMetadata {
                     title: value.title,
                     repository: format!("{owner}/{repo}"),
-                    number: number.clone(),
+                    number: number.to_string(),
                     author: value
                         .user
                         .map_or_else(|| "GitHub".to_owned(), |user| user.login),

@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::{
     command,
     error::{AppError, AppResult},
-    github::{GitHubTarget, ReviewMetadata},
+    github::{GitHubTarget, PullNumber, ReviewMetadata},
     types::{FilePair, FileStatus, LocalGitRepository, PullCommit, RepositorySlug},
 };
 
@@ -43,7 +43,7 @@ impl Local {
     async fn fetch_pull(
         &self,
         repository: &LocalGitRepository,
-        number: &str,
+        number: &PullNumber,
         force: bool,
     ) -> AppResult<u64> {
         let now = now_ms();
@@ -70,7 +70,7 @@ impl Local {
         repository_id: &RepositorySlug,
         base: &str,
         head: &str,
-        pull: Option<&str>,
+        pull: Option<&PullNumber>,
     ) -> AppResult<Option<LocalGitRepository>> {
         if !valid_oid(base) || !valid_oid(head) {
             return Ok(None);

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
 
-use super::{GitHub, GitHubTarget};
+use super::{GitHub, GitHubTarget, PullNumber};
 
 const REVIEW_THREADS_QUERY: &str = "query HunkerReviewThreads($owner: String!, $repo: String!, $number: Int!, $cursor: String) { repository(owner: $owner, name: $repo) { pullRequest(number: $number) { reviewThreads(first: 100, after: $cursor) { nodes { isResolved comments(first: 1) { nodes { fullDatabaseId } } } pageInfo { hasNextPage endCursor } } } } }";
 
@@ -32,7 +32,7 @@ impl GitHub {
     async fn resolutions(
         &self,
         target: &GitHubTarget,
-        number: &str,
+        number: &PullNumber,
     ) -> AppResult<HashMap<u64, bool>> {
         let mut result = HashMap::new();
         let mut cursor: Option<String> = None;
@@ -42,7 +42,7 @@ impl GitHub {
                 variables: ThreadVariables {
                     owner: target.owner(),
                     repo: target.repo(),
-                    number: number.parse::<u64>().unwrap_or(0),
+                    number: number.as_u32(),
                     cursor: cursor.as_deref(),
                 },
             };
@@ -149,7 +149,7 @@ impl GitHub {
     }
 }
 
-fn require_pull(target: &GitHubTarget) -> AppResult<&str> {
+fn require_pull(target: &GitHubTarget) -> AppResult<&PullNumber> {
     target.pull_number().ok_or_else(|| {
         AppError::bad_request("GitHub reviews are available for pull requests, not compare URLs.")
     })
@@ -193,7 +193,7 @@ struct GraphQlRequest<'a> {
 struct ThreadVariables<'a> {
     owner: &'a str,
     repo: &'a str,
-    number: u64,
+    number: u32,
     cursor: Option<&'a str>,
 }
 

@@ -99,7 +99,7 @@ mod tests {
 
     #[test]
     fn rejects_malformed_repository_names() {
-        assert!(api::repository::parse_repository("owner/repo/extra").is_err());
+        assert!(types::RepositorySlug::parse("owner/repo/extra").is_err());
     }
 
     #[tokio::test]

@@ -2,10 +2,78 @@ use std::{fmt, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct RepositorySlug {
     pub owner: String,
     pub name: String,
+}
+
+impl TryFrom<String> for RepositorySlug {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::parse(&value)
+    }
+}
+
+impl From<RepositorySlug> for String {
+    fn from(value: RepositorySlug) -> Self {
+        format!("{}/{}", value.owner, value.name)
+    }
+}
+
+impl fmt::Display for RepositorySlug {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}/{}", self.owner, self.name)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct BranchName(String);
+
+impl BranchName {
+    pub fn parse(value: String) -> Result<Self, String> {
+        if value.is_empty() || value.contains(['\0', '\n', '\r']) {
+            Err("Choose a valid branch.".to_owned())
+        } else {
+            Ok(Self(value))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for BranchName {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::parse(value)
+    }
+}
+
+impl From<BranchName> for String {
+    fn from(value: BranchName) -> Self {
+        value.0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CloneDestination {
+    Temporary,
+    Configured,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchMode {
+    Literal,
+    Regex,
+    Fuzzy,
 }
 
 impl RepositorySlug {
@@ -194,4 +262,31 @@ pub struct SourceRange {
     pub end_line: usize,
     pub start_column: usize,
     pub end_column: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn boundary_identifiers_decode_once_into_closed_types() {
+        let repository = serde_json::from_str::<RepositorySlug>(r#""acme/demo""#).unwrap();
+        assert_eq!(repository.to_string(), "acme/demo");
+        assert!(serde_json::from_str::<RepositorySlug>(r#""acme/demo/extra""#).is_err());
+
+        let branch = serde_json::from_str::<BranchName>(r#""feature/typed-boundaries""#).unwrap();
+        assert_eq!(branch.as_str(), "feature/typed-boundaries");
+        assert!(serde_json::from_str::<BranchName>(r#"""#).is_err());
+
+        assert_eq!(
+            serde_json::from_str::<CloneDestination>(r#""temporary""#).unwrap(),
+            CloneDestination::Temporary
+        );
+        assert!(serde_json::from_str::<CloneDestination>(r#""workspace""#).is_err());
+        assert_eq!(
+            serde_json::from_str::<SearchMode>(r#""regex""#).unwrap(),
+            SearchMode::Regex
+        );
+        assert!(serde_json::from_str::<SearchMode>(r#""semantic""#).is_err());
+    }
 }

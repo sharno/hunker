@@ -20,6 +20,7 @@ import Hunker.Effect as Effect exposing (Effect)
 import Hunker.Remote as Remote exposing (Remote(..))
 import Hunker.Repository.Files as RepositoryFiles
 import Hunker.Repository.Pulls as RepositoryPulls
+import Hunker.Repository.Revision as RepositoryRevision
 import Hunker.Repository.SourceControl as SourceControl
 import Hunker.Repository.View.Commits as CommitsView
 import Hunker.Repository.View.Files as FilesView
@@ -546,8 +547,10 @@ update msg model =
 
                             fileBrowser =
                                 RepositoryFiles.init
-                                    (repositoryIdString repository)
-                                    (oidString oid)
+                                    (RepositoryRevision.create
+                                        (repositoryIdString repository)
+                                        (oidString oid)
+                                    )
                                     files
                                     activeLocation.path
                                     activeLocation.query

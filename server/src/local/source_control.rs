@@ -9,14 +9,13 @@ use tokio::sync::Mutex;
 use crate::{
     command,
     error::{AppError, AppResult},
+    types::{BranchName, RepositorySlug},
 };
 
 use super::{
     Branch, Checkout, Local, PullResult, RemoteState, SourceControlStatus, WorkingTreeChanges,
     git_result, mutations, now_ms,
 };
-use crate::types::RepositorySlug;
-
 impl Local {
     async fn lock_for(&self, repository: &RepositorySlug) -> AppResult<(PathBuf, Arc<Mutex<()>>)> {
         let root = self.repository_path(repository).await?;
@@ -42,7 +41,7 @@ impl Local {
     pub async fn switch_branch(
         &self,
         repository: &RepositorySlug,
-        branch: &str,
+        branch: &BranchName,
     ) -> AppResult<SourceControlStatus> {
         let (root, lock) = self.lock_for(repository).await?;
         let _guard = lock.lock().await;

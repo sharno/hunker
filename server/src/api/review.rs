@@ -265,9 +265,9 @@ struct AnalysisQuery {
     url: String,
     base_oid: Oid,
     head_oid: Oid,
-    whitespace: String,
+    whitespace: analysis::WhitespaceMode,
     semantic: bool,
-    mode: String,
+    mode: analysis::InlineDiff,
 }
 
 async fn get_analysis(
@@ -275,23 +275,14 @@ async fn get_analysis(
     Query(query): Query<AnalysisQuery>,
 ) -> AppResult<Json<analysis::AnalysisSnapshot>> {
     let target = parse_url(&query.url)?;
-    let ignore_whitespace = match query.whitespace.as_str() {
-        "ignore" => true,
-        "show" => false,
-        _ => {
-            return Err(AppError::bad_request(
-                "Whitespace mode must be ignore or show.",
-            ));
-        }
-    };
     let key = analysis::AnalysisSnapshotKey::new(
         &target.repository(),
         query.base_oid.as_str().to_owned(),
         query.head_oid.as_str().to_owned(),
         analysis::AnalysisOptions {
-            ignore_whitespace,
+            ignore_whitespace: query.whitespace.ignore(),
             semantic: query.semantic,
-            inline_diff: analysis::InlineDiff::from_query(&query.mode)?,
+            inline_diff: query.mode,
         },
     );
     let build_key = key.clone();
