@@ -25,7 +25,7 @@ import Hunker.Remote as Remote exposing (Remote(..))
 import Hunker.Review.Analysis as Analysis
 import Hunker.Review.Collaboration as Collaboration
 import Hunker.Review.DiffView as DiffView exposing (SearchMode(..))
-import Hunker.Review.FileIndex as FileIndex exposing (FileIndex)
+import Hunker.Review.FileIndex as FileIndex
 import Hunker.Review.Session as Session
 import Hunker.Review.View.Collaboration as CollaborationView
 import Hunker.Review.View.DiffPanel as DiffPanelView
@@ -58,7 +58,6 @@ type alias ReadyReview =
     { request : ReviewRequest
     , session : Session.Id
     , document : ReviewDocument
-    , files : FileIndex
     , analysis : Analysis.State
     , collaboration : Collaboration.Model
     , diff : DiffView.Model
@@ -247,15 +246,8 @@ readyState model =
 reviewFiles : Model -> List FileChange
 reviewFiles model =
     readyState model
-        |> Maybe.map (.files >> FileIndex.changes)
+        |> Maybe.map (.analysis >> Analysis.files >> FileIndex.changes)
         |> Maybe.withDefault []
-
-
-reviewAnalysis : Model -> Analysis.State
-reviewAnalysis model =
-    readyState model
-        |> Maybe.map .analysis
-        |> Maybe.withDefault Analysis.disabled
 
 
 reviewCollaboration : Model -> Maybe Collaboration.Model
@@ -400,27 +392,12 @@ update settings msg model =
                 unchanged model
 
         AnalysisLoaded requested snapshot ->
-            if Analysis.matches requested (reviewAnalysis model) then
-                ( mapReady
-                    (\ready ->
-                        { ready
-                            | analysis = Analysis.complete requested snapshot ready.analysis
-                            , files = FileIndex.withAnalysis snapshot ready.files
-                        }
-                    )
-                    model
-                , Effect.none
-                )
-
-            else
-                unchanged model
+            ( mapReady (\ready -> { ready | analysis = Analysis.complete requested snapshot ready.analysis }) model
+            , Effect.none
+            )
 
         AnalysisFailed requested error ->
-            if Analysis.matches requested (reviewAnalysis model) then
-                ( mapReady (\ready -> { ready | analysis = Analysis.fail requested error ready.analysis }) model, Effect.none )
-
-            else
-                unchanged model
+            ( mapReady (\ready -> { ready | analysis = Analysis.fail requested error ready.analysis }) model, Effect.none )
 
         FullFileLoaded requested fullFile ->
             ( mapDiff (DiffView.fileLoaded requested fullFile) model, Effect.none )
@@ -640,8 +617,7 @@ reviewReady settings reviewData model =
                         { request = { request | location = updatedLocation }
                         , session = sessionId
                         , document = reviewData
-                        , files = FileIndex.fromChanges files
-                        , analysis = Analysis.disabled
+                        , analysis = Analysis.init (FileIndex.fromChanges files)
                         , collaboration = Collaboration.init sessionId (Route.isPullRequest request.location.target)
                         , diff = DiffView.init sessionId
                         }
@@ -689,7 +665,7 @@ beginAnalysis settings model =
 
         Just ready ->
             if not settings.semantic && settings.inlineDiffMode == InlineOff then
-                ( mapReady (\current -> { current | analysis = Analysis.disabled, files = FileIndex.clearWordRanges current.files }) model
+                ( mapReady (\current -> { current | analysis = Analysis.disable current.analysis }) model
                 , Effect.none
                 )
 
@@ -704,7 +680,7 @@ beginAnalysis settings model =
                             settings.semantic
                             settings.inlineDiffMode
                 in
-                ( mapReady (\current -> { current | analysis = Analysis.inFlight identity, files = FileIndex.clearWordRanges current.files }) model
+                ( mapReady (\current -> { current | analysis = Analysis.inFlight identity current.analysis }) model
                 , Api.fetchAnalysis ready.request.requestUrl
                     ready.document.backing
                     settings.ignoreWhitespace
@@ -1134,7 +1110,6 @@ renderFileDiff settings model file =
             DiffPanelView.view
                 { settings = settings
                 , pullRequest = Route.isPullRequest ready.request.location.target
-                , files = ready.files
                 , analysis = ready.analysis
                 , diff = ready.diff
                 , collaboration = ready.collaboration

@@ -13,7 +13,7 @@ import Hunker.Remote exposing (Remote(..))
 import Hunker.Review.Analysis as Analysis
 import Hunker.Review.Collaboration as Collaboration
 import Hunker.Review.DiffView as DiffView
-import Hunker.Review.FileIndex as FileIndex exposing (FileIndex)
+import Hunker.Review.FileIndex as FileIndex
 import Hunker.Review.Session as Session
 import Hunker.Review.View.Collaboration as CollaborationView
 import Hunker.SemanticMove as SemanticMove exposing (Endpoint(..))
@@ -34,7 +34,6 @@ type alias Actions msg =
 type alias Config msg =
     { settings : Settings
     , pullRequest : Bool
-    , files : FileIndex
     , analysis : Analysis.State
     , diff : DiffView.Model
     , collaboration : Collaboration.Model
@@ -135,20 +134,20 @@ semanticSummary config file =
         text ""
 
     else
-        case config.analysis of
-            Analysis.InFlight _ ->
+        case Analysis.status config.analysis of
+            Analysis.AnalysisInFlight ->
                 div [ class "semantic-banner is-loading" ] [ span [ class "loading-spinner" ] [], text "Analyzing syntax tree…" ]
 
-            Analysis.Failure _ error ->
+            Analysis.AnalysisFailure error ->
                 div [ class "semantic-banner is-error" ] [ text (ApiError.message error) ]
 
-            Analysis.Complete _ snapshot ->
+            Analysis.AnalysisComplete snapshot ->
                 snapshot.files
                     |> Dict.get file.path
                     |> Maybe.map (.semantic >> semanticFeatureView)
                     |> Maybe.withDefault (text "")
 
-            Analysis.Disabled ->
+            Analysis.AnalysisDisabled ->
                 text ""
 
 
@@ -341,8 +340,8 @@ moveDecoration config path side lineNumber =
                 Destination
 
         move =
-            case config.analysis of
-                Analysis.Complete _ snapshot ->
+            case Analysis.status config.analysis of
+                Analysis.AnalysisComplete snapshot ->
                     List.filter (SemanticMove.containsLine path lineNumber endpoint) snapshot.moves |> List.head
 
                 _ ->
@@ -399,7 +398,7 @@ lineNumberButton config path side number maybeNumberValue =
 
 highlightedLine : Config msg -> String -> CommentSide -> Int -> String -> List (Html msg)
 highlightedLine config path side number source =
-    case FileIndex.get path config.files of
+    case FileIndex.get path (Analysis.files config.analysis) of
         Just prepared ->
             rangedSyntax config.settings.syntaxHighlighting path source (PreparedDiff.rangesFor side number prepared)
 
@@ -473,7 +472,7 @@ fullUnifiedLines row =
 
 preparedHunks : Config msg -> String -> List Hunk
 preparedHunks config path =
-    FileIndex.hunks path config.files
+    FileIndex.hunks path (Analysis.files config.analysis)
 
 
 lastNewLine : Config msg -> String -> Int

@@ -1,26 +1,38 @@
 module Hunker.Review.Analysis exposing
     ( Identity
-    , State(..)
+    , State
+    , Status(..)
     , complete
-    , disabled
+    , disable
     , fail
+    , files
     , identity
     , inFlight
+    , init
     , inlineDiff
     , matches
     , snapshot
+    , status
     )
 
 import Hunker.ApiError exposing (ApiError)
 import Hunker.Domain.Review exposing (AnalysisSnapshot)
 import Hunker.Domain.Settings exposing (InlineDiffMode)
+import Hunker.Review.FileIndex as FileIndex exposing (FileIndex)
 
 
 type State
-    = Disabled
-    | InFlight Identity
-    | Failure Identity ApiError
-    | Complete Identity AnalysisSnapshot
+    = Disabled FileIndex
+    | InFlight Identity FileIndex
+    | Failure Identity ApiError FileIndex
+    | Complete Identity AnalysisSnapshot FileIndex
+
+
+type Status
+    = AnalysisDisabled
+    | AnalysisInFlight
+    | AnalysisFailure ApiError
+    | AnalysisComplete AnalysisSnapshot
 
 
 type Identity
@@ -46,20 +58,25 @@ identity requestUrl baseOid headOid ignoreWhitespace semantic inlineMode =
         }
 
 
-disabled : State
-disabled =
-    Disabled
+init : FileIndex -> State
+init files_ =
+    Disabled files_
 
 
-inFlight : Identity -> State
-inFlight =
-    InFlight
+disable : State -> State
+disable state =
+    Disabled (FileIndex.clearWordRanges (files state))
+
+
+inFlight : Identity -> State -> State
+inFlight requested state =
+    InFlight requested (FileIndex.clearWordRanges (files state))
 
 
 complete : Identity -> AnalysisSnapshot -> State -> State
 complete requested value state =
     if matches requested state then
-        Complete requested value
+        Complete requested value (FileIndex.withAnalysis value (files state))
 
     else
         state
@@ -68,7 +85,7 @@ complete requested value state =
 fail : Identity -> ApiError -> State -> State
 fail requested error state =
     if matches requested state then
-        Failure requested error
+        Failure requested error (files state)
 
     else
         state
@@ -77,16 +94,16 @@ fail requested error state =
 matches : Identity -> State -> Bool
 matches requested state =
     case state of
-        InFlight current ->
+        InFlight current _ ->
             current == requested
 
-        Failure current _ ->
+        Failure current _ _ ->
             current == requested
 
-        Complete current _ ->
+        Complete current _ _ ->
             current == requested
 
-        Disabled ->
+        Disabled _ ->
             False
 
 
@@ -98,8 +115,40 @@ inlineDiff (Identity details) =
 snapshot : State -> Maybe AnalysisSnapshot
 snapshot state =
     case state of
-        Complete _ value ->
+        Complete _ value _ ->
             Just value
 
         _ ->
             Nothing
+
+
+files : State -> FileIndex
+files state =
+    case state of
+        Disabled value ->
+            value
+
+        InFlight _ value ->
+            value
+
+        Failure _ _ value ->
+            value
+
+        Complete _ _ value ->
+            value
+
+
+status : State -> Status
+status state =
+    case state of
+        Disabled _ ->
+            AnalysisDisabled
+
+        InFlight _ _ ->
+            AnalysisInFlight
+
+        Failure _ error _ ->
+            AnalysisFailure error
+
+        Complete _ value _ ->
+            AnalysisComplete value

@@ -1,10 +1,14 @@
 module ReviewSessionTest exposing (suite)
 
+import Dict
 import Expect
-import Hunker.Domain.Review exposing (CommentSide(..), ReviewComment)
+import Hunker.Domain.Review exposing (CommentSide(..), FileChange, FileStatus(..), ReviewComment)
+import Hunker.Domain.Settings exposing (InlineDiffMode(..))
 import Hunker.Remote exposing (Remote(..))
+import Hunker.Review.Analysis as Analysis
 import Hunker.Review.Collaboration as Collaboration
 import Hunker.Review.DiffView as DiffView
+import Hunker.Review.FileIndex as FileIndex
 import Hunker.Review.Session as Session
 import Test exposing (Test, describe, test)
 
@@ -84,6 +88,41 @@ suite =
                             |> Maybe.withDefault second
                 in
                 Expect.equal Nothing (DiffView.fullFile "src/shared.elm" afterOldResponse)
+        , test "an old analysis cannot separate a snapshot from its prepared files" <|
+            \() ->
+                let
+                    current =
+                        Analysis.identity "current" "111" "222" True True Token
+
+                    stale =
+                        Analysis.identity "stale" "000" "111" True True Token
+
+                    state =
+                        FileIndex.fromChanges [ changedFile ]
+                            |> Analysis.init
+                            |> Analysis.inFlight current
+                            |> Analysis.complete stale
+                                { key =
+                                    { repository = "example/repo"
+                                    , baseOid = "000"
+                                    , headOid = "111"
+                                    , options = { ignoreWhitespace = True, semantic = True, inlineDiff = Token }
+                                    }
+                                , files = Dict.empty
+                                , moves = []
+                                }
+                in
+                Expect.all
+                    [ \_ ->
+                        case Analysis.status state of
+                            Analysis.AnalysisInFlight ->
+                                Expect.pass
+
+                            _ ->
+                                Expect.fail "A stale snapshot replaced the active analysis"
+                    , \_ -> Expect.equal [ "src/shared.elm" ] (Analysis.files state |> FileIndex.changes |> List.map .path)
+                    ]
+                    ()
         ]
 
 
@@ -129,4 +168,15 @@ comment id path =
     , line = Just 1
     , side = RightSide
     , resolved = False
+    }
+
+
+changedFile : FileChange
+changedFile =
+    { path = "src/shared.elm"
+    , previousPath = Nothing
+    , status = FileModified
+    , additions = 1
+    , deletions = 1
+    , patch = "@@ -1 +1 @@\n-old\n+new"
     }

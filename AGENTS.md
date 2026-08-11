@@ -27,6 +27,9 @@
   replace them with one type that makes the invalid combination unrepresentable.
 - A ready review owns one opaque ordered file index. Do not keep parallel file
   lists, prepared-patch dictionaries, or sentinel copies in the page model.
+- Review analysis owns the prepared `FileIndex` it decorates. Disabled,
+  in-flight, failed, and complete analysis states each carry the corresponding
+  index so a snapshot and its word ranges cannot update independently.
 - A ready review also owns one immutable `Hunker.Review.Session.Id`. Full-file,
   collaboration, and analysis requests must carry that identity through their
   opaque feature modules so a response started on one PR cannot mutate another.
