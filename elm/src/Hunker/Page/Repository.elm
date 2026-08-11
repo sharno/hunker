@@ -33,15 +33,14 @@ import Url
 
 
 type alias Model =
-    { location : Route.RepositoryLocation
-    , repository : RepositoryId
+    { repository : RepositoryId
     , local : LocalRepositoryState
     , view : RepositoryView
     }
 
 
 type RepositoryId
-    = RepositoryId String
+    = RepositoryId { owner : String, name : String }
 
 
 type BranchName
@@ -100,9 +99,25 @@ type alias MissingRepository =
 
 
 type RepositoryView
-    = Files FilesState
-    | Commits CommitsState
-    | PullRequests PullsState
+    = Files FilesLocation FilesState
+    | Commits CommitsLocation CommitsState
+    | PullRequests PullsLocation PullsState
+
+
+type alias FilesLocation =
+    { ref : Maybe String
+    , path : Maybe String
+    , query : String
+    , searchMode : SearchMode
+    }
+
+
+type alias CommitsLocation =
+    { ref : Maybe String }
+
+
+type alias PullsLocation =
+    { state : PullRequestState }
 
 
 type FilesState
@@ -172,18 +187,17 @@ type Msg
 init : Route.RepositoryLocation -> ( Model, Effect Msg )
 init location =
     let
-        name =
-            location.owner ++ "/" ++ location.repository
-
         repository =
-            RepositoryId name
+            RepositoryId { owner = location.owner, name = location.repository }
+
+        name =
+            repositoryIdString repository
 
         viewState =
             initialView name location
 
         model =
-            { location = location
-            , repository = repository
+            { repository = repository
             , local = LocalResolving (DiscoverLocal repository)
             , view = viewState
             }
@@ -200,13 +214,19 @@ initialView : String -> Route.RepositoryLocation -> RepositoryView
 initialView name location =
     case location.tab of
         RepositoryFiles ->
-            Files FilesWaiting
+            Files
+                { ref = location.ref
+                , path = location.path
+                , query = location.query
+                , searchMode = location.searchMode
+                }
+                FilesWaiting
 
         RepositoryCommits ->
-            Commits CommitsWaiting
+            Commits { ref = location.ref } CommitsWaiting
 
         RepositoryPulls ->
-            PullRequests (PullsState (RepositoryPulls.init name location.pullState))
+            PullRequests { state = location.pullState } (PullsState (RepositoryPulls.init name location.pullState))
 
 
 loadFiles : RepositoryFiles.Model -> Effect Msg
@@ -241,7 +261,7 @@ loadFiles files =
 loadRemoteView : RepositoryView -> Effect Msg
 loadRemoteView viewState =
     case viewState of
-        PullRequests (PullsState pulls) ->
+        PullRequests _ (PullsState pulls) ->
             case RepositoryPulls.request pulls of
                 Loading request ->
                     loadPullRequests request
@@ -267,13 +287,13 @@ navigate : Route.RepositoryLocation -> Model -> ( Model, Effect Msg )
 navigate nextLocation model =
     if
         nextLocation.owner
-            /= model.location.owner
+            /= repositoryOwner model.repository
             || nextLocation.repository
-            /= model.location.repository
+            /= repositoryShortName model.repository
     then
         init nextLocation
 
-    else if nextLocation == model.location then
+    else if nextLocation == repositoryLocation model then
         unchanged model
 
     else
@@ -289,13 +309,15 @@ activateLocation nextLocation model =
     case ( nextLocation.tab, readySnapshot model ) of
         ( RepositoryFiles, Just snapshot ) ->
             let
+                location =
+                    filesLocation nextLocation
+
                 files =
-                    RepositoryFiles.navigate nextLocation.path nextLocation.query nextLocation.searchMode snapshot.files
+                    RepositoryFiles.navigate location.path location.query location.searchMode snapshot.files
             in
             ( { model
-                | location = nextLocation
-                , local = LocalReady { snapshot | files = files }
-                , view = Files FilesReady
+                | local = LocalReady { snapshot | files = files }
+                , view = Files location FilesReady
               }
             , loadFiles files
             )
@@ -305,7 +327,7 @@ activateLocation nextLocation model =
                 identity =
                     snapshotIdentity snapshot
             in
-            ( { model | location = nextLocation, view = Commits (CommitsRemote (Loading identity)) }
+            ( { model | view = Commits (commitsLocation nextLocation) (CommitsRemote (Loading identity)) }
             , Api.fetchRepositoryCommits name (oidString snapshot.headOid) (CommitsLoaded identity) (CommitsFailed identity)
             )
 
@@ -315,15 +337,15 @@ activateLocation nextLocation model =
                     RepositoryPulls.init name nextLocation.pullState
 
                 nextView =
-                    PullRequests (PullsState pulls)
+                    PullRequests (pullsLocation nextLocation) (PullsState pulls)
             in
-            ( { model | location = nextLocation, view = nextView }, loadRemoteView nextView )
+            ( { model | view = nextView }, loadRemoteView nextView )
 
         ( RepositoryFiles, Nothing ) ->
-            ( { model | location = nextLocation, view = Files FilesWaiting }, Effect.none )
+            ( { model | view = Files (filesLocation nextLocation) FilesWaiting }, Effect.none )
 
         ( RepositoryCommits, Nothing ) ->
-            ( { model | location = nextLocation, view = Commits CommitsWaiting }, Effect.none )
+            ( { model | view = Commits (commitsLocation nextLocation) CommitsWaiting }, Effect.none )
 
 
 repositoryName : Model -> String
@@ -333,7 +355,82 @@ repositoryName model =
 
 repositoryIdString : RepositoryId -> String
 repositoryIdString (RepositoryId value) =
-    value
+    value.owner ++ "/" ++ value.name
+
+
+repositoryOwner : RepositoryId -> String
+repositoryOwner (RepositoryId value) =
+    value.owner
+
+
+repositoryShortName : RepositoryId -> String
+repositoryShortName (RepositoryId value) =
+    value.name
+
+
+filesLocation : Route.RepositoryLocation -> FilesLocation
+filesLocation location =
+    { ref = location.ref
+    , path = location.path
+    , query = location.query
+    , searchMode = location.searchMode
+    }
+
+
+commitsLocation : Route.RepositoryLocation -> CommitsLocation
+commitsLocation location =
+    { ref = location.ref }
+
+
+pullsLocation : Route.RepositoryLocation -> PullsLocation
+pullsLocation location =
+    { state = location.pullState }
+
+
+repositoryLocation : Model -> Route.RepositoryLocation
+repositoryLocation model =
+    let
+        common details =
+            { owner = repositoryOwner model.repository
+            , repository = repositoryShortName model.repository
+            , tab = details.tab
+            , ref = details.ref
+            , path = details.path
+            , query = details.query
+            , searchMode = details.searchMode
+            , pullState = details.pullState
+            }
+    in
+    case model.view of
+        Files location _ ->
+            common
+                { tab = RepositoryFiles
+                , ref = location.ref
+                , path = location.path
+                , query = location.query
+                , searchMode = location.searchMode
+                , pullState = OpenPulls
+                }
+
+        Commits location _ ->
+            common
+                { tab = RepositoryCommits
+                , ref = location.ref
+                , path = Nothing
+                , query = ""
+                , searchMode = LiteralSearch
+                , pullState = OpenPulls
+                }
+
+        PullRequests location _ ->
+            common
+                { tab = RepositoryPulls
+                , ref = Nothing
+                , path = Nothing
+                , query = ""
+                , searchMode = LiteralSearch
+                , pullState = location.state
+                }
 
 
 branchNameString : BranchName -> String
@@ -379,8 +476,8 @@ mapFilesView transform =
 mapCommitsView : (Remote SnapshotIdentity ApiError Repository.Commits -> Remote SnapshotIdentity ApiError Repository.Commits) -> Model -> Model
 mapCommitsView transform model =
     case model.view of
-        Commits (CommitsRemote commits) ->
-            { model | view = Commits (CommitsRemote (transform commits)) }
+        Commits location (CommitsRemote commits) ->
+            { model | view = Commits location (CommitsRemote (transform commits)) }
 
         _ ->
             model
@@ -389,8 +486,8 @@ mapCommitsView transform model =
 mapPullsView : (RepositoryPulls.Model -> RepositoryPulls.Model) -> Model -> Model
 mapPullsView transform model =
     case model.view of
-        PullRequests (PullsState pulls) ->
-            { model | view = PullRequests (PullsState (transform pulls)) }
+        PullRequests location (PullsState pulls) ->
+            { model | view = PullRequests location (PullsState (transform pulls)) }
 
         _ ->
             model
@@ -438,6 +535,9 @@ update msg model =
 
                     else
                         let
+                            activeLocation =
+                                repositoryLocation model
+
                             repository =
                                 snapshotRepository request.identity
 
@@ -449,9 +549,9 @@ update msg model =
                                     (repositoryIdString repository)
                                     (oidString oid)
                                     files
-                                    model.location.path
-                                    model.location.query
-                                    model.location.searchMode
+                                    activeLocation.path
+                                    activeLocation.query
+                                    activeLocation.searchMode
 
                             source =
                                 request.source
@@ -469,7 +569,7 @@ update msg model =
                             ready =
                                 { model | local = LocalReady snapshot }
                         in
-                        activateLocation model.location ready
+                        activateLocation activeLocation ready
 
                 _ ->
                     unchanged model
@@ -619,7 +719,7 @@ update msg model =
                             Nothing
                             (RepositoryFiles.searchDraft snapshot.files)
                             (RepositoryFiles.searchMode snapshot.files)
-                            model.location.pullState
+                            (repositoryLocation model).pullState
                         )
                     )
 
@@ -627,13 +727,21 @@ update msg model =
                     unchanged model
 
         SelectedTab tab ->
-            ( model, Effect.PushUrl (repositoryPath model tab Nothing "" LiteralSearch model.location.pullState) )
+            ( model, Effect.PushUrl (repositoryPath model tab Nothing "" LiteralSearch (repositoryLocation model).pullState) )
 
         SelectedFile path ->
-            ( model, Effect.PushUrl (repositoryPath model RepositoryFiles (Just path) model.location.query model.location.searchMode model.location.pullState) )
+            let
+                current =
+                    repositoryLocation model
+            in
+            ( model, Effect.PushUrl (repositoryPath model RepositoryFiles (Just path) current.query current.searchMode current.pullState) )
 
         ClosedFile ->
-            ( model, Effect.PushUrl (repositoryPath model RepositoryFiles Nothing model.location.query model.location.searchMode model.location.pullState) )
+            let
+                current =
+                    repositoryLocation model
+            in
+            ( model, Effect.PushUrl (repositoryPath model RepositoryFiles Nothing current.query current.searchMode current.pullState) )
 
         ToggledFolder path ->
             ( mapFilesView (RepositoryFiles.toggleFolder path) model, Effect.none )
@@ -643,7 +751,7 @@ update msg model =
 
         RequestedMorePulls ->
             case model.view of
-                PullRequests (PullsState pulls) ->
+                PullRequests _ (PullsState pulls) ->
                     case RepositoryPulls.more pulls of
                         Just ( updated, request ) ->
                             ( mapPullsView (always updated) model, loadPullRequests request )
@@ -712,9 +820,9 @@ update msg model =
             ( model
             , Effect.PushUrl
                 ("/"
-                    ++ Url.percentEncode model.location.owner
+                    ++ Url.percentEncode (repositoryOwner model.repository)
                     ++ "/"
-                    ++ Url.percentEncode model.location.repository
+                    ++ Url.percentEncode (repositoryShortName model.repository)
                     ++ "/commit/"
                     ++ Url.percentEncode commit.sha
                 )
@@ -747,13 +855,15 @@ beginSnapshot sourceRequest status model =
             , completion = completion
             }
 
-        currentLocation =
-            model.location
+        updatedModel =
+            model
+                |> setViewRef (branchNameString branch)
+                |> (\current -> { current | local = LocalResolving (LoadSnapshot request) })
 
         location =
-            { currentLocation | ref = Just (branchNameString branch) }
+            repositoryLocation updatedModel
     in
-    ( { model | location = location, local = LocalResolving (LoadSnapshot request) }
+    ( updatedModel
     , Effect.batch
         [ Api.fetchRepositoryFiles
             (repositoryIdString repository)
@@ -763,6 +873,19 @@ beginSnapshot sourceRequest status model =
         , Effect.ReplaceUrl (Route.toPath (Route.Repository location))
         ]
     )
+
+
+setViewRef : String -> Model -> Model
+setViewRef reference model =
+    case model.view of
+        Files location state ->
+            { model | view = Files { location | ref = Just reference } state }
+
+        Commits location state ->
+            { model | view = Commits { location | ref = Just reference } state }
+
+        PullRequests _ _ ->
+            model
 
 
 checkoutRevision : Checkout -> ( BranchName, Oid )
@@ -919,16 +1042,19 @@ unchanged model =
 repositoryPath : Model -> RepositoryTab -> Maybe String -> String -> SearchMode -> PullRequestState -> String
 repositoryPath model tab path query mode pullState =
     let
+        current =
+            repositoryLocation model
+
         activeRef =
             readySnapshot model
                 |> Maybe.map (.branch >> branchNameString)
                 |> Maybe.map Just
-                |> Maybe.withDefault model.location.ref
+                |> Maybe.withDefault current.ref
     in
     Route.toPath
         (Route.Repository
-            { owner = model.location.owner
-            , repository = model.location.repository
+            { owner = repositoryOwner model.repository
+            , repository = repositoryShortName model.repository
             , tab = tab
             , ref =
                 if tab == RepositoryPulls then
@@ -948,9 +1074,22 @@ toolbar : Model -> List (Html Msg)
 toolbar model =
     ToolbarView.view
         { repository = repositoryName model
-        , activeTab = model.location.tab
+        , activeTab = repositoryViewTab model.view
         , selectedTab = SelectedTab
         }
+
+
+repositoryViewTab : RepositoryView -> RepositoryTab
+repositoryViewTab repositoryView =
+    case repositoryView of
+        Files _ _ ->
+            RepositoryFiles
+
+        Commits _ _ ->
+            RepositoryCommits
+
+        PullRequests _ _ ->
+            RepositoryPulls
 
 
 searchForm : Model -> Html Msg
@@ -962,7 +1101,7 @@ searchForm model =
                     RepositoryFiles.searchMode snapshot.files
             in
             form
-                [ class ("repository-search" ++ activeClass (model.location.tab /= RepositoryFiles))
+                [ class "repository-search"
                 , onSubmit SubmittedSearch
                 ]
                 [ div [ class "search-mode-picker", attribute "role" "group", attribute "aria-label" "Search mode" ]
@@ -1000,43 +1139,44 @@ searchModeButton short labelText mode active =
 view : Bool -> Model -> Html Msg
 view syntaxHighlighting model =
     main_ [ class "repository-shell" ]
-        [ if model.location.tab == RepositoryFiles then
-            div [ class "repository-context-bar" ] [ searchForm model ]
+        [ case model.view of
+            Files _ _ ->
+                div [ class "repository-context-bar" ] [ searchForm model ]
 
-          else
-            text ""
+            _ ->
+                text ""
         , SourceControlView.view
             { state = localSourceControl model
             , selectedBranch = SelectedBranch
             , requestedRefresh = RequestedSourceRefresh
             , requestedPull = RequestedPull
             }
-        , case model.location.tab of
-            RepositoryPulls ->
-                pullsView model
+        , case model.view of
+            PullRequests location state ->
+                pullsView location state model
 
-            RepositoryCommits ->
-                commitsView model
+            Commits _ state ->
+                commitsView state model
 
-            RepositoryFiles ->
-                filesView syntaxHighlighting model
+            Files location _ ->
+                filesView syntaxHighlighting location model
         ]
 
 
-filesView : Bool -> Model -> Html Msg
-filesView syntaxHighlighting model =
-    FilesView.view { state = filesViewState syntaxHighlighting model }
+filesView : Bool -> FilesLocation -> Model -> Html Msg
+filesView syntaxHighlighting location model =
+    FilesView.view { state = filesViewState syntaxHighlighting location model }
 
 
-filesViewState : Bool -> Model -> FilesView.State Msg
-filesViewState syntaxHighlighting model =
+filesViewState : Bool -> FilesLocation -> Model -> FilesView.State Msg
+filesViewState syntaxHighlighting location model =
     case model.local of
         LocalReady snapshot ->
             FilesView.FilesReady
                 { syntaxHighlighting = syntaxHighlighting
-                , selectedPath = model.location.path
-                , query = model.location.query
-                , searchMode = model.location.searchMode
+                , selectedPath = location.path
+                , query = location.query
+                , searchMode = location.searchMode
                 , files = snapshot.files
                 , selectedFile = SelectedFile
                 , closedFile = ClosedFile
@@ -1047,43 +1187,35 @@ filesViewState syntaxHighlighting model =
             FilesView.LocalUnavailable (localUnavailable "Reading repository files…" model)
 
 
-commitsView : Model -> Html Msg
-commitsView model =
+commitsView : CommitsState -> Model -> Html Msg
+commitsView state model =
     CommitsView.view
-        { state = commitsViewState model
+        { state = commitsViewState state model
         , selectedCommit = SelectedCommit
         }
 
 
-commitsViewState : Model -> CommitsView.State SnapshotIdentity Msg
-commitsViewState model =
-    case model.view of
-        Commits (CommitsRemote remote) ->
+commitsViewState : CommitsState -> Model -> CommitsView.State SnapshotIdentity Msg
+commitsViewState state model =
+    case state of
+        CommitsRemote remote ->
             CommitsView.CommitsRemote remote
 
-        Commits CommitsWaiting ->
+        CommitsWaiting ->
             CommitsView.LocalUnavailable (localUnavailable "Loading commits…" model)
 
-        _ ->
-            CommitsView.LocalUnavailable (LocalView.Resolving "Loading commits…" "Resolving an immutable local Git revision.")
 
-
-pullsView : Model -> Html Msg
-pullsView model =
-    case model.view of
-        PullRequests (PullsState pulls) ->
-            PullRequestsView.view
-                { repository = repositoryName model
-                , owner = model.location.owner
-                , name = model.location.repository
-                , activeState = model.location.pullState
-                , pulls = pulls
-                , selectedState = SelectedPullState
-                , requestedMore = RequestedMorePulls
-                }
-
-        _ ->
-            text ""
+pullsView : PullsLocation -> PullsState -> Model -> Html Msg
+pullsView location (PullsState pulls) model =
+    PullRequestsView.view
+        { repository = repositoryName model
+        , owner = repositoryOwner model.repository
+        , name = repositoryShortName model.repository
+        , activeState = location.state
+        , pulls = pulls
+        , selectedState = SelectedPullState
+        , requestedMore = RequestedMorePulls
+        }
 
 
 localUnavailable : String -> Model -> LocalView.Unavailable Msg

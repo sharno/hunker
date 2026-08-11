@@ -43,6 +43,9 @@
 - A repository page owns exactly one active `RepositoryView`. Route changes and
   clone completion reconstruct that view with named request identities so late
   file, search, commit, or pull responses cannot populate a different tab.
+- Each `RepositoryView` constructor owns its route-specific location together
+  with its state. Derive the canonical `RepositoryLocation` from that ADT; do
+  not store a parallel page location or tab discriminator.
 - Keep repository file/search, pull-list, and source-control transitions in
   `Hunker.Repository.*`; the page coordinates effects and routing instead of
   rebuilding those state machines as one flat record.
