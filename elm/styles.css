@@ -826,11 +826,6 @@
     @apply min-w-0 overflow-hidden rounded-xl border border-line bg-paper shadow-sm;
   }
 
-  .review-diffs.full-diff .diff-panel {
-    content-visibility: auto;
-    contain-intrinsic-block-size: auto 480px;
-  }
-
   .diff-panel.is-active {
     @apply border-lime-dark opacity-75;
   }
@@ -907,6 +902,10 @@
 
   .hunk-header code {
     @apply truncate text-[11px];
+  }
+
+  .diff-line-chunk {
+    content-visibility: auto;
   }
 
   .split-row {

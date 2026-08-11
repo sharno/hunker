@@ -93,6 +93,12 @@
 - Prepare immutable hunks when a diff loads and index inline ranges by side and
   line before rendering. Never parse patches or linearly scan all word-diff rows
   inside a per-line view function.
+- Index syntax highlights and fold coverage by line while decoding the typed
+  source presentation. Per-line rendering must not scan a file-wide annotation
+  list.
+- Preserve native browser Find on large diffs. Use bounded DOM chunks with
+  `content-visibility: auto` to defer layout and paint while keeping every line
+  searchable; do not window diff text out of the DOM.
 - Derive syntax spans and AST fold regions from the Rust revision's retained
   Tree-sitter forest. Elm renders the typed character ranges and owns only the
   collapsed fold identities; do not parse source syntax in the browser.

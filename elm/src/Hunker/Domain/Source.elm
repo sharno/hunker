@@ -10,13 +10,13 @@ module Hunker.Domain.Source exposing
     , filePresentation
     , foldAt
     , foldKey
-    , folds
     , highlightClass
     , highlightsAt
     , isLineHidden
     , unsupported
     )
 
+import Dict exposing (Dict)
 import Json.Decode as Decode exposing (Decoder)
 
 
@@ -26,9 +26,9 @@ type Presentation
 
 
 type alias Details =
-    { language : String
-    , highlights : List HighlightSpan
-    , folds : List FoldRegion
+    { highlightsByLine : Dict Int (List HighlightSpan)
+    , foldsByStartLine : Dict Int (List FoldRegion)
+    , foldsByCoveredLine : Dict Int (List FoldRegion)
     }
 
 
@@ -108,17 +108,8 @@ highlightsAt : Int -> Presentation -> List HighlightSpan
 highlightsAt line presentation =
     case presentation of
         Complete details ->
-            List.filter (.line >> (==) line) details.highlights
-
-        Unsupported _ ->
-            []
-
-
-folds : Presentation -> List FoldRegion
-folds presentation =
-    case presentation of
-        Complete details ->
-            details.folds
+            Dict.get line details.highlightsByLine
+                |> Maybe.withDefault []
 
         Unsupported _ ->
             []
@@ -126,10 +117,16 @@ folds presentation =
 
 foldAt : Int -> Presentation -> Maybe FoldRegion
 foldAt line presentation =
-    folds presentation
-        |> List.filter (.startLine >> (==) line)
-        |> List.sortBy (\region -> region.startLine - region.endLine)
-        |> List.head
+    case presentation of
+        Complete details ->
+            details.foldsByStartLine
+                |> Dict.get line
+                |> Maybe.withDefault []
+                |> List.sortBy (\region -> region.startLine - region.endLine)
+                |> List.head
+
+        Unsupported _ ->
+            Nothing
 
 
 foldKey : String -> FoldRegion -> String
@@ -139,15 +136,15 @@ foldKey namespace fold =
 
 isLineHidden : (String -> Bool) -> String -> Int -> Presentation -> Bool
 isLineHidden isCollapsed namespace line presentation =
-    folds presentation
-        |> List.any
-            (\region ->
-                isCollapsed (foldKey namespace region)
-                    && line
-                    > region.startLine
-                    && line
-                    <= region.endLine
-            )
+    case presentation of
+        Complete details ->
+            details.foldsByCoveredLine
+                |> Dict.get line
+                |> Maybe.withDefault []
+                |> List.any (foldKey namespace >> isCollapsed)
+
+        Unsupported _ ->
+            False
 
 
 highlightClass : HighlightKind -> String
@@ -215,10 +212,44 @@ decoder =
 
 detailsDecoder : Decoder Details
 detailsDecoder =
-    Decode.map3 Details
+    Decode.map3 prepareDetails
         (Decode.field "language" Decode.string)
         (Decode.field "highlights" (Decode.list highlightDecoder))
         (Decode.field "folds" (Decode.list foldDecoder))
+
+
+prepareDetails : String -> List HighlightSpan -> List FoldRegion -> Details
+prepareDetails _ highlights folds_ =
+    { highlightsByLine = indexHighlights highlights
+    , foldsByStartLine = indexFoldStarts folds_
+    , foldsByCoveredLine = indexFoldCoverage folds_
+    }
+
+
+indexHighlights : List HighlightSpan -> Dict Int (List HighlightSpan)
+indexHighlights =
+    List.foldr
+        (\highlight -> Dict.update highlight.line (Maybe.withDefault [] >> (::) highlight >> Just))
+        Dict.empty
+
+
+indexFoldStarts : List FoldRegion -> Dict Int (List FoldRegion)
+indexFoldStarts =
+    List.foldr
+        (\fold -> Dict.update fold.startLine (Maybe.withDefault [] >> (::) fold >> Just))
+        Dict.empty
+
+
+indexFoldCoverage : List FoldRegion -> Dict Int (List FoldRegion)
+indexFoldCoverage =
+    List.foldl
+        (\fold indexed ->
+            List.range (fold.startLine + 1) fold.endLine
+                |> List.foldl
+                    (\line -> Dict.update line (Maybe.withDefault [] >> (::) fold >> Just))
+                    indexed
+        )
+        Dict.empty
 
 
 highlightDecoder : Decoder HighlightSpan

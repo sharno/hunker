@@ -60,10 +60,16 @@ const reviewResponse = {
 test.beforeEach(async ({ page }) => {
   await page.route("**/api/settings", async (route) => {
     if (route.request().method() === "PUT") {
+      const payload: { settings: typeof settings } = route
+        .request()
+        .postDataJSON();
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        json: settingsDocument,
+        json: {
+          settings: payload.settings,
+          configPath: settingsDocument.configPath,
+        },
       });
       return;
     }
@@ -294,24 +300,6 @@ test("shows loading instead of stale review data and preserves a single fetched 
   await expect(page.locator(".review-diffs.full-diff .diff-panel")).toHaveCount(
     2,
   );
-  const hasDeferredPanelRule = await page.evaluate(() => {
-    const isGroupingRule = (rule: CSSRule): rule is CSSGroupingRule =>
-      "cssRules" in rule;
-    const includesRule = (rules: CSSRuleList): boolean =>
-      Array.from(rules).some((rule) => {
-        if (rule instanceof CSSStyleRule) {
-          return (
-            rule.selectorText === ".review-diffs.full-diff .diff-panel" &&
-            rule.style.contentVisibility === "auto"
-          );
-        }
-        return isGroupingRule(rule) && includesRule(rule.cssRules);
-      });
-    return Array.from(document.styleSheets).some((sheet) =>
-      includesRule(sheet.cssRules),
-    );
-  });
-  expect(hasDeferredPanelRule).toBe(true);
   const toolbar = page.locator(".compact-review-toolbar");
   const toolbarHeight = await toolbar.evaluate(
     (element) => element.getBoundingClientRect().height,
@@ -386,6 +374,51 @@ test("does not poll mutable revision state for an immutable commit", async ({
   expect(revisionRequests).toBe(0);
   expect(analysisRequests).toBe(1);
   await expect(page.locator(".revision-notice")).toHaveCount(0);
+});
+
+test("keeps every deferred diff line available to native browser Find", async ({
+  page,
+}) => {
+  const lines = Array.from({ length: 480 }, (_, index) =>
+    index === 479
+      ? 'export const browserFindNeedle = "last deferred line";'
+      : `export const generatedLine${index} = ${index};`,
+  );
+  await page.route("**/api/diff?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: {
+        ...reviewResponse,
+        files: [
+          {
+            path: "src/generated.ts",
+            previousPath: null,
+            status: "added",
+            additions: lines.length,
+            deletions: 0,
+            patch: `@@ -0,0 +1,${lines.length} @@\n${lines.map((line) => `+${line}`).join("\n")}`,
+          },
+        ],
+      },
+    }),
+  );
+  await mockReviewAnalysis(page);
+
+  await page.goto("/example/hunker/pull/42/files/src/generated.ts");
+  await expect(page.locator(".diff-line-chunk")).toHaveCount(3);
+  await expect(page.locator(".diff-line-chunk").last()).toHaveCSS(
+    "content-visibility",
+    "auto",
+  );
+  const found = await page.evaluate(() => {
+    const find = Reflect.get(window, "find");
+    return (
+      typeof find === "function" &&
+      Reflect.apply(find, window, ["browserFindNeedle"]) === true
+    );
+  });
+  expect(found).toBe(true);
 });
 
 test("posts an inline line comment through the real browser Fetch transport", async ({

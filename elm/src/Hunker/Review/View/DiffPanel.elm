@@ -2,7 +2,7 @@ module Hunker.Review.View.DiffPanel exposing (Actions, Config, fileAnchor, view)
 
 import Dict
 import Html exposing (Html, a, article, button, code, div, footer, header, section, span, strong, text)
-import Html.Attributes exposing (attribute, class, href, id, type_)
+import Html.Attributes exposing (attribute, class, href, id, style, type_)
 import Html.Events exposing (onClick)
 import Hunker.ApiError as ApiError exposing (ApiError)
 import Hunker.Diff as Diff exposing (DiffLine, Hunk, Kind(..), SideLine, SplitRow)
@@ -259,10 +259,10 @@ hunkView config file hunk =
             text ""
 
           else if config.settings.viewMode == Split then
-            div [ class "split-lines" ] (List.map (splitRowView config file) (Diff.splitRows config.settings.ignoreWhitespace hunk))
+            chunkedLines "split-lines" (List.map (splitRowView config file) (Diff.splitRows config.settings.ignoreWhitespace hunk))
 
           else
-            div [ class "unified-lines" ] (List.map (unifiedLineView config file) hunk.lines)
+            chunkedLines "unified-lines" (List.map (unifiedLineView config file) hunk.lines)
         ]
 
 
@@ -452,17 +452,46 @@ fullFileDiff config file full =
             Diff.fullFileRowsPrepared (preparedHunks config file.path) full.oldText full.newText
     in
     div [ class "full-file-diff" ]
-        (if config.settings.viewMode == Split then
+        [ if config.settings.viewMode == Split then
             rows
                 |> List.filter (fullRowVisible config file.path (fullPresentation full.presentation))
                 |> List.map (splitRowViewWith config file (fullPresentation full.presentation))
+                |> chunkedLines "split-lines"
 
-         else
+          else
             rows
                 |> List.concatMap fullUnifiedLines
                 |> List.filter (fullLineVisible config file.path (fullPresentation full.presentation))
                 |> List.map (unifiedLineViewWith config file (fullPresentation full.presentation))
+                |> chunkedLines "unified-lines"
+        ]
+
+
+chunkedLines : String -> List (Html msg) -> Html msg
+chunkedLines className lines =
+    div [ class className ]
+        (lines
+            |> chunksOf 160
+            |> List.map
+                (\chunk ->
+                    div
+                        [ class "diff-line-chunk"
+                        , style "contain-intrinsic-block-size"
+                            ("auto " ++ String.fromInt (List.length chunk * 28) ++ "px")
+                        ]
+                        chunk
+                )
         )
+
+
+chunksOf : Int -> List value -> List (List value)
+chunksOf size remaining =
+    case remaining of
+        [] ->
+            []
+
+        _ ->
+            List.take size remaining :: chunksOf size (List.drop size remaining)
 
 
 fullRowVisible : Config msg -> String -> (CommentSide -> Presentation) -> SplitRow -> Bool
