@@ -28,9 +28,9 @@ type alias Actions msg =
     }
 
 
-lineThreads : Actions msg -> Collaboration.Model -> Remote request ApiError (List ReviewComment) -> String -> CommentSide -> Int -> Html msg
-lineThreads actions collaboration comments path side lineNumber =
-    case comments of
+lineThreads : Actions msg -> Collaboration.FileState -> String -> CommentSide -> Int -> Html msg
+lineThreads actions collaboration path side lineNumber =
+    case Collaboration.fileComments collaboration of
         Success _ values ->
             values
                 |> rootComments
@@ -42,9 +42,9 @@ lineThreads actions collaboration comments path side lineNumber =
             text ""
 
 
-detachedThreads : Actions msg -> Collaboration.Model -> Remote request ApiError (List ReviewComment) -> String -> Html msg
-detachedThreads actions collaboration comments path =
-    case comments of
+detachedThreads : Actions msg -> Collaboration.FileState -> String -> Html msg
+detachedThreads actions collaboration path =
+    case Collaboration.fileComments collaboration of
         Success _ values ->
             values
                 |> rootComments
@@ -59,7 +59,7 @@ detachedThreads actions collaboration comments path =
             text ""
 
 
-inlineComposer : Actions msg -> Collaboration.Model -> String -> String -> Html msg
+inlineComposer : Actions msg -> Collaboration.FileState -> String -> String -> Html msg
 inlineComposer actions collaboration fileAnchor path =
     case Collaboration.inlineComposer collaboration of
         Just composer ->
@@ -100,7 +100,7 @@ rootComments =
     List.filter (\comment -> comment.id == comment.rootId)
 
 
-threadView : Actions msg -> Collaboration.Model -> List ReviewComment -> ReviewComment -> Html msg
+threadView : Actions msg -> Collaboration.FileState -> List ReviewComment -> ReviewComment -> Html msg
 threadView actions collaboration comments root =
     let
         collapsed =
@@ -158,7 +158,7 @@ commentBody comment =
         ]
 
 
-replyComposer : Actions msg -> Collaboration.Model -> Int -> Html msg
+replyComposer : Actions msg -> Collaboration.FileState -> Int -> Html msg
 replyComposer actions collaboration commentId =
     form [ class "review-reply-composer", onSubmit (actions.submitReply commentId) ]
         [ textarea [ placeholder "Reply on GitHub…", value (Collaboration.replyDraft commentId collaboration), onInput (actions.changeReply commentId) ] []

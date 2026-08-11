@@ -14,6 +14,8 @@ module Hunker.Page.Review exposing
 import Html exposing (Html, a, aside, button, code, div, h1, header, main_, p, section, span, strong, text)
 import Html.Attributes exposing (attribute, class, href, type_)
 import Html.Events exposing (onClick)
+import Html.Keyed as Keyed
+import Html.Lazy as Lazy
 import Hunker.Api as Api
 import Hunker.ApiError as ApiError exposing (ApiError)
 import Hunker.Domain.Review as Review exposing (AnalysisSnapshot, CommentSide, FileChange, FileStatus(..), FullFile, PullCommit, ReviewComment, ReviewDocument, Revision(..))
@@ -91,7 +93,7 @@ type Msg
     | ToggledFullFile FileChange
     | ToggledFile String
     | ToggledHunk String String
-    | ToggledSourceFold String
+    | ToggledSourceFold String String
     | ToggledReviewed String
     | SelectedMoveTarget String String
     | CommentsLoaded Session.Id (List ReviewComment)
@@ -254,13 +256,6 @@ reviewFiles model =
 reviewCollaboration : Model -> Maybe Collaboration.Model
 reviewCollaboration model =
     readyState model |> Maybe.map .collaboration
-
-
-reviewComments : Model -> Remote Session.Id ApiError (List ReviewComment)
-reviewComments model =
-    reviewCollaboration model
-        |> Maybe.map Collaboration.comments
-        |> Maybe.withDefault NotAsked
 
 
 reviewCommits : Model -> Remote Session.Id ApiError (List PullCommit)
@@ -437,8 +432,8 @@ update settings msg model =
         ToggledHunk path hunkId ->
             ( mapDiff (DiffView.toggleHunk path hunkId) model, Effect.none )
 
-        ToggledSourceFold fold ->
-            ( mapDiff (DiffView.toggleSourceFold fold) model, Effect.none )
+        ToggledSourceFold path fold ->
+            ( mapDiff (DiffView.toggleSourceFold path fold) model, Effect.none )
 
         ToggledReviewed path ->
             ( mapDiff (DiffView.toggleReviewed path) model, Effect.none )
@@ -622,8 +617,8 @@ reviewReady settings reviewData model =
                         , session = sessionId
                         , document = reviewData
                         , analysis = Analysis.init (FileIndex.fromChanges files)
-                        , collaboration = Collaboration.init sessionId (Route.isPullRequest request.location.target)
-                        , diff = DiffView.init sessionId
+                        , collaboration = Collaboration.init sessionId (Route.isPullRequest request.location.target) (List.map .path files)
+                        , diff = DiffView.init sessionId (List.map .path files)
                         }
             }
 
@@ -1089,7 +1084,7 @@ reviewWorkspace settings model =
                     , reviewFileTree model (FileTree.build .path files)
                     ]
             ]
-        , section
+        , Keyed.node "section"
             [ class
                 ("review-diffs"
                     ++ (if settings.reviewScope == FullDiff then
@@ -1101,10 +1096,12 @@ reviewWorkspace settings model =
                 )
             ]
             (if List.isEmpty (visibleFiles settings model) then
-                [ div [ class "empty-diff" ] [ h1 [] [ text "No matching files" ], p [] [ text "Change or clear the review search." ] ] ]
+                [ ( "empty", div [ class "empty-diff" ] [ h1 [] [ text "No matching files" ], p [] [ text "Change or clear the review search." ] ] ) ]
 
              else
-                List.map (renderFileDiff settings model) (visibleFiles settings model)
+                List.map
+                    (\file -> ( file.path, renderFileDiff settings model file ))
+                    (visibleFiles settings model)
             )
         ]
 
@@ -1113,26 +1110,25 @@ renderFileDiff : Settings -> Model -> FileChange -> Html Msg
 renderFileDiff settings model file =
     case readyState model of
         Just ready ->
-            DiffPanelView.view
-                { settings = settings
-                , pullRequest = Route.isPullRequest ready.request.location.target
-                , analysis = ready.analysis
-                , diff = ready.diff
-                , collaboration = ready.collaboration
-                , comments = Collaboration.comments ready.collaboration
-                , githubFileUrl = \changedFile -> "https://github.com/" ++ ready.document.repository ++ "/blob/" ++ Review.backingHeadOid ready.document.backing ++ "/" ++ changedFile.path
-                , actions =
-                    { toggleFile = ToggledFile
-                    , toggleFullFile = ToggledFullFile
-                    , toggleReviewed = ToggledReviewed
-                    , toggleHunk = ToggledHunk
-                    , toggleSourceFold = ToggledSourceFold
-                    , selectMoveTarget = SelectedMoveTarget
-                    , openInlineComposer = OpenedInlineComposer
-                    , collaboration = collaborationActions
-                    }
-                }
-                file
+            case
+                ( FileIndex.get file.path (Analysis.files ready.analysis)
+                , DiffView.fileState file.path ready.diff
+                , Collaboration.fileState file.path ready.collaboration
+                )
+            of
+                ( Just analyzedFile, Just diffFile, Just collaborationFile ) ->
+                    Lazy.lazy8 DiffPanelView.view
+                        diffPanelActions
+                        settings
+                        (Route.isPullRequest ready.request.location.target)
+                        ("https://github.com/" ++ ready.document.repository ++ "/blob/" ++ Review.backingHeadOid ready.document.backing ++ "/" ++ file.path)
+                        (Analysis.status ready.analysis)
+                        analyzedFile
+                        diffFile
+                        collaborationFile
+
+                _ ->
+                    text ""
 
         Nothing ->
             text ""
@@ -1215,6 +1211,19 @@ collaborationActions =
     , submitInline = SubmittedInlineComment
     , changeReviewBody = ChangedReviewBody
     , submitReview = SubmittedReview
+    }
+
+
+diffPanelActions : DiffPanelView.Actions Msg
+diffPanelActions =
+    { toggleFile = ToggledFile
+    , toggleFullFile = ToggledFullFile
+    , toggleReviewed = ToggledReviewed
+    , toggleHunk = ToggledHunk
+    , toggleSourceFold = ToggledSourceFold
+    , selectMoveTarget = SelectedMoveTarget
+    , openInlineComposer = OpenedInlineComposer
+    , collaboration = collaborationActions
     }
 
 

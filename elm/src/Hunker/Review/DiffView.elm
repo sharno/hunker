@@ -1,21 +1,23 @@
 module Hunker.Review.DiffView exposing
-    ( FullFileRequest
+    ( FileState
+    , FullFileRequest
     , Model
     , SearchMode(..)
     , changeFilter
     , collapseFolder
-    , collapsedFiles
     , fileFailed
+    , fileFullFile
+    , fileIsCollapsed
+    , fileIsHunkCollapsed
+    , fileIsReviewed
+    , fileIsSourceFoldCollapsed
     , fileLoaded
+    , fileState
     , filter
     , filterMode
-    , fullFile
     , init
-    , isFileCollapsed
     , isFolderCollapsed
-    , isHunkCollapsed
     , isReviewed
-    , isSourceFoldCollapsed
     , requestPath
     , requestUrl
     , revealFile
@@ -42,15 +44,21 @@ type Model
 
 type alias Details =
     { session : Session.Id
-    , fullFiles : Dict String (Remote FullFileRequest ApiError FullFile)
+    , files : Dict String FileState
     , filter : String
     , filterMode : SearchMode
     , collapsedFolders : Set String
-    , collapsedFiles : Set String
-    , collapsedHunks : Set String
-    , reviewedFiles : Set String
-    , collapsedSourceFolds : Set String
     }
+
+
+type FileState
+    = FileState
+        { fullFile : Maybe (Remote FullFileRequest ApiError FullFile)
+        , collapsed : Bool
+        , collapsedHunks : Set String
+        , reviewed : Bool
+        , collapsedSourceFolds : Set String
+        }
 
 
 type SearchMode
@@ -62,19 +70,31 @@ type FullFileRequest
     = FullFileRequest Session.Id String
 
 
-init : Session.Id -> Model
-init session =
+init : Session.Id -> List String -> Model
+init session paths =
     Model
         { session = session
-        , fullFiles = Dict.empty
+        , files = Dict.fromList (List.map (\path -> ( path, emptyFileState )) paths)
         , filter = ""
         , filterMode = Literal
         , collapsedFolders = Set.empty
-        , collapsedFiles = Set.empty
+        }
+
+
+emptyFileState : FileState
+emptyFileState =
+    FileState
+        { fullFile = Nothing
+        , collapsed = False
         , collapsedHunks = Set.empty
-        , reviewedFiles = Set.empty
+        , reviewed = False
         , collapsedSourceFolds = Set.empty
         }
+
+
+fileState : String -> Model -> Maybe FileState
+fileState path (Model details) =
+    Dict.get path details.files
 
 
 filter : Model -> String
@@ -97,38 +117,43 @@ selectSearchMode value (Model details) =
     Model { details | filterMode = value }
 
 
-fullFile : String -> Model -> Maybe (Remote FullFileRequest ApiError FullFile)
-fullFile path (Model details) =
-    Dict.get path details.fullFiles
+fileFullFile : FileState -> Maybe (Remote FullFileRequest ApiError FullFile)
+fileFullFile (FileState state) =
+    state.fullFile
 
 
 toggleFullFile : String -> Model -> ( Model, Maybe FullFileRequest )
 toggleFullFile path ((Model details) as model) =
-    case Dict.get path details.fullFiles of
-        Just (Success _ _) ->
-            ( Model { details | fullFiles = Dict.remove path details.fullFiles }, Nothing )
-
-        Just (Loading _) ->
+    case Dict.get path details.files of
+        Nothing ->
             ( model, Nothing )
 
-        _ ->
-            let
-                request =
-                    FullFileRequest details.session path
-            in
-            ( Model { details | fullFiles = Dict.insert path (Loading request) details.fullFiles }
-            , Just request
-            )
+        Just file ->
+            case fileFullFile file of
+                Just (Success _ _) ->
+                    ( updateFile path (\(FileState state) -> FileState { state | fullFile = Nothing }) model, Nothing )
+
+                Just (Loading _) ->
+                    ( model, Nothing )
+
+                _ ->
+                    let
+                        request =
+                            FullFileRequest details.session path
+                    in
+                    ( updateFile path (\(FileState state) -> FileState { state | fullFile = Just (Loading request) }) model
+                    , Just request
+                    )
 
 
 fileLoaded : FullFileRequest -> FullFile -> Model -> Model
 fileLoaded request value =
-    mapRequest request (\details -> { details | fullFiles = Dict.insert (requestPath request) (Success request value) details.fullFiles })
+    mapRequest request (updateFileDetails (requestPath request) (\(FileState state) -> FileState { state | fullFile = Just (Success request value) }))
 
 
 fileFailed : FullFileRequest -> ApiError -> Model -> Model
 fileFailed request error =
-    mapRequest request (\details -> { details | fullFiles = Dict.insert (requestPath request) (Failure request error) details.fullFiles })
+    mapRequest request (updateFileDetails (requestPath request) (\(FileState state) -> FileState { state | fullFile = Just (Failure request error) }))
 
 
 requestUrl : FullFileRequest -> String
@@ -153,65 +178,62 @@ isFolderCollapsed path (Model details) =
 
 toggleFile : String -> Model -> Model
 toggleFile path (Model details) =
-    Model { details | collapsedFiles = toggleSet path details.collapsedFiles }
+    Model (updateFileDetails path (\(FileState state) -> FileState { state | collapsed = not state.collapsed }) details)
 
 
-isFileCollapsed : String -> Model -> Bool
-isFileCollapsed path (Model details) =
-    Set.member path details.collapsedFiles
-
-
-collapsedFiles : Model -> Set String
-collapsedFiles (Model details) =
-    details.collapsedFiles
+fileIsCollapsed : FileState -> Bool
+fileIsCollapsed (FileState state) =
+    state.collapsed
 
 
 revealFile : String -> Model -> Model
 revealFile path (Model details) =
-    Model { details | collapsedFiles = Set.remove path details.collapsedFiles }
+    Model (updateFileDetails path (\(FileState state) -> FileState { state | collapsed = False }) details)
 
 
 toggleHunk : String -> String -> Model -> Model
 toggleHunk path hunkId (Model details) =
-    Model { details | collapsedHunks = toggleSet (hunkKey path hunkId) details.collapsedHunks }
+    Model (updateFileDetails path (\(FileState state) -> FileState { state | collapsedHunks = toggleSet hunkId state.collapsedHunks }) details)
 
 
-isHunkCollapsed : String -> String -> Model -> Bool
-isHunkCollapsed path hunkId (Model details) =
-    Set.member (hunkKey path hunkId) details.collapsedHunks
+fileIsHunkCollapsed : String -> FileState -> Bool
+fileIsHunkCollapsed hunkId (FileState state) =
+    Set.member hunkId state.collapsedHunks
 
 
 toggleReviewed : String -> Model -> Model
 toggleReviewed path (Model details) =
-    let
-        reviewed =
-            Set.member path details.reviewedFiles
-    in
     Model
-        { details
-            | reviewedFiles = toggleSet path details.reviewedFiles
-            , collapsedFiles =
-                if reviewed then
-                    Set.remove path details.collapsedFiles
-
-                else
-                    Set.insert path details.collapsedFiles
-        }
+        (updateFileDetails path
+            (\(FileState state) ->
+                FileState
+                    { state
+                        | reviewed = not state.reviewed
+                        , collapsed = not state.reviewed
+                    }
+            )
+            details
+        )
 
 
 isReviewed : String -> Model -> Bool
 isReviewed path (Model details) =
-    Set.member path details.reviewedFiles
+    Dict.get path details.files |> Maybe.map fileIsReviewed |> Maybe.withDefault False
 
 
-toggleSourceFold : String -> Model -> Model
-toggleSourceFold fold (Model details) =
-    Model { details | collapsedSourceFolds = toggleSet fold details.collapsedSourceFolds }
+fileIsReviewed : FileState -> Bool
+fileIsReviewed (FileState state) =
+    state.reviewed
 
 
-isSourceFoldCollapsed : String -> Model -> Bool
-isSourceFoldCollapsed fold (Model details) =
-    Set.member fold details.collapsedSourceFolds
+toggleSourceFold : String -> String -> Model -> Model
+toggleSourceFold path fold (Model details) =
+    Model (updateFileDetails path (\(FileState state) -> FileState { state | collapsedSourceFolds = toggleSet fold state.collapsedSourceFolds }) details)
+
+
+fileIsSourceFoldCollapsed : String -> FileState -> Bool
+fileIsSourceFoldCollapsed fold (FileState state) =
+    Set.member fold state.collapsedSourceFolds
 
 
 collapseFolder : String -> Model -> Model
@@ -228,9 +250,14 @@ mapRequest (FullFileRequest requested _) transform ((Model details) as model) =
         model
 
 
-hunkKey : String -> String -> String
-hunkKey path hunkId =
-    path ++ ":" ++ hunkId
+updateFile : String -> (FileState -> FileState) -> Model -> Model
+updateFile path transform (Model details) =
+    Model (updateFileDetails path transform details)
+
+
+updateFileDetails : String -> (FileState -> FileState) -> Details -> Details
+updateFileDetails path transform details =
+    { details | files = Dict.update path (Maybe.map transform) details.files }
 
 
 toggleSet : comparable -> Set comparable -> Set comparable

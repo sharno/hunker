@@ -11,7 +11,6 @@ module Hunker.Review.Analysis exposing
     , init
     , inlineDiff
     , matches
-    , snapshot
     , status
     )
 
@@ -25,14 +24,14 @@ type State
     = Disabled FileIndex
     | InFlight Identity FileIndex
     | Failure Identity ApiError FileIndex
-    | Complete Identity AnalysisSnapshot FileIndex
+    | Complete Identity FileIndex
 
 
 type Status
     = AnalysisDisabled
     | AnalysisInFlight
     | AnalysisFailure ApiError
-    | AnalysisComplete AnalysisSnapshot
+    | AnalysisComplete
 
 
 type Identity
@@ -78,7 +77,7 @@ inFlight requested state =
 complete : Identity -> AnalysisSnapshot -> State -> State
 complete requested value state =
     if matches requested state then
-        Complete requested value (FileIndex.withAnalysis value (files state))
+        Complete requested (FileIndex.withAnalysis value (files state))
 
     else
         state
@@ -102,7 +101,7 @@ matches requested state =
         Failure current _ _ ->
             current == requested
 
-        Complete current _ _ ->
+        Complete current _ ->
             current == requested
 
         Disabled _ ->
@@ -112,16 +111,6 @@ matches requested state =
 inlineDiff : Identity -> InlineDiffMode
 inlineDiff (Identity details) =
     details.inlineDiff
-
-
-snapshot : State -> Maybe AnalysisSnapshot
-snapshot state =
-    case state of
-        Complete _ value _ ->
-            Just value
-
-        _ ->
-            Nothing
 
 
 files : State -> FileIndex
@@ -136,7 +125,7 @@ files state =
         Failure _ _ value ->
             value
 
-        Complete _ _ value ->
+        Complete _ value ->
             value
 
 
@@ -152,5 +141,5 @@ status state =
         Failure _ error _ ->
             AnalysisFailure error
 
-        Complete _ value _ ->
-            AnalysisComplete value
+        Complete _ _ ->
+            AnalysisComplete

@@ -1,4 +1,4 @@
-module Hunker.Review.View.DiffPanel exposing (Actions, Config, fileAnchor, view)
+module Hunker.Review.View.DiffPanel exposing (Actions, fileAnchor, view)
 
 import Dict
 import Html exposing (Html, a, article, button, code, div, footer, header, section, span, strong, text)
@@ -26,7 +26,7 @@ type alias Actions msg =
     , toggleFullFile : FileChange -> msg
     , toggleReviewed : String -> msg
     , toggleHunk : String -> String -> msg
-    , toggleSourceFold : String -> msg
+    , toggleSourceFold : String -> String -> msg
     , selectMoveTarget : String -> String -> msg
     , openInlineComposer : String -> Int -> CommentSide -> msg
     , collaboration : CollaborationView.Actions msg
@@ -36,26 +36,40 @@ type alias Actions msg =
 type alias Config msg =
     { settings : Settings
     , pullRequest : Bool
-    , analysis : Analysis.State
-    , diff : DiffView.Model
-    , collaboration : Collaboration.Model
-    , comments : Remote Session.Id ApiError (List ReviewComment)
-    , githubFileUrl : FileChange -> String
+    , analysis : Analysis.Status
+    , file : FileIndex.File
+    , diff : DiffView.FileState
+    , collaboration : Collaboration.FileState
+    , githubFileUrl : String
     , actions : Actions msg
     }
 
 
-view : Config msg -> FileChange -> Html msg
-view config file =
+view : Actions msg -> Settings -> Bool -> String -> Analysis.Status -> FileIndex.File -> DiffView.FileState -> Collaboration.FileState -> Html msg
+view actions settings pullRequest githubFileUrl analysis fileModel diff collaboration =
     let
+        config =
+            { settings = settings
+            , pullRequest = pullRequest
+            , analysis = analysis
+            , file = fileModel
+            , diff = diff
+            , collaboration = collaboration
+            , githubFileUrl = githubFileUrl
+            , actions = actions
+            }
+
+        file =
+            FileIndex.change fileModel
+
         collapsed =
-            DiffView.isFileCollapsed file.path config.diff
+            DiffView.fileIsCollapsed config.diff
 
         fullFile =
-            DiffView.fullFile file.path config.diff
+            DiffView.fileFullFile config.diff
 
         reviewed =
-            DiffView.isReviewed file.path config.diff
+            DiffView.fileIsReviewed config.diff
     in
     article [ class ("diff-panel" ++ activeClass reviewed), id (fileAnchor file.path) ]
         [ header [ class "diff-file-header" ]
@@ -89,7 +103,7 @@ view config file =
                                 "Full file"
                         )
                     ]
-                , a [ href (config.githubFileUrl file), attribute "title" "Open on GitHub" ] [ text "↗" ]
+                , a [ href config.githubFileUrl, attribute "title" "Open on GitHub" ] [ text "↗" ]
                 , button [ type_ "button", onClick (config.actions.toggleReviewed file.path) ]
                     [ text
                         (if reviewed then
@@ -116,12 +130,12 @@ view config file =
 
                     _ ->
                         patchDiff config file
-                , CollaborationView.detachedThreads config.actions.collaboration config.collaboration config.comments file.path
+                , CollaborationView.detachedThreads config.actions.collaboration config.collaboration file.path
                 , CollaborationView.inlineComposer config.actions.collaboration config.collaboration (fileAnchor file.path) file.path
                 , footer [ class "diff-footer" ]
                     [ span [] [ text "End of patch" ]
                     , if config.pullRequest then
-                        button [ type_ "button", onClick (config.actions.openInlineComposer file.path (lastNewLine config file.path) RightSide) ] [ text "+ Add a review comment" ]
+                        button [ type_ "button", onClick (config.actions.openInlineComposer file.path (lastNewLine config) RightSide) ] [ text "+ Add a review comment" ]
 
                       else
                         text ""
@@ -136,16 +150,15 @@ semanticSummary config file =
         text ""
 
     else
-        case Analysis.status config.analysis of
+        case config.analysis of
             Analysis.AnalysisInFlight ->
                 div [ class "semantic-banner is-loading" ] [ span [ class "loading-spinner" ] [], text "Analyzing syntax tree…" ]
 
             Analysis.AnalysisFailure error ->
                 div [ class "semantic-banner is-error" ] [ text (ApiError.message error) ]
 
-            Analysis.AnalysisComplete snapshot ->
-                snapshot.files
-                    |> Dict.get file.path
+            Analysis.AnalysisComplete ->
+                FileIndex.analysis config.file
                     |> Maybe.map (.semantic >> semanticFeatureView)
                     |> Maybe.withDefault (text "")
 
@@ -233,14 +246,14 @@ patchDiff config file =
                 "unified-diff"
             )
         ]
-        (List.map (hunkView config file) (preparedHunks config file.path))
+        (List.map (hunkView config file) (preparedHunks config))
 
 
 hunkView : Config msg -> FileChange -> Hunk -> Html msg
 hunkView config file hunk =
     let
         collapsed =
-            DiffView.isHunkCollapsed file.path hunk.id config.diff
+            DiffView.fileIsHunkCollapsed hunk.id config.diff
     in
     section [ class "diff-hunk" ]
         [ button [ type_ "button", class "hunk-header", onClick (config.actions.toggleHunk file.path hunk.id) ]
@@ -291,11 +304,11 @@ splitCell config file side sideClass presentation maybeLine =
                     Maybe.withDefault 0 line.number
 
                 decoration =
-                    moveDecoration config file.path side number
+                    moveDecoration config side number
 
                 foldedAway =
                     Source.isLineHidden
-                        (\fold -> DiffView.isSourceFoldCollapsed fold config.diff)
+                        (\fold -> DiffView.fileIsSourceFoldCollapsed fold config.diff)
                         (sourceNamespace file.path side)
                         number
                         presentation
@@ -313,7 +326,7 @@ splitCell config file side sideClass presentation maybeLine =
                             ++ foldSummary config file.path side presentation number
                         )
                     , decoration.button
-                    , CollaborationView.lineThreads config.actions.collaboration config.collaboration config.comments file.path side number
+                    , CollaborationView.lineThreads config.actions.collaboration config.collaboration file.path side number
                     ]
 
 
@@ -340,7 +353,7 @@ unifiedLineViewWith config file sourceForSide line =
                 Maybe.withDefault 0 line.newLine
 
         decoration =
-            moveDecoration config file.path side number
+            moveDecoration config side number
 
         presentation =
             sourceForSide side
@@ -354,7 +367,7 @@ unifiedLineViewWith config file sourceForSide line =
                 ++ foldSummary config file.path side presentation number
             )
         , decoration.button
-        , CollaborationView.lineThreads config.actions.collaboration config.collaboration config.comments file.path side number
+        , CollaborationView.lineThreads config.actions.collaboration config.collaboration file.path side number
         ]
 
 
@@ -362,8 +375,8 @@ type alias MoveDecoration msg =
     { className : String, anchorId : String, button : Html msg }
 
 
-moveDecoration : Config msg -> String -> CommentSide -> Int -> MoveDecoration msg
-moveDecoration config path side lineNumber =
+moveDecoration : Config msg -> CommentSide -> Int -> MoveDecoration msg
+moveDecoration config side lineNumber =
     let
         endpoint =
             if side == LeftSide then
@@ -373,12 +386,7 @@ moveDecoration config path side lineNumber =
                 Destination
 
         move =
-            case Analysis.status config.analysis of
-                Analysis.AnalysisComplete snapshot ->
-                    List.filter (SemanticMove.containsLine path lineNumber endpoint) snapshot.moves |> List.head
-
-                _ ->
-                    Nothing
+            FileIndex.moveAt endpoint lineNumber config.file
     in
     case move of
         Nothing ->
@@ -431,25 +439,20 @@ lineNumberButton config path side number maybeNumberValue =
 
 highlightedLine : Config msg -> String -> CommentSide -> Presentation -> Int -> String -> List (Html msg)
 highlightedLine config path side presentation number source =
-    case FileIndex.get path (Analysis.files config.analysis) of
-        Just prepared ->
-            SourceView.line
-                config.settings.syntaxHighlighting
-                path
-                presentation
-                number
-                source
-                (PreparedDiff.rangesFor side number prepared)
-
-        Nothing ->
-            SourceView.line config.settings.syntaxHighlighting path presentation number source []
+    SourceView.line
+        config.settings.syntaxHighlighting
+        path
+        presentation
+        number
+        source
+        (PreparedDiff.rangesFor side number (FileIndex.prepared config.file))
 
 
 fullFileDiff : Config msg -> FileChange -> FullFile -> Html msg
 fullFileDiff config file full =
     let
         rows =
-            Diff.fullFileRowsPrepared (preparedHunks config file.path) full.oldText full.newText
+            Diff.fullFileRowsPrepared (preparedHunks config) full.oldText full.newText
     in
     div [ class "full-file-diff" ]
         [ if config.settings.viewMode == Split then
@@ -505,7 +508,7 @@ fullRowVisible config path sourceForSide row =
                         (\number ->
                             not
                                 (Source.isLineHidden
-                                    (\fold -> DiffView.isSourceFoldCollapsed fold config.diff)
+                                    (\fold -> DiffView.fileIsSourceFoldCollapsed fold config.diff)
                                     (sourceNamespace path side)
                                     number
                                     (sourceForSide side)
@@ -537,7 +540,7 @@ fullLineVisible config path sourceForSide line =
             (\value ->
                 not
                     (Source.isLineHidden
-                        (\fold -> DiffView.isSourceFoldCollapsed fold config.diff)
+                        (\fold -> DiffView.fileIsSourceFoldCollapsed fold config.diff)
                         (sourceNamespace path side)
                         value
                         (sourceForSide side)
@@ -558,7 +561,7 @@ foldMarker config path side presentation number kind =
                     Source.foldKey (sourceNamespace path side) fold
 
                 collapsed =
-                    DiffView.isSourceFoldCollapsed key config.diff
+                    DiffView.fileIsSourceFoldCollapsed key config.diff
             in
             button
                 [ type_ "button"
@@ -572,7 +575,7 @@ foldMarker config path side presentation number kind =
                      )
                         ++ fold.label
                     )
-                , onClick (config.actions.toggleSourceFold key)
+                , onClick (config.actions.toggleSourceFold path key)
                 ]
                 [ text
                     (if collapsed then
@@ -589,7 +592,7 @@ foldSummary config path side presentation number =
     Source.foldAt number presentation
         |> Maybe.andThen
             (\fold ->
-                if DiffView.isSourceFoldCollapsed (Source.foldKey (sourceNamespace path side) fold) config.diff then
+                if DiffView.fileIsSourceFoldCollapsed (Source.foldKey (sourceNamespace path side) fold) config.diff then
                     Just
                         (span [ class "source-fold-summary" ]
                             [ text (" … " ++ String.fromInt (fold.endLine - fold.startLine) ++ " lines") ]
@@ -616,13 +619,12 @@ sourceNamespace path side =
 
 analysisPresentation : Config msg -> String -> CommentSide -> Presentation
 analysisPresentation config path side =
-    case Analysis.status config.analysis of
-        Analysis.AnalysisComplete snapshot ->
-            snapshot.files
-                |> Dict.get path
+    case config.analysis of
+        Analysis.AnalysisComplete ->
+            FileIndex.analysis config.file
                 |> Maybe.andThen
-                    (\file ->
-                        case file.syntax of
+                    (\analyzed ->
+                        case analyzed.syntax of
                             FeatureComplete presentation ->
                                 Just (presentationForSide side presentation)
 
@@ -672,14 +674,14 @@ fullUnifiedLines row =
             []
 
 
-preparedHunks : Config msg -> String -> List Hunk
-preparedHunks config path =
-    FileIndex.hunks path (Analysis.files config.analysis)
+preparedHunks : Config msg -> List Hunk
+preparedHunks config =
+    (FileIndex.prepared config.file).hunks
 
 
-lastNewLine : Config msg -> String -> Int
-lastNewLine config path =
-    preparedHunks config path
+lastNewLine : Config msg -> Int
+lastNewLine config =
+    preparedHunks config
         |> List.reverse
         |> List.head
         |> Maybe.andThen (.lines >> List.reverse >> List.filterMap .newLine >> List.head)

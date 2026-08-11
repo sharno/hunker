@@ -99,6 +99,13 @@
 - Preserve native browser Find on large diffs. Use bounded DOM chunks with
   `content-visibility: auto` to defer layout and paint while keeping every line
   searchable; do not window diff text out of the DOM.
+- Key and lazy-render full-diff file panels by path. Each panel receives only
+  stable file-scoped analysis, UI, and collaboration values; never pass a
+  review-wide model through every panel, because an unrelated draft or collapse
+  transition would reconcile the entire diff.
+- Index semantic moves once by path, endpoint, and covered line while accepting
+  an analysis snapshot. Per-line rendering must never scan review-wide move
+  results.
 - Derive syntax spans and AST fold regions from the Rust revision's retained
   Tree-sitter forest. Elm renders the typed character ranges and owns only the
   collapsed fold identities; do not parse source syntax in the browser.
