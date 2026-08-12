@@ -26,8 +26,10 @@ type Msg
     | ChangedIgnoreWhitespace Bool
     | ChangedSemantic Bool
     | ChangedSyntax Bool
+    | ChangedDiffColors Bool
     | ChangedSidebar Bool
     | ChangedReviews Bool
+    | ChangedTopBar Bool
     | Submitted
 
 
@@ -85,11 +87,17 @@ update msg model =
         ChangedSyntax value ->
             draft (\settings -> { settings | syntaxHighlighting = value }) model
 
+        ChangedDiffColors value ->
+            draft (\settings -> { settings | diffColors = value }) model
+
         ChangedSidebar value ->
             draft (\settings -> { settings | sidebarCollapsed = value }) model
 
         ChangedReviews value ->
             draft (\settings -> { settings | showGitHubReviews = value }) model
+
+        ChangedTopBar value ->
+            draft (\settings -> { settings | topBarCollapsed = value }) model
 
         Submitted ->
             ( model, Effect.none )
@@ -139,8 +147,10 @@ settingsForm saveStatus model =
             , toggle "Ignore whitespace" "Hide whitespace-only replacements." model.draft.ignoreWhitespace ChangedIgnoreWhitespace
             , toggle "Semantic analysis" "Parse syntax trees and detect moved declarations." model.draft.semantic ChangedSemantic
             , toggle "Syntax highlighting" "Color supported source languages in repository and diff views." model.draft.syntaxHighlighting ChangedSyntax
+            , toggle "Diff colors" "Use addition, deletion, and inline-change backgrounds in diff views." model.draft.diffColors ChangedDiffColors
             , toggle "Collapse review sidebar" "Start reviews with maximum horizontal space." model.draft.sidebarCollapsed ChangedSidebar
             , toggle "Show GitHub reviews" "Load and render inline review conversations." model.draft.showGitHubReviews ChangedReviews
+            , toggle "Hide top bar" "Start with the main navigation hidden; use the floating control to restore it." model.draft.topBarCollapsed ChangedTopBar
             ]
         , div [ class "settings-actions" ]
             [ saveFeedback saveStatus

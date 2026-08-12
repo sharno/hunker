@@ -43,8 +43,10 @@ type alias Settings =
     , semantic : Bool
     , inlineDiffMode : InlineDiffMode
     , syntaxHighlighting : Bool
+    , diffColors : Bool
     , sidebarCollapsed : Bool
     , showGitHubReviews : Bool
+    , topBarCollapsed : Bool
     }
 
 
@@ -64,8 +66,10 @@ default =
     , semantic = True
     , inlineDiffMode = Token
     , syntaxHighlighting = True
+    , diffColors = True
     , sidebarCollapsed = False
     , showGitHubReviews = True
+    , topBarCollapsed = False
     }
 
 
@@ -88,8 +92,10 @@ decoder =
             , semantic = semantic
             , inlineDiffMode = inlineDiffMode
             , syntaxHighlighting = syntaxHighlighting
+            , diffColors = True
             , sidebarCollapsed = False
             , showGitHubReviews = True
+            , topBarCollapsed = False
             }
         )
         (Decode.field "repositoriesRoot" Decode.string)
@@ -102,15 +108,19 @@ decoder =
         (Decode.field "syntaxHighlighting" Decode.bool)
         |> Decode.andThen
             (\partial ->
-                Decode.map2
-                    (\sidebarCollapsed showGitHubReviews ->
+                Decode.map4
+                    (\diffColors sidebarCollapsed showGitHubReviews topBarCollapsed ->
                         { partial
-                            | sidebarCollapsed = sidebarCollapsed
+                            | diffColors = diffColors
+                            , sidebarCollapsed = sidebarCollapsed
                             , showGitHubReviews = showGitHubReviews
+                            , topBarCollapsed = topBarCollapsed
                         }
                     )
+                    (Decode.field "diffColors" Decode.bool)
                     (Decode.field "sidebarCollapsed" Decode.bool)
                     (Decode.field "showGitHubReviews" Decode.bool)
+                    (Decode.field "topBarCollapsed" Decode.bool)
             )
 
 
@@ -125,8 +135,10 @@ encode settings =
         , ( "semantic", Encode.bool settings.semantic )
         , ( "inlineDiffMode", Encode.string (inlineDiffModeToString settings.inlineDiffMode) )
         , ( "syntaxHighlighting", Encode.bool settings.syntaxHighlighting )
+        , ( "diffColors", Encode.bool settings.diffColors )
         , ( "sidebarCollapsed", Encode.bool settings.sidebarCollapsed )
         , ( "showGitHubReviews", Encode.bool settings.showGitHubReviews )
+        , ( "topBarCollapsed", Encode.bool settings.topBarCollapsed )
         ]
 
 

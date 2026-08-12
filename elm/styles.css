@@ -69,10 +69,16 @@
 @layer components {
   .hunker-app {
     @apply min-h-screen bg-canvas;
+    --app-bar-height: 4rem;
+    --review-toolbar-height: 2.75rem;
     background-image:
       linear-gradient(rgb(16 27 44 / 2.5%) 1px, transparent 1px),
       linear-gradient(90deg, rgb(16 27 44 / 2%) 1px, transparent 1px);
     background-size: 28px 28px;
+  }
+
+  .hunker-app.top-bar-hidden {
+    --app-bar-height: 0rem;
   }
 
   .app-bar {
@@ -98,6 +104,19 @@
 
   .app-bar-button {
     @apply shrink-0 rounded-md border border-slate-600 px-3 py-2 text-xs font-bold text-slate-200 no-underline hover:border-slate-400;
+  }
+
+  .app-bar-actions {
+    @apply flex items-center gap-2;
+  }
+
+  .top-bar-toggle,
+  .top-bar-reveal {
+    @apply grid size-9 shrink-0 cursor-pointer place-items-center rounded-md border border-slate-600 bg-ink text-sm font-bold text-slate-200 shadow-md hover:border-slate-400 hover:text-white;
+  }
+
+  .top-bar-reveal {
+    @apply fixed top-3 right-3 z-50;
   }
 
   .github-location-form {
@@ -735,7 +754,8 @@
   }
 
   .compact-review-toolbar {
-    @apply sticky top-16 z-30 flex h-11 min-w-0 items-center gap-3 border-b border-slate-700 bg-ink px-4 text-white shadow-md;
+    @apply sticky z-30 flex h-11 min-w-0 items-center gap-3 border-b border-slate-700 bg-ink px-4 text-white shadow-md;
+    top: var(--app-bar-height);
   }
 
   .review-tab-picker {
@@ -804,8 +824,14 @@
 
   .file-sidebar {
     @apply sticky self-start overflow-hidden border-r border-line bg-[#efede6];
-    top: 6.75rem;
-    height: calc(100dvh - var(--viewport-scroll-region-top, 6.75rem));
+    top: calc(var(--app-bar-height) + var(--review-toolbar-height));
+    height: calc(
+      100dvh -
+        var(
+          --viewport-scroll-region-top,
+          calc(var(--app-bar-height) + var(--review-toolbar-height))
+        )
+    );
   }
 
   .file-sidebar-content {
@@ -952,6 +978,13 @@
     @apply bg-remove;
   }
 
+  .diff-colors-disabled .split-cell.addition,
+  .diff-colors-disabled .unified-line.addition,
+  .diff-colors-disabled .split-cell.deletion,
+  .diff-colors-disabled .unified-line.deletion {
+    background-color: transparent;
+  }
+
   .line-number {
     @apply flex min-h-6 items-start justify-end border-0 border-r border-black/7 bg-black/[0.025] px-2 pt-1 font-mono text-[10px] leading-5 text-muted select-none;
   }
@@ -972,6 +1005,14 @@
 
   .inline-change {
     @apply rounded bg-black/10 px-px ring-1 ring-black/10;
+  }
+
+  .diff-colors-disabled .inline-change {
+    border-radius: 0;
+    background-color: transparent;
+    padding-right: 0;
+    padding-left: 0;
+    box-shadow: none;
   }
 
   .syntax-comment {

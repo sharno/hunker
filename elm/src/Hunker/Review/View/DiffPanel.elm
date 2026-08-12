@@ -1,4 +1,4 @@
-module Hunker.Review.View.DiffPanel exposing (Actions, fileAnchor, view)
+module Hunker.Review.View.DiffPanel exposing (Actions, Layout, LineOptions, fileAnchor, layout, lineOptions, view)
 
 import Dict
 import Html exposing (Html, a, article, button, code, div, footer, header, section, span, strong, text)
@@ -7,7 +7,7 @@ import Html.Events exposing (onClick)
 import Hunker.ApiError as ApiError exposing (ApiError)
 import Hunker.Diff as Diff exposing (DiffLine, Hunk, Kind(..), SideLine, SplitRow)
 import Hunker.Domain.Review as Review exposing (AnalysisFeature(..), CharacterRange, CommentSide(..), FileChange, FileStatus(..), FullFile, ReviewComment, SemanticChange(..), SemanticResult(..))
-import Hunker.Domain.Settings exposing (Settings, ViewMode(..))
+import Hunker.Domain.Settings exposing (ViewMode(..))
 import Hunker.Domain.Source as Source exposing (FilePresentation, FoldRegion, Presentation)
 import Hunker.PreparedDiff as PreparedDiff
 import Hunker.Remote exposing (Remote(..))
@@ -34,8 +34,8 @@ type alias Actions msg =
 
 
 type alias Config msg =
-    { settings : Settings
-    , pullRequest : Bool
+    { layout : Layout
+    , lineOptions : LineOptions
     , analysis : Analysis.Status
     , file : FileIndex.File
     , diff : DiffView.FileState
@@ -45,12 +45,58 @@ type alias Config msg =
     }
 
 
-view : Actions msg -> Settings -> Bool -> String -> Analysis.Status -> FileIndex.File -> DiffView.FileState -> Collaboration.FileState -> Html msg
-view actions settings pullRequest githubFileUrl analysis fileModel diff collaboration =
+type Layout
+    = SplitReview
+    | SplitReadOnly
+    | UnifiedReview
+    | UnifiedReadOnly
+
+
+type LineOptions
+    = IgnoreWhitespaceWithSyntax
+    | IgnoreWhitespaceWithoutSyntax
+    | PreserveWhitespaceWithSyntax
+    | PreserveWhitespaceWithoutSyntax
+
+
+layout : ViewMode -> Bool -> Layout
+layout viewMode pullRequest =
+    case ( viewMode, pullRequest ) of
+        ( Split, True ) ->
+            SplitReview
+
+        ( Split, False ) ->
+            SplitReadOnly
+
+        ( Unified, True ) ->
+            UnifiedReview
+
+        ( Unified, False ) ->
+            UnifiedReadOnly
+
+
+lineOptions : Bool -> Bool -> LineOptions
+lineOptions ignoreWhitespace syntaxHighlighting =
+    case ( ignoreWhitespace, syntaxHighlighting ) of
+        ( True, True ) ->
+            IgnoreWhitespaceWithSyntax
+
+        ( True, False ) ->
+            IgnoreWhitespaceWithoutSyntax
+
+        ( False, True ) ->
+            PreserveWhitespaceWithSyntax
+
+        ( False, False ) ->
+            PreserveWhitespaceWithoutSyntax
+
+
+view : Actions msg -> Layout -> LineOptions -> String -> Analysis.Status -> FileIndex.File -> DiffView.FileState -> Collaboration.FileState -> Html msg
+view actions layout_ lineOptions_ githubFileUrl analysis fileModel diff collaboration =
     let
         config =
-            { settings = settings
-            , pullRequest = pullRequest
+            { layout = layout_
+            , lineOptions = lineOptions_
             , analysis = analysis
             , file = fileModel
             , diff = diff
@@ -134,7 +180,7 @@ view actions settings pullRequest githubFileUrl analysis fileModel diff collabor
                 , CollaborationView.inlineComposer config.actions.collaboration config.collaboration (fileAnchor file.path) file.path
                 , footer [ class "diff-footer" ]
                     [ span [] [ text "End of patch" ]
-                    , if config.pullRequest then
+                    , if isReview config.layout then
                         button [ type_ "button", onClick (config.actions.openInlineComposer file.path (lastNewLine config) RightSide) ] [ text "+ Add a review comment" ]
 
                       else
@@ -146,24 +192,20 @@ view actions settings pullRequest githubFileUrl analysis fileModel diff collabor
 
 semanticSummary : Config msg -> FileChange -> Html msg
 semanticSummary config file =
-    if not config.settings.semantic then
-        text ""
+    case config.analysis of
+        Analysis.AnalysisInFlight ->
+            div [ class "semantic-banner is-loading" ] [ span [ class "loading-spinner" ] [], text "Analyzing syntax tree…" ]
 
-    else
-        case config.analysis of
-            Analysis.AnalysisInFlight ->
-                div [ class "semantic-banner is-loading" ] [ span [ class "loading-spinner" ] [], text "Analyzing syntax tree…" ]
+        Analysis.AnalysisFailure error ->
+            div [ class "semantic-banner is-error" ] [ text (ApiError.message error) ]
 
-            Analysis.AnalysisFailure error ->
-                div [ class "semantic-banner is-error" ] [ text (ApiError.message error) ]
+        Analysis.AnalysisComplete ->
+            FileIndex.analysis config.file
+                |> Maybe.map (.semantic >> semanticFeatureView)
+                |> Maybe.withDefault (text "")
 
-            Analysis.AnalysisComplete ->
-                FileIndex.analysis config.file
-                    |> Maybe.map (.semantic >> semanticFeatureView)
-                    |> Maybe.withDefault (text "")
-
-            Analysis.AnalysisDisabled ->
-                text ""
+        Analysis.AnalysisDisabled ->
+            text ""
 
 
 semanticFeatureView : AnalysisFeature SemanticResult -> Html msg
@@ -239,7 +281,7 @@ patchDiff : Config msg -> FileChange -> Html msg
 patchDiff config file =
     div
         [ class
-            (if config.settings.viewMode == Split then
+            (if isSplit config.layout then
                 "split-diff"
 
              else
@@ -271,8 +313,8 @@ hunkView config file hunk =
         , if collapsed then
             text ""
 
-          else if config.settings.viewMode == Split then
-            chunkedLines "split-lines" (List.map (splitRowView config file) (Diff.splitRows config.settings.ignoreWhitespace hunk))
+          else if isSplit config.layout then
+            chunkedLines "split-lines" (List.map (splitRowView config file) (Diff.splitRows (ignoresWhitespace config.lineOptions) hunk))
 
           else
             chunkedLines "unified-lines" (List.map (unifiedLineView config file) hunk.lines)
@@ -430,7 +472,7 @@ moveDecoration config side lineNumber =
 
 lineNumberButton : Config msg -> String -> CommentSide -> Int -> Maybe Int -> Html msg
 lineNumberButton config path side number maybeNumberValue =
-    if config.pullRequest && maybeNumberValue /= Nothing then
+    if isReview config.layout && maybeNumberValue /= Nothing then
         button [ type_ "button", class "line-number comment-trigger", attribute "title" "Add a GitHub review comment", onClick (config.actions.openInlineComposer path number side) ] [ text (maybeNumber maybeNumberValue) ]
 
     else
@@ -440,7 +482,7 @@ lineNumberButton config path side number maybeNumberValue =
 highlightedLine : Config msg -> String -> CommentSide -> Presentation -> Int -> String -> List (Html msg)
 highlightedLine config path side presentation number source =
     SourceView.line
-        config.settings.syntaxHighlighting
+        (showsSyntax config.lineOptions)
         path
         presentation
         number
@@ -455,7 +497,7 @@ fullFileDiff config file full =
             Diff.fullFileRowsPrepared (preparedHunks config) full.oldText full.newText
     in
     div [ class "full-file-diff" ]
-        [ if config.settings.viewMode == Split then
+        [ if isSplit config.layout then
             rows
                 |> List.filter (fullRowVisible config file.path (fullPresentation full.presentation))
                 |> List.map (splitRowViewWith config file (fullPresentation full.presentation))
@@ -756,3 +798,67 @@ activeClass active =
 
     else
         ""
+
+
+isSplit : Layout -> Bool
+isSplit layout_ =
+    case layout_ of
+        SplitReview ->
+            True
+
+        SplitReadOnly ->
+            True
+
+        UnifiedReview ->
+            False
+
+        UnifiedReadOnly ->
+            False
+
+
+isReview : Layout -> Bool
+isReview layout_ =
+    case layout_ of
+        SplitReview ->
+            True
+
+        UnifiedReview ->
+            True
+
+        SplitReadOnly ->
+            False
+
+        UnifiedReadOnly ->
+            False
+
+
+ignoresWhitespace : LineOptions -> Bool
+ignoresWhitespace options =
+    case options of
+        IgnoreWhitespaceWithSyntax ->
+            True
+
+        IgnoreWhitespaceWithoutSyntax ->
+            True
+
+        PreserveWhitespaceWithSyntax ->
+            False
+
+        PreserveWhitespaceWithoutSyntax ->
+            False
+
+
+showsSyntax : LineOptions -> Bool
+showsSyntax options =
+    case options of
+        IgnoreWhitespaceWithSyntax ->
+            True
+
+        PreserveWhitespaceWithSyntax ->
+            True
+
+        IgnoreWhitespaceWithoutSyntax ->
+            False
+
+        PreserveWhitespaceWithoutSyntax ->
+            False

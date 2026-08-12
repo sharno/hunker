@@ -4,7 +4,7 @@ import Browser
 import Browser.Navigation as Navigation
 import Html exposing (Html, a, button, div, form, header, input, main_, p, span, strong, text)
 import Html.Attributes exposing (attribute, class, href, placeholder, type_, value)
-import Html.Events exposing (onInput, onSubmit)
+import Html.Events exposing (onClick, onInput, onSubmit)
 import Hunker.Api as Api
 import Hunker.ApiError as ApiError exposing (ApiError)
 import Hunker.Domain.Settings as Settings exposing (Settings, SettingsDocument)
@@ -55,6 +55,7 @@ type Msg
     | RetriedBootstrap
     | ChangedGitHubInput String
     | SubmittedGitHubInput
+    | ChangedTopBarCollapsed Bool
     | HomeMsg Home.Msg
     | SettingsMsg SettingsPage.Msg
     | RepositoryMsg Repository.Msg
@@ -217,6 +218,18 @@ update msg model =
 
                 Err error ->
                     ( { model | githubInputError = error }, Effect.none )
+
+        ChangedTopBarCollapsed collapsed ->
+            case model.state of
+                Ready sync _ ->
+                    let
+                        settings =
+                            SettingsSync.value sync
+                    in
+                    queueSettings { settings | topBarCollapsed = collapsed } model
+
+                _ ->
+                    unchanged model
 
         HomeMsg message ->
             updatePage model
@@ -444,7 +457,7 @@ view : Model -> Browser.Document Msg
 view model =
     { title = documentTitle model
     , body =
-        [ div [ class "hunker-app" ]
+        [ div [ class ("hunker-app" ++ topBarClass model) ]
             [ topBar model
             , pageView model
             ]
@@ -479,7 +492,18 @@ documentTitle model =
 
 topBar : Model -> Html Msg
 topBar model =
-    header [ class "app-bar" ]
+    if topBarIsCollapsed model then
+        button
+            [ type_ "button"
+            , class "top-bar-reveal"
+            , attribute "aria-label" "Show top bar"
+            , attribute "title" "Show top bar"
+            , onClick (ChangedTopBarCollapsed False)
+            ]
+            [ text "↓" ]
+
+    else
+        header [ class "app-bar" ]
         [ a [ class "brand", href "/" ]
             [ span [ class "brand-mark" ] [ text "H" ]
             , span [ class "brand-name" ] [ text "hunker" ]
@@ -508,8 +532,37 @@ topBar model =
               else
                 span [ class "github-location-error", attribute "role" "alert" ] [ text model.githubInputError ]
             ]
-        , a [ class "app-bar-button", href "/settings" ] [ text "Settings" ]
+        , div [ class "app-bar-actions" ]
+            [ a [ class "app-bar-button", href "/settings" ] [ text "Settings" ]
+            , button
+                [ type_ "button"
+                , class "top-bar-toggle"
+                , attribute "aria-label" "Hide top bar"
+                , attribute "title" "Hide top bar"
+                , onClick (ChangedTopBarCollapsed True)
+                ]
+                [ text "↑" ]
+            ]
         ]
+
+
+topBarIsCollapsed : Model -> Bool
+topBarIsCollapsed model =
+    case model.state of
+        Ready sync _ ->
+            (SettingsSync.value sync).topBarCollapsed
+
+        _ ->
+            False
+
+
+topBarClass : Model -> String
+topBarClass model =
+    if topBarIsCollapsed model then
+        " top-bar-hidden"
+
+    else
+        ""
 
 
 pageToolbar : Model -> Html Msg

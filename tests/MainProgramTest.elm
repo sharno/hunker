@@ -288,17 +288,17 @@ decodeResponse decoder onError response =
 
 settingsJson : String
 settingsJson =
-    """{"settings":{"repositoriesRoot":"~/src","cacheRoot":"/tmp/hunker/repositories","reviewScope":"file","viewMode":"split","ignoreWhitespace":true,"semantic":true,"inlineDiffMode":"token","syntaxHighlighting":true,"sidebarCollapsed":false,"showGitHubReviews":true},"configPath":"/tmp/hunker/settings.json"}"""
+    """{"settings":{"repositoriesRoot":"~/src","cacheRoot":"/tmp/hunker/repositories","reviewScope":"file","viewMode":"split","ignoreWhitespace":true,"semantic":true,"inlineDiffMode":"token","syntaxHighlighting":true,"diffColors":true,"sidebarCollapsed":false,"showGitHubReviews":true,"topBarCollapsed":false},"configPath":"/tmp/hunker/settings.json"}"""
 
 
 settingsSemanticOffJson : String
 settingsSemanticOffJson =
-    """{"settings":{"repositoriesRoot":"~/src","cacheRoot":"/tmp/hunker/repositories","reviewScope":"file","viewMode":"split","ignoreWhitespace":true,"semantic":false,"inlineDiffMode":"token","syntaxHighlighting":true,"sidebarCollapsed":false,"showGitHubReviews":true},"configPath":"/tmp/hunker/settings.json"}"""
+    """{"settings":{"repositoriesRoot":"~/src","cacheRoot":"/tmp/hunker/repositories","reviewScope":"file","viewMode":"split","ignoreWhitespace":true,"semantic":false,"inlineDiffMode":"token","syntaxHighlighting":true,"diffColors":true,"sidebarCollapsed":false,"showGitHubReviews":true,"topBarCollapsed":false},"configPath":"/tmp/hunker/settings.json"}"""
 
 
 settingsSemanticAndWhitespaceOffJson : String
 settingsSemanticAndWhitespaceOffJson =
-    """{"settings":{"repositoriesRoot":"~/src","cacheRoot":"/tmp/hunker/repositories","reviewScope":"file","viewMode":"split","ignoreWhitespace":false,"semantic":false,"inlineDiffMode":"token","syntaxHighlighting":true,"sidebarCollapsed":false,"showGitHubReviews":true},"configPath":"/tmp/hunker/settings.json"}"""
+    """{"settings":{"repositoriesRoot":"~/src","cacheRoot":"/tmp/hunker/repositories","reviewScope":"file","viewMode":"split","ignoreWhitespace":false,"semantic":false,"inlineDiffMode":"token","syntaxHighlighting":true,"diffColors":true,"sidebarCollapsed":false,"showGitHubReviews":true,"topBarCollapsed":false},"configPath":"/tmp/hunker/settings.json"}"""
 
 
 repositoriesJson : String

@@ -9,8 +9,10 @@ const settings = {
   semantic: true,
   inlineDiffMode: "token",
   syntaxHighlighting: true,
+  diffColors: true,
   sidebarCollapsed: false,
   showGitHubReviews: true,
+  topBarCollapsed: false,
 };
 
 const settingsDocument = {
@@ -254,6 +256,62 @@ test("shows loading instead of stale review data and preserves a single fetched 
     page.locator(".split-cell.right .syntax-keyword.inline-change"),
   ).toHaveText("export");
 
+  const changedToken = page.locator(
+    ".split-cell.right .syntax-keyword.inline-change",
+  );
+  const additionCell = page.locator(".split-cell.right.addition").first();
+  const coloredBackground = await additionCell.evaluate(
+    (cell) => getComputedStyle(cell).backgroundColor,
+  );
+  expect(coloredBackground).not.toBe("rgba(0, 0, 0, 0)");
+  await page.getByText("Diff colors", { exact: true }).click();
+  await expect(page.locator(".review-diffs")).toHaveClass(
+    /diff-colors-disabled/,
+  );
+  await expect
+    .poll(() =>
+      additionCell.evaluate((cell) => getComputedStyle(cell).backgroundColor),
+    )
+    .toBe("rgba(0, 0, 0, 0)");
+  await expect(changedToken).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(changedToken).toHaveCSS("box-shadow", "none");
+  await expect(changedToken).toHaveClass(/syntax-keyword/);
+
+  const toolbar = page.locator(".compact-review-toolbar");
+  await page
+    .locator(".diff-panel")
+    .first()
+    .evaluate((panel) => {
+      document.documentElement.dataset.filePanelMutations = "0";
+      new MutationObserver((mutations) => {
+        const current = Number(
+          document.documentElement.dataset.filePanelMutations ?? "0",
+        );
+        document.documentElement.dataset.filePanelMutations = String(
+          current + mutations.length,
+        );
+      }).observe(panel, {
+        attributes: true,
+        characterData: true,
+        childList: true,
+        subtree: true,
+      });
+    });
+  await page.getByRole("button", { name: "Hide top bar" }).click();
+  await expect(page.locator(".app-bar")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Show top bar" }),
+  ).toBeVisible();
+  await expect(toolbar).toHaveCSS("top", "0px");
+  expect(
+    await page.evaluate(() =>
+      Number(document.documentElement.dataset.filePanelMutations ?? "0"),
+    ),
+  ).toBe(0);
+  await page.getByRole("button", { name: "Show top bar" }).click();
+  await expect(page.locator(".app-bar")).toBeVisible();
+  await expect(toolbar).toHaveCSS("top", "64px");
+
   const lineLayout = await page
     .locator(".split-row")
     .first()
@@ -300,7 +358,6 @@ test("shows loading instead of stale review data and preserves a single fetched 
   await expect(page.locator(".review-diffs.full-diff .diff-panel")).toHaveCount(
     2,
   );
-  const toolbar = page.locator(".compact-review-toolbar");
   const toolbarHeight = await toolbar.evaluate(
     (element) => element.getBoundingClientRect().height,
   );

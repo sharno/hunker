@@ -23,6 +23,7 @@ type alias Config msg =
     , toggleSemantic : Bool -> msg
     , selectInlineMode : InlineDiffMode -> msg
     , toggleSyntax : Bool -> msg
+    , toggleDiffColors : Bool -> msg
     , toggleReviews : Bool -> msg
     }
 
@@ -63,6 +64,7 @@ view config =
                 , option [ value "off", selected (config.settings.inlineDiffMode == InlineOff) ] [ text "Inline off" ]
                 ]
             , toggle "Syntax" config.settings.syntaxHighlighting config.toggleSyntax
+            , toggle "Diff colors" config.settings.diffColors config.toggleDiffColors
             , if config.pullRequest then
                 toggle "GitHub reviews" config.settings.showGitHubReviews config.toggleReviews
 

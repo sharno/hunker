@@ -47,6 +47,18 @@ pub struct DiffSettings {
     pub ignore_whitespace: bool,
     pub semantic: bool,
     pub syntax_highlighting: bool,
+    #[serde(default)]
+    pub diff_colors: DiffColors,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct DiffColors(bool);
+
+impl Default for DiffColors {
+    fn default() -> Self {
+        Self(true)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,6 +66,8 @@ pub struct DiffSettings {
 pub struct InterfaceSettings {
     pub sidebar_collapsed: bool,
     pub show_git_hub_reviews: bool,
+    #[serde(default)]
+    pub top_bar_collapsed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,10 +131,12 @@ fn defaults() -> HunkerSettings {
             ignore_whitespace: true,
             semantic: true,
             syntax_highlighting: true,
+            diff_colors: DiffColors::default(),
         },
         interface: InterfaceSettings {
             sidebar_collapsed: false,
             show_git_hub_reviews: true,
+            top_bar_collapsed: false,
         },
     }
 }
@@ -188,9 +204,31 @@ mod tests {
                 "semantic": true,
                 "inlineDiffMode": "token",
                 "syntaxHighlighting": true,
+                "diffColors": true,
                 "sidebarCollapsed": false,
-                "showGitHubReviews": true
+                "showGitHubReviews": true,
+                "topBarCollapsed": false
             })
         );
+    }
+
+    #[test]
+    fn new_visual_settings_preserve_existing_configuration_defaults() {
+        let decoded: HunkerSettings = serde_json::from_value(json!({
+            "repositoriesRoot": "/tmp/src",
+            "cacheRoot": "/tmp/cache",
+            "reviewScope": "file",
+            "viewMode": "split",
+            "ignoreWhitespace": true,
+            "semantic": true,
+            "inlineDiffMode": "token",
+            "syntaxHighlighting": true,
+            "sidebarCollapsed": false,
+            "showGitHubReviews": true
+        }))
+        .unwrap();
+
+        assert!(decoded.diff.diff_colors.0);
+        assert!(!decoded.interface.top_bar_collapsed);
     }
 }

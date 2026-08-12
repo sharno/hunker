@@ -113,6 +113,10 @@
   stable file-scoped analysis, UI, and collaboration values; never pass a
   review-wide model through every panel, because an unrelated draft or collapse
   transition would reconcile the entire diff.
+- Do not pass the complete settings record into a lazy file panel. Translate
+  only rendering-relevant preferences into small closed ADTs, and put purely
+  visual switches on an ancestor CSS class, so unrelated global settings retain
+  every panel's lazy identity.
 - Index semantic moves once by path, endpoint, and covered line while accepting
   an analysis snapshot. Per-line rendering must never scan review-wide move
   results.

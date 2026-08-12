@@ -85,6 +85,7 @@ type Msg
     | ToggledSemantic Bool
     | SelectedInlineMode InlineDiffMode
     | ToggledSyntax Bool
+    | ToggledDiffColors Bool
     | ToggledReviews Bool
     | AnalysisLoaded Analysis.Identity AnalysisSnapshot
     | AnalysisFailed Analysis.Identity ApiError
@@ -375,6 +376,9 @@ update settings msg model =
 
         ToggledSyntax value ->
             beginAnalysis settings model
+
+        ToggledDiffColors _ ->
+            unchanged model
 
         ToggledReviews value ->
             if value then
@@ -797,6 +801,9 @@ settingsIntent settings msg =
         ToggledSyntax value ->
             Just { settings | syntaxHighlighting = value }
 
+        ToggledDiffColors value ->
+            Just { settings | diffColors = value }
+
         ToggledReviews value ->
             Just { settings | showGitHubReviews = value }
 
@@ -1033,6 +1040,7 @@ reviewToolbar settings model =
         , toggleSemantic = ToggledSemantic
         , selectInlineMode = SelectedInlineMode
         , toggleSyntax = ToggledSyntax
+        , toggleDiffColors = ToggledDiffColors
         , toggleReviews = ToggledReviews
         }
 
@@ -1093,6 +1101,12 @@ reviewWorkspace settings model =
                         else
                             ""
                        )
+                    ++ (if settings.diffColors then
+                            ""
+
+                        else
+                            " diff-colors-disabled"
+                       )
                 )
             ]
             (if List.isEmpty (visibleFiles settings model) then
@@ -1119,8 +1133,8 @@ renderFileDiff settings model file =
                 ( Just analyzedFile, Just diffFile, Just collaborationFile ) ->
                     Lazy.lazy8 DiffPanelView.view
                         diffPanelActions
-                        settings
-                        (Route.isPullRequest ready.request.location.target)
+                        (DiffPanelView.layout settings.viewMode (Route.isPullRequest ready.request.location.target))
+                        (DiffPanelView.lineOptions settings.ignoreWhitespace settings.syntaxHighlighting)
                         ("https://github.com/" ++ ready.document.repository ++ "/blob/" ++ Review.backingHeadOid ready.document.backing ++ "/" ++ file.path)
                         (Analysis.status ready.analysis)
                         analyzedFile
