@@ -401,6 +401,14 @@ test("keeps the review file list sticky with its own scrollbar", async ({
   await page.locator(".review-diffs").evaluate((diffs) => {
     diffs.style.minHeight = "3000px";
   });
+  await expect
+    .poll(async () =>
+      page.locator(".file-sidebar").evaluate((sidebar) => {
+        const bounds = sidebar.getBoundingClientRect();
+        return Math.ceil(bounds.bottom - window.innerHeight);
+      }),
+    )
+    .toBeLessThanOrEqual(0);
   await page.evaluate(() => window.scrollTo(0, 700));
   await expect
     .poll(async () => page.evaluate(() => window.scrollY))

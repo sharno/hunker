@@ -19,7 +19,32 @@ const INDEX: &str = r#"<!doctype html>
   <body>
     <div id="root"></div>
     <script src="/assets/app.js"></script>
-    <script>Elm.Main.init({ node: document.getElementById("root") });</script>
+    <script>
+      const mountNode = document.getElementById("root");
+      Elm.Main.init({ node: mountNode });
+
+      let viewportScrollRegionFrame;
+      const sizeViewportScrollRegions = () => {
+        viewportScrollRegionFrame = undefined;
+        document.querySelectorAll("[data-viewport-scroll-region]").forEach((region) => {
+          const visibleTop = Math.max(0, region.getBoundingClientRect().top);
+          region.style.setProperty("--viewport-scroll-region-top", `${visibleTop}px`);
+        });
+      };
+      const scheduleViewportScrollRegionSize = () => {
+        if (viewportScrollRegionFrame === undefined) {
+          viewportScrollRegionFrame = requestAnimationFrame(sizeViewportScrollRegions);
+        }
+      };
+
+      addEventListener("scroll", scheduleViewportScrollRegionSize, { passive: true });
+      addEventListener("resize", scheduleViewportScrollRegionSize, { passive: true });
+      new MutationObserver(scheduleViewportScrollRegionSize).observe(document.body, {
+        childList: true,
+        subtree: true,
+      });
+      scheduleViewportScrollRegionSize();
+    </script>
   </body>
 </html>
 "#;

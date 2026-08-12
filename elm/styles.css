@@ -805,7 +805,7 @@
   .file-sidebar {
     @apply sticky self-start overflow-hidden border-r border-line bg-[#efede6];
     top: 6.75rem;
-    height: calc(100vh - 6.75rem);
+    height: calc(100dvh - var(--viewport-scroll-region-top, 6.75rem));
   }
 
   .file-sidebar-content {

@@ -70,9 +70,9 @@
 - Keep Playwright deliberately thin: history/deep-route fallback, real Fetch
   transport, CSS/layout/sticky behavior, and browser-specific interactions. Pure
   route, diff, tree, and state behavior belongs in Elm tests.
-- Stop an already-running development server before Playwright. Its configured
-  server reuse can otherwise exercise stale embedded Elm/CSS after a rebuild and
-  produce misleading browser failures.
+- Keep Playwright on its dedicated `HUNKER_TEST_PORT`; never stop, replace, or
+  reuse the developer's terminal-managed server. Reusing it can also exercise
+  stale embedded Elm/CSS after a rebuild and produce misleading failures.
 - URLs encode location (repository, tab, PR, commit, selected file), never
   display preferences. Save review preferences through `/api/settings`.
 - A canonical URL change does not move the browser viewport. When a location
@@ -102,6 +102,13 @@
 - Preserve native browser Find on large diffs. Use bounded DOM chunks with
   `content-visibility: auto` to defer layout and paint while keeping every line
   searchable; do not window diff text out of the DOM.
+- Size sticky viewport scroll regions from their actual visible top rather than
+  a static toolbar offset. Dynamic headers make the available height change as
+  the page scrolls; update a CSS variable without routing scroll events through
+  Elm state.
+- `Browser.application` replaces its mount node. Browser-owned observers that
+  must survive Elm initialization attach to a stable ancestor such as
+  `document.body`, not the detached node passed to `Elm.Main.init`.
 - Key and lazy-render full-diff file panels by path. Each panel receives only
   stable file-scoped analysis, UI, and collaboration values; never pass a
   review-wide model through every panel, because an unrelated draft or collapse

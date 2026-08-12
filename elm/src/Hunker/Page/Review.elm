@@ -1054,7 +1054,7 @@ reviewWorkspace settings model =
                    )
             )
         ]
-        [ aside [ class "file-sidebar" ]
+        [ aside [ class "file-sidebar", attribute "data-viewport-scroll-region" "" ]
             [ button
                 [ type_ "button"
                 , class "sidebar-toggle"

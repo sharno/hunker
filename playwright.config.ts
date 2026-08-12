@@ -1,5 +1,8 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const testPort = process.env.HUNKER_TEST_PORT ?? "5174";
+const testUrl = `http://localhost:${testPort}`;
+
 export default defineConfig({
   testDir: "./tests",
   fullyParallel: true,
@@ -7,15 +10,16 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   reporter: "line",
   use: {
-    baseURL: "http://localhost:5173",
+    baseURL: testUrl,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
   webServer: {
     command: "bun run dev",
-    url: "http://localhost:5173",
-    reuseExistingServer: !process.env.CI,
+    url: testUrl,
+    reuseExistingServer: false,
     timeout: 30_000,
+    env: { HUNKER_PORT: testPort },
   },
   projects: [
     {
