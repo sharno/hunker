@@ -70,6 +70,9 @@
 - Keep Playwright deliberately thin: history/deep-route fallback, real Fetch
   transport, CSS/layout/sticky behavior, and browser-specific interactions. Pure
   route, diff, tree, and state behavior belongs in Elm tests.
+- Stop an already-running development server before Playwright. Its configured
+  server reuse can otherwise exercise stale embedded Elm/CSS after a rebuild and
+  produce misleading browser failures.
 - URLs encode location (repository, tab, PR, commit, selected file), never
   display preferences. Save review preferences through `/api/settings`.
 - A canonical URL change does not move the browser viewport. When a location

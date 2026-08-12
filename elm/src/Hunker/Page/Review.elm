@@ -1079,9 +1079,9 @@ reviewWorkspace settings model =
                 text ""
 
               else
-                div []
+                div [ class "file-sidebar-content" ]
                     [ header [] [ strong [] [ text "Changed files" ], span [ class "count-badge" ] [ text (String.fromInt (List.length files)) ] ]
-                    , reviewFileTree model (FileTree.build .path files)
+                    , div [ class "file-sidebar-tree" ] [ reviewFileTree model (FileTree.build .path files) ]
                     ]
             ]
         , Keyed.node "section"

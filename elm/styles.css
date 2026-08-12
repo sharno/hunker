@@ -803,11 +803,22 @@
   }
 
   .file-sidebar {
-    @apply relative overflow-auto border-r border-line bg-[#efede6];
+    @apply sticky self-start overflow-hidden border-r border-line bg-[#efede6];
+    top: 6.75rem;
+    height: calc(100vh - 6.75rem);
   }
 
-  .file-sidebar > div > header {
-    @apply flex items-center justify-between border-b border-line py-3 pr-12 pl-4;
+  .file-sidebar-content {
+    @apply flex h-full min-h-0 flex-col;
+  }
+
+  .file-sidebar-content > header {
+    @apply flex shrink-0 items-center justify-between border-b border-line py-3 pr-12 pl-4;
+  }
+
+  .file-sidebar-tree {
+    @apply min-h-0 flex-1 overflow-y-auto overscroll-contain;
+    scrollbar-gutter: stable;
   }
 
   .sidebar-toggle {
@@ -1276,6 +1287,16 @@
     max-height: 260px;
     border-right: 0;
     border-bottom: 1px solid var(--color-line);
+  }
+
+  .file-sidebar {
+    position: relative;
+    top: auto;
+    height: auto;
+  }
+
+  .file-sidebar-content {
+    max-height: 260px;
   }
 
   .workspace.sidebar-collapsed .file-sidebar {

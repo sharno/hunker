@@ -376,6 +376,70 @@ test("does not poll mutable revision state for an immutable commit", async ({
   await expect(page.locator(".revision-notice")).toHaveCount(0);
 });
 
+test("keeps the review file list sticky with its own scrollbar", async ({
+  page,
+}) => {
+  const files = Array.from({ length: 80 }, (_, index) => ({
+    path: `src/feature-${String(index).padStart(2, "0")}/file.ts`,
+    previousPath: null,
+    status: "modified",
+    additions: 1,
+    deletions: 1,
+    patch: `@@ -1 +1 @@\n-export const value = ${index};\n+export const value = ${index + 1};`,
+  }));
+  await page.route("**/api/diff?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: { ...reviewResponse, files },
+    }),
+  );
+  await mockReviewAnalysis(page);
+  await page.setViewportSize({ width: 1280, height: 600 });
+  await page.goto("/example/hunker/pull/42/files/src/feature-00/file.ts");
+  await expect(page.locator(".file-sidebar-tree")).toBeVisible();
+  await page.locator(".review-diffs").evaluate((diffs) => {
+    diffs.style.minHeight = "3000px";
+  });
+  await page.evaluate(() => window.scrollTo(0, 700));
+  await expect
+    .poll(async () => page.evaluate(() => window.scrollY))
+    .toBeGreaterThan(600);
+
+  const layout = await page.evaluate(() => {
+    const sidebar = document.querySelector<HTMLElement>(".file-sidebar");
+    const tree = document.querySelector<HTMLElement>(".file-sidebar-tree");
+    const toolbar = document.querySelector<HTMLElement>(
+      ".compact-review-toolbar",
+    );
+    if (!sidebar || !tree || !toolbar)
+      throw new Error("Expected review sidebar and toolbar");
+    const sidebarRect = sidebar.getBoundingClientRect();
+    const toolbarRect = toolbar.getBoundingClientRect();
+    const windowScrollBefore = window.scrollY;
+    tree.scrollTop = tree.scrollHeight;
+    return {
+      sidebarTop: sidebarRect.top,
+      sidebarBottom: sidebarRect.bottom,
+      toolbarBottom: toolbarRect.bottom,
+      viewportHeight: window.innerHeight,
+      overflowY: getComputedStyle(tree).overflowY,
+      treeScrollTop: tree.scrollTop,
+      treeScrollHeight: tree.scrollHeight,
+      treeClientHeight: tree.clientHeight,
+      windowScrollBefore,
+      windowScrollAfter: window.scrollY,
+    };
+  });
+
+  expect(Math.abs(layout.sidebarTop - layout.toolbarBottom)).toBeLessThan(2);
+  expect(layout.sidebarBottom).toBeLessThanOrEqual(layout.viewportHeight + 1);
+  expect(layout.overflowY).toBe("auto");
+  expect(layout.treeScrollHeight).toBeGreaterThan(layout.treeClientHeight);
+  expect(layout.treeScrollTop).toBeGreaterThan(0);
+  expect(layout.windowScrollAfter).toBe(layout.windowScrollBefore);
+});
+
 test("keeps every deferred diff line available to native browser Find", async ({
   page,
 }) => {
