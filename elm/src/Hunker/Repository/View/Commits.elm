@@ -11,6 +11,7 @@ import Hunker.Repository.View.Local as Local
 
 type alias Config identity msg =
     { state : State identity msg
+    , reference : Maybe String
     , selectedCommit : Commit -> msg
     }
 
@@ -37,7 +38,7 @@ view config =
                 Success _ data ->
                     section [ class "commits-browser repository-commits-browser" ]
                         [ header [ class "commits-heading" ]
-                            [ div [] [ h2 [] [ text ("Commits on " ++ data.ref) ], p [] [ text "Select an immutable commit to open its diff." ] ]
+                            [ div [] [ h2 [] [ text ("Commits on " ++ Maybe.withDefault data.ref config.reference) ], p [] [ text "Select an immutable commit to open its diff." ] ]
                             , span []
                                 [ text
                                     (String.fromInt (List.length data.commits)

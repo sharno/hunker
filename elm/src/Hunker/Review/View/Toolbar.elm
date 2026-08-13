@@ -25,13 +25,21 @@ type alias Config msg =
     , toggleSyntax : Bool -> msg
     , toggleDiffColors : Bool -> msg
     , toggleReviews : Bool -> msg
+    , optionsOpen : Bool
+    , toggleOptions : msg
+    , closeOptions : msg
     }
 
 
 view : Config msg -> Html msg
 view config =
-    section [ class "compact-review-toolbar" ]
-        [ div [ class "review-tab-picker" ]
+    section [ class ("compact-review-toolbar" ++ optionsClass config.optionsOpen) ]
+        [ if config.optionsOpen then
+            button [ type_ "button", class "diff-options-backdrop", attribute "aria-label" "Close diff options", onClick config.closeOptions ] []
+
+          else
+            text ""
+        , div [ class "review-tab-picker" ]
             [ segment (config.tab == ReviewFiles) (config.selectTab ReviewFiles) "Files"
             , if config.pullRequest then
                 segment (config.tab == ReviewCommits) (config.selectTab ReviewCommits) "Commits"
@@ -47,6 +55,20 @@ view config =
                 ]
             , input [ type_ "search", attribute "aria-label" "Search this change", attribute "placeholder" "Search this change", value config.filter, onInput config.changeFilter ] []
             ]
+        , button
+            [ type_ "button"
+            , class "diff-options-trigger"
+            , attribute "aria-label" "Diff options"
+            , attribute "aria-expanded"
+                (if config.optionsOpen then
+                    "true"
+
+                 else
+                    "false"
+                )
+            , onClick config.toggleOptions
+            ]
+            [ text "Diff options" ]
         , div [ class "diff-options" ]
             [ select [ attribute "aria-label" "Diff scope", onInput (scopeFromString >> config.selectScope) ]
                 [ option [ value "file", selected (config.settings.reviewScope == OneFile) ] [ text "One file" ]
@@ -72,6 +94,15 @@ view config =
                 text ""
             ]
         ]
+
+
+optionsClass : Bool -> String
+optionsClass open =
+    if open then
+        " options-open"
+
+    else
+        ""
 
 
 toggle : String -> Bool -> (Bool -> msg) -> Html msg

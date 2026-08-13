@@ -56,6 +56,7 @@ type Msg
     | ChangedGitHubInput String
     | SubmittedGitHubInput
     | ChangedTopBarCollapsed Bool
+    | TopBarFocusSettled
     | HomeMsg Home.Msg
     | SettingsMsg SettingsPage.Msg
     | RepositoryMsg Repository.Msg
@@ -227,9 +228,22 @@ update msg model =
                             SettingsSync.value sync
                     in
                     queueSettings { settings | topBarCollapsed = collapsed } model
+                        |> addEffect
+                            (Effect.Focus
+                                (if collapsed then
+                                    "show-top-bar"
+
+                                 else
+                                    "hide-top-bar"
+                                )
+                                TopBarFocusSettled
+                            )
 
                 _ ->
                     unchanged model
+
+        TopBarFocusSettled ->
+            unchanged model
 
         HomeMsg message ->
             updatePage model
@@ -495,6 +509,7 @@ topBar model =
     if topBarIsCollapsed model then
         button
             [ type_ "button"
+            , attribute "id" "show-top-bar"
             , class "top-bar-reveal"
             , attribute "aria-label" "Show top bar"
             , attribute "title" "Show top bar"
@@ -504,46 +519,47 @@ topBar model =
 
     else
         header [ class "app-bar" ]
-        [ a [ class "brand", href "/" ]
-            [ span [ class "brand-mark" ] [ text "H" ]
-            , span [ class "brand-name" ] [ text "hunker" ]
-            ]
-        , pageToolbar model
-        , form [ class "github-location-form", onSubmit SubmittedGitHubInput ]
-            [ input
-                [ type_ "text"
-                , attribute "aria-label" "GitHub URL"
-                , placeholder "Paste any GitHub URL"
-                , value model.githubInput
-                , onInput ChangedGitHubInput
-                , attribute "aria-invalid"
-                    (if model.githubInputError == "" then
-                        "false"
-
-                     else
-                        "true"
-                    )
+            [ a [ class "brand", href "/" ]
+                [ span [ class "brand-mark" ] [ text "H" ]
+                , span [ class "brand-name" ] [ text "hunker" ]
                 ]
-                []
-            , button [ type_ "submit" ] [ text "Open" ]
-            , if model.githubInputError == "" then
-                text ""
+            , pageToolbar model
+            , form [ class "github-location-form", onSubmit SubmittedGitHubInput ]
+                [ input
+                    [ type_ "text"
+                    , attribute "aria-label" "GitHub URL"
+                    , placeholder "Paste any GitHub URL"
+                    , value model.githubInput
+                    , onInput ChangedGitHubInput
+                    , attribute "aria-invalid"
+                        (if model.githubInputError == "" then
+                            "false"
 
-              else
-                span [ class "github-location-error", attribute "role" "alert" ] [ text model.githubInputError ]
-            ]
-        , div [ class "app-bar-actions" ]
-            [ a [ class "app-bar-button", href "/settings" ] [ text "Settings" ]
-            , button
-                [ type_ "button"
-                , class "top-bar-toggle"
-                , attribute "aria-label" "Hide top bar"
-                , attribute "title" "Hide top bar"
-                , onClick (ChangedTopBarCollapsed True)
+                         else
+                            "true"
+                        )
+                    ]
+                    []
+                , button [ type_ "submit" ] [ text "Open" ]
+                , if model.githubInputError == "" then
+                    text ""
+
+                  else
+                    span [ class "github-location-error", attribute "role" "alert" ] [ text model.githubInputError ]
                 ]
-                [ text "↑" ]
+            , div [ class "app-bar-actions" ]
+                [ a [ class "app-bar-button", href "/settings" ] [ text "Settings" ]
+                , button
+                    [ type_ "button"
+                    , attribute "id" "hide-top-bar"
+                    , class "top-bar-toggle"
+                    , attribute "aria-label" "Hide top bar"
+                    , attribute "title" "Hide top bar"
+                    , onClick (ChangedTopBarCollapsed True)
+                    ]
+                    [ text "↑" ]
+                ]
             ]
-        ]
 
 
 topBarIsCollapsed : Model -> Bool

@@ -198,10 +198,13 @@ test("renders a nested repository tree and a deep-linked local file without head
 
 test("keeps repository commit rows compact and aligned", async ({ page }) => {
   await mockRepository(page);
-  await page.goto("/example/hunker/commits");
+  await page.goto("/example/hunker/commits/main");
 
   const rows = page.locator(".repository-commit-row");
   await expect(rows).toHaveCount(2);
+  await expect(
+    page.getByRole("heading", { name: "Commits on main" }),
+  ).toBeVisible();
   const layout = await rows.first().evaluate((row) => {
     const avatar = row.querySelector<HTMLElement>(".commit-avatar");
     const copy = row.querySelector<HTMLElement>(".commit-copy");
@@ -302,6 +305,9 @@ test("shows loading instead of stale review data and preserves a single fetched 
   await expect(
     page.getByRole("button", { name: "Show top bar" }),
   ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Show top bar" }),
+  ).toBeFocused();
   await expect(toolbar).toHaveCSS("top", "0px");
   expect(
     await page.evaluate(() =>
@@ -310,6 +316,9 @@ test("shows loading instead of stale review data and preserves a single fetched 
   ).toBe(0);
   await page.getByRole("button", { name: "Show top bar" }).click();
   await expect(page.locator(".app-bar")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Hide top bar" }),
+  ).toBeFocused();
   await expect(toolbar).toHaveCSS("top", "64px");
 
   const lineLayout = await page
@@ -387,6 +396,97 @@ test("shows loading instead of stale review data and preserves a single fetched 
   await page.goForward();
   await expect(page).toHaveURL("/example/hunker/pull/42/files/src/other.ts");
   expect(reviewRequests).toBe(1);
+});
+
+test("keeps review controls reachable and metadata inside narrow viewports", async ({
+  page,
+}) => {
+  await page.route("**/api/diff?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: {
+        ...reviewResponse,
+        base: "1111111111111111111111111111111111111111",
+      },
+    }),
+  );
+  await mockReviewAnalysis(page);
+
+  await page.setViewportSize({ width: 1024, height: 720 });
+  await page.goto("/example/hunker/pull/42/files/src/long.ts");
+  const options = page.getByRole("button", { name: "Diff options" });
+  await expect(options).toBeVisible();
+  await options.click();
+  await expect(page.getByText("Syntax", { exact: true })).toBeVisible();
+  await expect(page.getByText("Diff colors", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Close diff options" }).click({
+    position: { x: 4, y: 4 },
+  });
+  await expect(page.locator(".diff-options")).toBeHidden();
+
+  await page.setViewportSize({ width: 390, height: 720 });
+  await options.click();
+  await expect(page.locator(".diff-options")).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => document.documentElement.scrollWidth - window.innerWidth,
+      ),
+    )
+    .toBeLessThanOrEqual(1);
+});
+
+test("renders semantic analysis progress once and omits repeated skipped banners", async ({
+  page,
+}) => {
+  let releaseAnalysis: (() => void) | undefined;
+  const analysisGate = new Promise<void>((resolve) => {
+    releaseAnalysis = resolve;
+  });
+  await page.route("**/api/diff?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: reviewResponse,
+    }),
+  );
+  await mockReviewSupport(page);
+  await page.route("**/api/analysis?**", async (route) => {
+    await analysisGate;
+    await fulfillReviewAnalysis(route);
+  });
+
+  await page.goto("/example/hunker/pull/42/files/src/long.ts");
+  await expect(page.locator(".review-analysis-status")).toHaveCount(1);
+  await expect(page.locator(".semantic-banner.is-loading")).toHaveCount(0);
+  releaseAnalysis?.();
+  await expect(page.locator(".review-analysis-status")).toHaveCount(0);
+  await page.getByLabel("Diff scope").selectOption("full");
+  await expect(page.locator(".diff-panel")).toHaveCount(2);
+  await expect(page.locator(".semantic-banner.is-muted")).toHaveCount(0);
+});
+
+test("shows a clear empty state for a repository with no open pull requests", async ({
+  page,
+}) => {
+  await mockRepository(page);
+  await page.route("**/api/repository/pulls?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: {
+        state: "open",
+        page: 1,
+        pullRequests: [],
+        hasMore: false,
+      },
+    }),
+  );
+  await page.goto("/example/hunker/pulls");
+  await expect(
+    page.getByRole("heading", { name: "No open pull requests" }),
+  ).toBeVisible();
 });
 
 test("does not poll mutable revision state for an immutable commit", async ({
@@ -654,7 +754,7 @@ async function mockRepository(page: Page) {
       status: 200,
       contentType: "application/json",
       json: {
-        ref: "main",
+        ref: headOid,
         shallow: false,
         commits: [
           {
@@ -702,65 +802,73 @@ async function mockRepository(page: Page) {
 }
 
 async function mockReviewAnalysis(page: Page) {
-  await page.route("**/api/analysis?**", (route) => {
-    const query = new URL(route.request().url()).searchParams;
-    const file = (path: string) => ({
-      path,
-      semantic: {
-        _tag: "Skipped",
-        reason: "Fixture uses patch fallback.",
-      },
-      syntax: {
-        _tag: "Complete",
-        value: {
-          old: sourcePresentation("TypeScript", []),
-          new: sourcePresentation("TypeScript", [
-            {
-              line: 1,
-              startCharacter: 0,
-              endCharacter: 6,
-              kind: "keyword",
-            },
-          ]),
-        },
-      },
-      wordDiff: {
-        path,
-        ignoreWhitespace: query.get("whitespace") === "ignore",
-        mode: query.get("mode"),
-        rows:
-          path === "src/long.ts"
-            ? [
-                {
-                  oldLine: 1,
-                  newLine: 1,
-                  oldRanges: [],
-                  newRanges: [{ start: 0, end: 6 }],
-                },
-              ]
-            : [],
-      },
-    });
-    return route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      json: {
-        key: {
-          repository: "example/hunker",
-          baseOid: query.get("baseOid"),
-          headOid: query.get("headOid"),
-          options: {
-            ignoreWhitespace: query.get("whitespace") === "ignore",
-            semantic: query.get("semantic") === "true",
-            syntax: query.get("syntax") === "true",
-            inlineDiff: query.get("mode"),
+  await page.route("**/api/analysis?**", fulfillReviewAnalysis);
+  await mockReviewSupport(page);
+}
+
+async function fulfillReviewAnalysis(
+  route: Parameters<Parameters<Page["route"]>[1]>[0],
+) {
+  const query = new URL(route.request().url()).searchParams;
+  const file = (path: string) => ({
+    path,
+    semantic: {
+      _tag: "Skipped",
+      reason: "Fixture uses patch fallback.",
+    },
+    syntax: {
+      _tag: "Complete",
+      value: {
+        old: sourcePresentation("TypeScript", []),
+        new: sourcePresentation("TypeScript", [
+          {
+            line: 1,
+            startCharacter: 0,
+            endCharacter: 6,
+            kind: "keyword",
           },
-        },
-        files: [file("src/long.ts"), file("src/other.ts")],
-        moves: [],
+        ]),
       },
-    });
+    },
+    wordDiff: {
+      path,
+      ignoreWhitespace: query.get("whitespace") === "ignore",
+      mode: query.get("mode"),
+      rows:
+        path === "src/long.ts"
+          ? [
+              {
+                oldLine: 1,
+                newLine: 1,
+                oldRanges: [],
+                newRanges: [{ start: 0, end: 6 }],
+              },
+            ]
+          : [],
+    },
   });
+  return route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    json: {
+      key: {
+        repository: "example/hunker",
+        baseOid: query.get("baseOid"),
+        headOid: query.get("headOid"),
+        options: {
+          ignoreWhitespace: query.get("whitespace") === "ignore",
+          semantic: query.get("semantic") === "true",
+          syntax: query.get("syntax") === "true",
+          inlineDiff: query.get("mode"),
+        },
+      },
+      files: [file("src/long.ts"), file("src/other.ts")],
+      moves: [],
+    },
+  });
+}
+
+async function mockReviewSupport(page: Page) {
   await page.route("**/api/reviews?**", (route) =>
     route.fulfill({
       status: 200,

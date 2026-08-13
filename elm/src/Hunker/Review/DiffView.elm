@@ -4,6 +4,7 @@ module Hunker.Review.DiffView exposing
     , Model
     , SearchMode(..)
     , changeFilter
+    , closeOptions
     , collapseFolder
     , fileFailed
     , fileFullFile
@@ -18,6 +19,7 @@ module Hunker.Review.DiffView exposing
     , init
     , isFolderCollapsed
     , isReviewed
+    , optionsOpen
     , requestPath
     , requestUrl
     , revealFile
@@ -26,6 +28,7 @@ module Hunker.Review.DiffView exposing
     , toggleFolder
     , toggleFullFile
     , toggleHunk
+    , toggleOptions
     , toggleReviewed
     , toggleSourceFold
     )
@@ -48,6 +51,7 @@ type alias Details =
     , filter : String
     , filterMode : SearchMode
     , collapsedFolders : Set String
+    , optionsOpen : Bool
     }
 
 
@@ -78,6 +82,7 @@ init session paths =
         , filter = ""
         , filterMode = Literal
         , collapsedFolders = Set.empty
+        , optionsOpen = False
         }
 
 
@@ -115,6 +120,21 @@ changeFilter value (Model details) =
 selectSearchMode : SearchMode -> Model -> Model
 selectSearchMode value (Model details) =
     Model { details | filterMode = value }
+
+
+optionsOpen : Model -> Bool
+optionsOpen (Model details) =
+    details.optionsOpen
+
+
+toggleOptions : Model -> Model
+toggleOptions (Model details) =
+    Model { details | optionsOpen = not details.optionsOpen }
+
+
+closeOptions : Model -> Model
+closeOptions (Model details) =
+    Model { details | optionsOpen = False }
 
 
 fileFullFile : FileState -> Maybe (Remote FullFileRequest ApiError FullFile)

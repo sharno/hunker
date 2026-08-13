@@ -194,10 +194,10 @@ semanticSummary : Config msg -> FileChange -> Html msg
 semanticSummary config file =
     case config.analysis of
         Analysis.AnalysisInFlight ->
-            div [ class "semantic-banner is-loading" ] [ span [ class "loading-spinner" ] [], text "Analyzing syntax tree…" ]
+            text ""
 
         Analysis.AnalysisFailure error ->
-            div [ class "semantic-banner is-error" ] [ text (ApiError.message error) ]
+            text ""
 
         Analysis.AnalysisComplete ->
             FileIndex.analysis config.file
@@ -214,8 +214,8 @@ semanticFeatureView feature =
         FeatureDisabled ->
             text ""
 
-        FeatureSkipped reason ->
-            div [ class "semantic-banner is-muted" ] [ strong [] [ text "Syntax analysis skipped" ], span [] [ text reason ] ]
+        FeatureSkipped _ ->
+            text ""
 
         FeatureComplete result ->
             semanticResultView result
@@ -242,8 +242,8 @@ semanticResultView result =
                 , div [ class "semantic-chips" ] (List.map semanticChip changes)
                 ]
 
-        SemanticUnsupported _ reason ->
-            div [ class "semantic-banner is-muted" ] [ strong [] [ text "Syntax analysis skipped" ], span [] [ text reason ] ]
+        SemanticUnsupported _ _ ->
+            text ""
 
         SemanticParseFailed _ language reason ->
             div [ class "semantic-banner is-error" ] [ strong [] [ text (language ++ " parse failed") ], span [] [ text reason ] ]

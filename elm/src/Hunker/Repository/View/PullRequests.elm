@@ -50,7 +50,11 @@ view config =
                     div [] [ rowsView config False, p [ class "repository-pull-page-error" ] [ text (ApiError.message error) ] ]
 
             Success _ _ ->
-                rowsView config False
+                if List.isEmpty (Pulls.rows config.pulls) then
+                    emptyState config.activeState
+
+                else
+                    rowsView config False
 
             NotAsked ->
                 text ""
@@ -106,6 +110,26 @@ rowsView config loading =
                     []
                )
         )
+
+
+emptyState : PullRequestState -> Html msg
+emptyState state =
+    section [ class "page-state repository-pulls-empty" ]
+        [ h1 []
+            [ text
+                (case state of
+                    OpenPulls ->
+                        "No open pull requests"
+
+                    ClosedPulls ->
+                        "No closed pull requests"
+
+                    AllPulls ->
+                        "No pull requests"
+                )
+            ]
+        , p [] [ text "Try another filter or open this repository on GitHub." ]
+        ]
 
 
 rowView : Config msg -> PullRequest -> Html msg

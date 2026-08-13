@@ -697,6 +697,11 @@
     @apply m-0 flex items-center gap-2 text-xs text-muted;
   }
 
+  .review-header-copy p {
+    @apply min-w-0 flex-wrap;
+    overflow-wrap: anywhere;
+  }
+
   .review-kicker a {
     @apply font-bold text-slate-700 no-underline hover:underline;
   }
@@ -711,6 +716,10 @@
 
   .review-header code {
     @apply rounded bg-slate-100 px-1.5 py-1 text-[10px];
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    white-space: normal;
+    word-break: break-word;
   }
 
   .review-summary {
@@ -758,6 +767,11 @@
     top: var(--app-bar-height);
   }
 
+  .diff-options-trigger,
+  .diff-options-backdrop {
+    display: none;
+  }
+
   .review-tab-picker {
     @apply flex shrink-0 rounded-lg bg-slate-700 p-1;
   }
@@ -786,6 +800,14 @@
 
   .diff-options {
     @apply flex min-w-0 items-center gap-1.5;
+  }
+
+  .review-analysis-status {
+    @apply flex min-h-9 items-center gap-2 border-b border-slate-300 bg-slate-100 px-4 py-2 text-xs font-bold text-slate-700;
+  }
+
+  .review-analysis-status.is-error {
+    @apply border-red-200 bg-red-50 text-red-800;
   }
 
   .diff-options select,
@@ -1284,8 +1306,25 @@
     justify-self: start;
   }
 
-  .diff-options .filter-toggle:nth-of-type(n + 3) {
-    display: none;
+  .compact-review-toolbar {
+    overflow: visible;
+  }
+
+  .diff-options-trigger {
+    @apply relative z-20 block h-8 shrink-0 rounded-md border border-slate-600 bg-slate-800 px-2 text-[10px] font-bold text-slate-200;
+  }
+
+  .diff-options-backdrop {
+    @apply fixed inset-0 z-10 block cursor-default border-0 bg-transparent p-0;
+  }
+
+  .diff-options {
+    @apply absolute right-3 z-20 hidden max-w-[calc(100vw-1.5rem)] flex-wrap justify-end rounded-lg border border-slate-600 bg-ink p-2 shadow-xl;
+    top: calc(100% + 0.375rem);
+  }
+
+  .compact-review-toolbar.options-open .diff-options {
+    display: flex;
   }
 }
 
@@ -1306,15 +1345,11 @@
 
   .compact-review-toolbar {
     top: 0;
-    overflow-x: auto;
+    @apply gap-2 px-2;
   }
 
   .review-search {
-    min-width: 170px;
-  }
-
-  .diff-options {
-    display: none;
+    min-width: 0;
   }
 
   .workspace,
@@ -1342,6 +1377,18 @@
 
   .workspace.sidebar-collapsed .file-sidebar {
     height: 40px;
+  }
+
+  .review-header {
+    @apply px-4 py-4;
+  }
+
+  .review-summary {
+    @apply min-w-0 flex-wrap gap-2;
+  }
+
+  .review-metric {
+    @apply pl-2;
   }
 
   .review-diffs {
@@ -1373,6 +1420,25 @@
 
   .settings-field {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 480px) {
+  .diff-options-trigger {
+    @apply w-9 overflow-hidden px-0 text-[0];
+  }
+
+  .diff-options-trigger::after {
+    content: "•••";
+    font-size: 10px;
+  }
+
+  .review-tab-picker .segmented-button {
+    @apply px-2;
+  }
+
+  .review-search select {
+    @apply w-14 px-1;
   }
 }
 

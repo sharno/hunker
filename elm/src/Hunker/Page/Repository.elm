@@ -1162,8 +1162,8 @@ view syntaxHighlighting model =
             PullRequests location state ->
                 pullsView location state model
 
-            Commits _ state ->
-                commitsView state model
+            Commits location state ->
+                commitsView location state model
 
             Files location _ ->
                 filesView syntaxHighlighting location model
@@ -1195,10 +1195,11 @@ filesViewState syntaxHighlighting location model =
             FilesView.LocalUnavailable (localUnavailable "Reading repository files…" model)
 
 
-commitsView : CommitsState -> Model -> Html Msg
-commitsView state model =
+commitsView : CommitsLocation -> CommitsState -> Model -> Html Msg
+commitsView location state model =
     CommitsView.view
         { state = commitsViewState state model
+        , reference = location.ref
         , selectedCommit = SelectedCommit
         }
 

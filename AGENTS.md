@@ -131,6 +131,18 @@
 - Put feature rendering in generic view modules that receive decoded data and
   typed callbacks. View modules must not import a page model or message type;
   pages remain the owners of transitions, routes, and effects.
+- Never silently remove review controls at narrower breakpoints. Keep one DOM
+  instance of the controls and move it into a dismissible compact menu so every
+  setting remains reachable and has one state owner.
+- When conditional rendering replaces the focused control, explicitly focus its
+  replacement after the render (for example, hide-top-bar to show-top-bar).
+  Cover both directions with a real-browser focus assertion.
+- Render review-wide asynchronous progress and failures once near the review
+  toolbar. File panels render only meaningful file-specific results; never
+  repeat one global loading state or unsupported-language notice per file.
+- Exercise narrow layouts with unbreakable commit OIDs and with transient menus
+  open. Assert document `scrollWidth` stays within the viewport; checking only
+  the closed steady state misses popup and focus-control overflow.
 
 ## Rust server
 

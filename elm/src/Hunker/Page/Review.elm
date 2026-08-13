@@ -87,6 +87,8 @@ type Msg
     | ToggledSyntax Bool
     | ToggledDiffColors Bool
     | ToggledReviews Bool
+    | ToggledDiffOptions
+    | ClosedDiffOptions
     | AnalysisLoaded Analysis.Identity AnalysisSnapshot
     | AnalysisFailed Analysis.Identity ApiError
     | FullFileLoaded DiffView.FullFileRequest FullFile
@@ -390,6 +392,12 @@ update settings msg model =
 
             else
                 unchanged model
+
+        ToggledDiffOptions ->
+            ( mapDiff DiffView.toggleOptions model, Effect.none )
+
+        ClosedDiffOptions ->
+            ( mapDiff DiffView.closeOptions model, Effect.none )
 
         AnalysisLoaded requested snapshot ->
             ( mapReady (\ready -> { ready | analysis = Analysis.complete requested snapshot ready.analysis }) model
@@ -914,6 +922,11 @@ readyView settings model reviewData =
     main_ [ class "review-page review-grid" ]
         [ reviewHeader model reviewData
         , reviewToolbar settings model
+        , if currentLocation.tab == ReviewFiles then
+            reviewAnalysisStatus model
+
+          else
+            text ""
         , case currentLocation.tab of
             ReviewCommits ->
                 case currentLocation.commit of
@@ -970,6 +983,28 @@ reviewHeader model reviewData =
         ]
 
 
+reviewAnalysisStatus : Model -> Html Msg
+reviewAnalysisStatus model =
+    case readyState model of
+        Just ready ->
+            case Analysis.status ready.analysis of
+                Analysis.AnalysisInFlight ->
+                    div [ class "review-analysis-status is-loading", attribute "role" "status" ]
+                        [ span [ class "loading-spinner" ] [], text "Analyzing syntax trees…" ]
+
+                Analysis.AnalysisFailure error ->
+                    div [ class "review-analysis-status is-error", attribute "role" "alert" ] [ text (ApiError.message error) ]
+
+                Analysis.AnalysisComplete ->
+                    text ""
+
+                Analysis.AnalysisDisabled ->
+                    text ""
+
+        Nothing ->
+            text ""
+
+
 backingBadge : ReviewDocument -> Html Msg
 backingBadge reviewData =
     case Review.backingLocalPath reviewData.backing of
@@ -1024,6 +1059,9 @@ reviewToolbar settings model =
 
         filter =
             diff |> Maybe.map DiffView.filter |> Maybe.withDefault ""
+
+        optionsOpen =
+            diff |> Maybe.map DiffView.optionsOpen |> Maybe.withDefault False
     in
     ToolbarView.view
         { settings = settings
@@ -1042,6 +1080,9 @@ reviewToolbar settings model =
         , toggleSyntax = ToggledSyntax
         , toggleDiffColors = ToggledDiffColors
         , toggleReviews = ToggledReviews
+        , optionsOpen = optionsOpen
+        , toggleOptions = ToggledDiffOptions
+        , closeOptions = ClosedDiffOptions
         }
 
 
