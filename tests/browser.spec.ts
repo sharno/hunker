@@ -437,6 +437,60 @@ test("keeps review controls reachable and metadata inside narrow viewports", asy
     .toBeLessThanOrEqual(1);
 });
 
+test("shows approval progress and success through real Fetch transport", async ({
+  page,
+}) => {
+  await page.route("**/api/diff?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: reviewResponse,
+    }),
+  );
+  await mockReviewAnalysis(page);
+
+  let releaseReview: (() => void) | undefined;
+  const reviewGate = new Promise<void>((resolve) => {
+    releaseReview = resolve;
+  });
+  let postedBody: unknown;
+  await page.route("**/api/reviews/submit", async (route) => {
+    postedBody = route.request().postDataJSON();
+    await reviewGate;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      json: { event: "APPROVE" },
+    });
+  });
+
+  await page.goto("/example/hunker/pull/42/files/src/long.ts");
+  await page.getByRole("button", { name: "Approve", exact: true }).click();
+
+  await expect(
+    page.getByRole("button", { name: "Approving…", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Comment", exact: true }),
+  ).toBeDisabled();
+  await expect(page.getByRole("status")).toHaveText(
+    "Submitting review to GitHub…",
+  );
+  expect(postedBody).toEqual({
+    url: reviewUrl,
+    body: "",
+    event: "APPROVE",
+  });
+
+  releaseReview?.();
+  await expect(page.getByRole("status")).toHaveText(
+    "Review approved on GitHub.",
+  );
+  await expect(
+    page.getByRole("button", { name: "Approve", exact: true }),
+  ).toBeEnabled();
+});
+
 test("renders semantic analysis progress once and omits repeated skipped banners", async ({
   page,
 }) => {
@@ -483,10 +537,79 @@ test("shows a clear empty state for a repository with no open pull requests", as
       },
     }),
   );
+  await page.setViewportSize({ width: 390, height: 720 });
   await page.goto("/example/hunker/pulls");
   await expect(
     page.getByRole("heading", { name: "No open pull requests" }),
   ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Files", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Pull requests", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: "Settings" })).toBeVisible();
+  const mobileLayout = await page.evaluate(() => {
+    const nav = document.querySelector<HTMLElement>(".repository-toolbar");
+    const emptyMessage = document.querySelector<HTMLElement>(
+      ".repository-pulls-empty p",
+    );
+    const pull = document.querySelector<HTMLElement>(".source-control-pull");
+    if (!nav || !emptyMessage || !pull)
+      throw new Error("Expected mobile repository controls and empty state");
+    const navRect = nav.getBoundingClientRect();
+    const emptyMessageRect = emptyMessage.getBoundingClientRect();
+    return {
+      navPosition: getComputedStyle(nav).position,
+      emptyMessageBottom: emptyMessageRect.bottom,
+      navTop: navRect.top,
+      pullWhiteSpace: getComputedStyle(pull).whiteSpace,
+    };
+  });
+  expect(mobileLayout.navPosition).toBe("fixed");
+  expect(mobileLayout.emptyMessageBottom).toBeLessThanOrEqual(
+    mobileLayout.navTop + 1,
+  );
+  expect(mobileLayout.pullWhiteSpace).toBe("nowrap");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => document.documentElement.scrollWidth - window.innerWidth,
+      ),
+    )
+    .toBeLessThanOrEqual(1);
+});
+
+test("keeps settings usable without horizontal overflow on mobile", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 720 });
+  await page.goto("/settings");
+
+  await expect(
+    page.getByRole("heading", { name: "Hunker settings" }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Repositories root")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Save settings" }),
+  ).toBeVisible();
+  const sectionWidths = await page
+    .locator(".settings-section")
+    .evaluateAll((sections) =>
+      sections.map((section) => ({
+        client: section.clientWidth,
+        scroll: section.scrollWidth,
+      })),
+    );
+  for (const width of sectionWidths)
+    expect(width.scroll).toBeLessThanOrEqual(width.client + 1);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => document.documentElement.scrollWidth - window.innerWidth,
+      ),
+    )
+    .toBeLessThanOrEqual(1);
 });
 
 test("does not poll mutable revision state for an immutable commit", async ({

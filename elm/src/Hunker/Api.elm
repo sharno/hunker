@@ -269,7 +269,7 @@ postReply githubUrl commentId body succeeded failed =
         failed
 
 
-submitReview : String -> String -> String -> (String -> msg) -> (ApiError -> msg) -> Effect msg
+submitReview : String -> String -> Review.ReviewAction -> (Review.ReviewAction -> msg) -> (ApiError -> msg) -> Effect msg
 submitReview githubUrl body event succeeded failed =
     Effect.send "POST"
         "/api/reviews/submit"
@@ -277,11 +277,11 @@ submitReview githubUrl body event succeeded failed =
             (Encode.object
                 [ ( "url", Encode.string githubUrl )
                 , ( "body", Encode.string body )
-                , ( "event", Encode.string event )
+                , ( "event", Encode.string (Review.reviewActionToString event) )
                 ]
             )
         )
-        (Decode.map succeeded (Decode.field "event" Decode.string))
+        (Decode.map succeeded (Decode.field "event" Review.reviewActionDecoder))
         failed
 
 

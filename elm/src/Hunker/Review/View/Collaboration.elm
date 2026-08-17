@@ -7,10 +7,10 @@ module Hunker.Review.View.Collaboration exposing
     )
 
 import Html exposing (Html, article, button, div, form, h2, header, span, strong, text, textarea)
-import Html.Attributes exposing (class, disabled, id, placeholder, type_, value)
+import Html.Attributes exposing (class, disabled, id, placeholder, title, type_, value)
 import Html.Events exposing (onClick, onInput, onSubmit)
 import Hunker.ApiError as ApiError exposing (ApiError)
-import Hunker.Domain.Review as Review exposing (CommentSide, ReviewComment)
+import Hunker.Domain.Review as Review exposing (CommentSide, ReviewAction(..), ReviewComment)
 import Hunker.Remote exposing (Remote(..))
 import Hunker.Review.Collaboration as Collaboration
 import Markdown
@@ -24,7 +24,7 @@ type alias Actions msg =
     , cancelInline : msg
     , submitInline : msg
     , changeReviewBody : String -> msg
-    , submitReview : String -> msg
+    , submitReview : ReviewAction -> msg
     }
 
 
@@ -67,12 +67,24 @@ inlineComposer actions collaboration fileAnchor path =
                 text ""
 
             else
+                let
+                    loading =
+                        Collaboration.inlineLoading collaboration
+                in
                 form [ class "inline-comment-composer", onSubmit actions.submitInline ]
                     [ header [] [ strong [] [ text ("Comment on " ++ path ++ ":" ++ String.fromInt composer.line) ], span [] [ text (Review.commentSideToString composer.side) ] ]
-                    , textarea [ id ("inline-comment-" ++ fileAnchor), placeholder "Leave a review comment on GitHub…", value composer.body, onInput actions.changeInlineBody ] []
+                    , textarea [ id ("inline-comment-" ++ fileAnchor), placeholder "Leave a review comment on GitHub…", value composer.body, disabled loading, onInput actions.changeInlineBody ] []
                     , div []
-                        [ button [ type_ "button", onClick actions.cancelInline ] [ text "Cancel" ]
-                        , button [ type_ "submit", disabled (Collaboration.inlineLoading collaboration) ] [ text "Add comment" ]
+                        [ button [ type_ "button", disabled loading, onClick actions.cancelInline ] [ text "Cancel" ]
+                        , button [ type_ "submit", disabled (loading || String.trim composer.body == "") ]
+                            [ text
+                                (if loading then
+                                    "Adding…"
+
+                                 else
+                                    "Add comment"
+                                )
+                            ]
                         ]
                     , apiErrorView (Collaboration.inlineError collaboration)
                     ]
@@ -83,16 +95,112 @@ inlineComposer actions collaboration fileAnchor path =
 
 reviewComposer : Actions msg -> Collaboration.Model -> Html msg
 reviewComposer actions collaboration =
+    let
+        submission =
+            Collaboration.reviewSubmissionState collaboration
+
+        loading =
+            case submission of
+                Collaboration.ReviewSubmitting _ ->
+                    True
+
+                _ ->
+                    False
+
+        body =
+            Collaboration.reviewBody collaboration
+    in
     form [ class "github-review-composer" ]
         [ h2 [] [ text "Submit review" ]
-        , textarea [ placeholder "Leave an overall review…", value (Collaboration.reviewBody collaboration), onInput actions.changeReviewBody ] []
+        , textarea [ placeholder "Leave an overall review…", value body, disabled loading, onInput actions.changeReviewBody ] []
         , div []
-            [ button [ type_ "button", onClick (actions.submitReview "COMMENT") ] [ text "Comment" ]
-            , button [ type_ "button", onClick (actions.submitReview "APPROVE") ] [ text "Approve" ]
-            , button [ type_ "button", onClick (actions.submitReview "REQUEST_CHANGES") ] [ text "Request changes" ]
+            [ reviewButton actions submission body CommentReview
+            , reviewButton actions submission body ApproveReview
+            , reviewButton actions submission body RequestChangesReview
             ]
-        , apiErrorView (Collaboration.reviewError collaboration)
+        , reviewFeedback submission
         ]
+
+
+reviewButton : Actions msg -> Collaboration.ReviewSubmissionState -> String -> ReviewAction -> Html msg
+reviewButton actions submission body action =
+    let
+        loading =
+            case submission of
+                Collaboration.ReviewSubmitting _ ->
+                    True
+
+                _ ->
+                    False
+
+        requiresBody =
+            action /= ApproveReview
+
+        label =
+            case ( submission, action ) of
+                ( Collaboration.ReviewSubmitting CommentReview, CommentReview ) ->
+                    "Commenting…"
+
+                ( Collaboration.ReviewSubmitting ApproveReview, ApproveReview ) ->
+                    "Approving…"
+
+                ( Collaboration.ReviewSubmitting RequestChangesReview, RequestChangesReview ) ->
+                    "Requesting changes…"
+
+                ( _, CommentReview ) ->
+                    "Comment"
+
+                ( _, ApproveReview ) ->
+                    "Approve"
+
+                ( _, RequestChangesReview ) ->
+                    "Request changes"
+
+        needsSummary =
+            requiresBody && String.trim body == ""
+    in
+    button
+        [ type_ "button"
+        , disabled (loading || needsSummary)
+        , title
+            (if needsSummary then
+                "Write a review summary first"
+
+             else
+                label
+            )
+        , onClick (actions.submitReview action)
+        ]
+        [ text label ]
+
+
+reviewFeedback : Collaboration.ReviewSubmissionState -> Html msg
+reviewFeedback submission =
+    case submission of
+        Collaboration.ReviewNotSubmitted ->
+            text ""
+
+        Collaboration.ReviewSubmitting _ ->
+            div [ class "form-status", Html.Attributes.attribute "role" "status" ] [ text "Submitting review to GitHub…" ]
+
+        Collaboration.ReviewSucceeded action ->
+            div [ class "form-success", Html.Attributes.attribute "role" "status" ] [ text (reviewSuccessMessage action) ]
+
+        Collaboration.ReviewSubmissionFailed error ->
+            apiErrorView (Just error)
+
+
+reviewSuccessMessage : ReviewAction -> String
+reviewSuccessMessage action =
+    case action of
+        CommentReview ->
+            "Review comment submitted to GitHub."
+
+        ApproveReview ->
+            "Review approved on GitHub."
+
+        RequestChangesReview ->
+            "Changes requested on GitHub."
 
 
 rootComments : List ReviewComment -> List ReviewComment
@@ -160,9 +268,24 @@ commentBody comment =
 
 replyComposer : Actions msg -> Collaboration.FileState -> Int -> Html msg
 replyComposer actions collaboration commentId =
+    let
+        loading =
+            Collaboration.replyLoading commentId collaboration
+
+        body =
+            Collaboration.replyDraft commentId collaboration
+    in
     form [ class "review-reply-composer", onSubmit (actions.submitReply commentId) ]
-        [ textarea [ placeholder "Reply on GitHub…", value (Collaboration.replyDraft commentId collaboration), onInput (actions.changeReply commentId) ] []
-        , button [ type_ "submit", disabled (Collaboration.replyLoading commentId collaboration) ] [ text "Reply" ]
+        [ textarea [ placeholder "Reply on GitHub…", value body, disabled loading, onInput (actions.changeReply commentId) ] []
+        , button [ type_ "submit", disabled (loading || String.trim body == "") ]
+            [ text
+                (if loading then
+                    "Replying…"
+
+                 else
+                    "Reply"
+                )
+            ]
         , apiErrorView (Collaboration.replyError commentId collaboration)
         ]
 

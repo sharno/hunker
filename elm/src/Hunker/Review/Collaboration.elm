@@ -8,6 +8,7 @@ module Hunker.Review.Collaboration exposing
     , ReplySubmission
     , ReviewRequest
     , ReviewSubmission
+    , ReviewSubmissionState(..)
     , beginComments
     , beginReply
     , beginReview
@@ -38,9 +39,9 @@ module Hunker.Review.Collaboration exposing
     , replyLoaded
     , replyLoading
     , reviewBody
-    , reviewError
     , reviewFailed
     , reviewLoaded
+    , reviewSubmissionState
     , revision
     , revisionFailed
     , revisionLoaded
@@ -51,7 +52,7 @@ module Hunker.Review.Collaboration exposing
 
 import Dict exposing (Dict)
 import Hunker.ApiError exposing (ApiError)
-import Hunker.Domain.Review exposing (CommentSide, PullCommit, ReviewComment, Revision)
+import Hunker.Domain.Review exposing (CommentSide, PullCommit, ReviewAction, ReviewComment, Revision)
 import Hunker.Remote as Remote exposing (Remote(..))
 import Hunker.Review.Session as Session
 import Set exposing (Set)
@@ -69,7 +70,7 @@ type alias Details =
     , commentPaths : Dict Int String
     , inlinePath : Maybe String
     , reviewBody : String
-    , reviewSubmission : Remote ReviewRequest ApiError String
+    , reviewSubmission : Remote ReviewRequest ApiError ReviewAction
     }
 
 
@@ -92,7 +93,14 @@ type ReplyRequest
 
 
 type ReviewRequest
-    = ReviewRequest Session.Id String
+    = ReviewRequest Session.Id ReviewAction
+
+
+type ReviewSubmissionState
+    = ReviewNotSubmitted
+    | ReviewSubmitting ReviewAction
+    | ReviewSucceeded ReviewAction
+    | ReviewSubmissionFailed ApiError
 
 
 type InlineRequest
@@ -110,7 +118,7 @@ type alias ReplySubmission =
 type alias ReviewSubmission =
     { request : ReviewRequest
     , pullUrl : String
-    , event : String
+    , event : ReviewAction
     , body : String
     }
 
@@ -446,7 +454,7 @@ reviewBody (Model details) =
     details.reviewBody
 
 
-beginReview : String -> Model -> ( Model, ReviewSubmission )
+beginReview : ReviewAction -> Model -> ( Model, ReviewSubmission )
 beginReview event (Model details) =
     let
         request =
@@ -457,7 +465,7 @@ beginReview event (Model details) =
     )
 
 
-reviewLoaded : ReviewRequest -> String -> Model -> Model
+reviewLoaded : ReviewRequest -> ReviewAction -> Model -> Model
 reviewLoaded request response ((Model details) as model) =
     if Remote.identity details.reviewSubmission == Just request && reviewBelongsTo details.session request then
         Model { details | reviewSubmission = Success request response, reviewBody = "" }
@@ -475,14 +483,20 @@ reviewFailed request error ((Model details) as model) =
         model
 
 
-reviewError : Model -> Maybe ApiError
-reviewError (Model details) =
+reviewSubmissionState : Model -> ReviewSubmissionState
+reviewSubmissionState (Model details) =
     case details.reviewSubmission of
-        Failure _ error ->
-            Just error
+        NotAsked ->
+            ReviewNotSubmitted
 
-        _ ->
-            Nothing
+        Loading (ReviewRequest _ action) ->
+            ReviewSubmitting action
+
+        Success _ action ->
+            ReviewSucceeded action
+
+        Failure _ error ->
+            ReviewSubmissionFailed error
 
 
 openInline : String -> Int -> CommentSide -> Model -> Model

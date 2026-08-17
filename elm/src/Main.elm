@@ -548,7 +548,10 @@ topBar model =
                     span [ class "github-location-error", attribute "role" "alert" ] [ text model.githubInputError ]
                 ]
             , div [ class "app-bar-actions" ]
-                [ a [ class "app-bar-button", href "/settings" ] [ text "Settings" ]
+                [ a [ class "app-bar-button", href "/settings", attribute "aria-label" "Settings", attribute "title" "Settings" ]
+                    [ span [ class "app-bar-settings-label" ] [ text "Settings" ]
+                    , span [ class "app-bar-settings-icon", attribute "aria-hidden" "true" ] [ text "⚙" ]
+                    ]
                 , button
                     [ type_ "button"
                     , attribute "id" "hide-top-bar"

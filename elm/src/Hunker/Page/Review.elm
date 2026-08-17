@@ -18,7 +18,7 @@ import Html.Keyed as Keyed
 import Html.Lazy as Lazy
 import Hunker.Api as Api
 import Hunker.ApiError as ApiError exposing (ApiError)
-import Hunker.Domain.Review as Review exposing (AnalysisSnapshot, CommentSide, FileChange, FileStatus(..), FullFile, PullCommit, ReviewComment, ReviewDocument, Revision(..))
+import Hunker.Domain.Review as Review exposing (AnalysisSnapshot, CommentSide, FileChange, FileStatus(..), FullFile, PullCommit, ReviewAction, ReviewComment, ReviewDocument, Revision(..))
 import Hunker.Domain.Settings as Settings exposing (InlineDiffMode(..), ReviewScope(..), Settings, ViewMode(..))
 import Hunker.Effect as Effect exposing (Effect)
 import Hunker.FileTree as FileTree
@@ -107,8 +107,8 @@ type Msg
     | ReplyLoaded Collaboration.ReplyRequest ReviewComment
     | ReplyFailed Collaboration.ReplyRequest ApiError
     | ChangedReviewBody String
-    | SubmittedReview String
-    | ReviewSubmitted Collaboration.ReviewRequest String
+    | SubmittedReview ReviewAction
+    | ReviewSubmitted Collaboration.ReviewRequest ReviewAction
     | ReviewSubmitFailed Collaboration.ReviewRequest ApiError
     | OpenedInlineComposer String Int CommentSide
     | ChangedInlineBody String

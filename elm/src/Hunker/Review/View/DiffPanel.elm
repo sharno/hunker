@@ -2,7 +2,7 @@ module Hunker.Review.View.DiffPanel exposing (Actions, Layout, LineOptions, file
 
 import Dict
 import Html exposing (Html, a, article, button, code, div, footer, header, section, span, strong, text)
-import Html.Attributes exposing (attribute, class, href, id, style, type_)
+import Html.Attributes exposing (attribute, class, disabled, href, id, style, type_)
 import Html.Events exposing (onClick)
 import Hunker.ApiError as ApiError exposing (ApiError)
 import Hunker.Diff as Diff exposing (DiffLine, Hunk, Kind(..), SideLine, SplitRow)
@@ -136,7 +136,7 @@ view actions layout_ lineOptions_ githubFileUrl analysis fileModel diff collabor
                     |> Maybe.withDefault (text "")
                 ]
             , div [ class "file-actions", attribute "data-ignore-file-collapse" "true" ]
-                [ button [ type_ "button", onClick (config.actions.toggleFullFile file) ]
+                [ button [ type_ "button", disabled (isLoading fullFile), onClick (config.actions.toggleFullFile file) ]
                     [ text
                         (case fullFile of
                             Just (Loading _) ->
@@ -188,6 +188,16 @@ view actions layout_ lineOptions_ githubFileUrl analysis fileModel diff collabor
                     ]
                 ]
         ]
+
+
+isLoading : Maybe (Remote request error value) -> Bool
+isLoading remote =
+    case remote of
+        Just (Loading _) ->
+            True
+
+        _ ->
+            False
 
 
 semanticSummary : Config msg -> FileChange -> Html msg

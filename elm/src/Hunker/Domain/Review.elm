@@ -13,6 +13,7 @@ module Hunker.Domain.Review exposing
     , FullFile
     , MovedBlock
     , PullCommit
+    , ReviewAction(..)
     , ReviewBacking
     , ReviewComment
     , ReviewDocument
@@ -33,6 +34,8 @@ module Hunker.Domain.Review exposing
     , fileStatusToString
     , fullFileDecoder
     , movedBlocksDecoder
+    , reviewActionDecoder
+    , reviewActionToString
     , reviewDecoder
     , revisionDecoder
     , semanticDecoder
@@ -225,6 +228,45 @@ commentSideToString side =
 
         RightSide ->
             "RIGHT"
+
+
+type ReviewAction
+    = CommentReview
+    | ApproveReview
+    | RequestChangesReview
+
+
+reviewActionToString : ReviewAction -> String
+reviewActionToString action =
+    case action of
+        CommentReview ->
+            "COMMENT"
+
+        ApproveReview ->
+            "APPROVE"
+
+        RequestChangesReview ->
+            "REQUEST_CHANGES"
+
+
+reviewActionDecoder : Decoder ReviewAction
+reviewActionDecoder =
+    Decode.string
+        |> Decode.andThen
+            (\value ->
+                case value of
+                    "COMMENT" ->
+                        Decode.succeed CommentReview
+
+                    "APPROVE" ->
+                        Decode.succeed ApproveReview
+
+                    "REQUEST_CHANGES" ->
+                        Decode.succeed RequestChangesReview
+
+                    _ ->
+                        Decode.fail ("Unknown review action: " ++ value)
+            )
 
 
 type Revision

@@ -66,6 +66,36 @@ suite =
                     |> ProgramTest.simulateHttpOk "GET" reviewRequest reviewJson
                     |> ProgramTest.simulateHttpOk "GET" "/api/reviews?url=https%3A%2F%2Fgithub.com%2Fexample%2Fhunker%2Fpull%2F42" resolvedCommentsJson
                     |> ProgramTest.expectViewHas [ text "Resolved", text "reviewer" ]
+        , test "disables full-file expansion while its request is active" <|
+            \() ->
+                startedAt "/example/hunker/pull/42/files/src/greet.ts"
+                    |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
+                    |> ProgramTest.simulateHttpOk "GET" reviewRequest reviewJson
+                    |> ProgramTest.clickButton "Full file"
+                    |> ProgramTest.expectViewHas
+                        [ tag "button"
+                        , containing [ text "Loading…" ]
+                        , disabled True
+                        ]
+        , test "exposes approval progress and success instead of submitting invisibly" <|
+            \() ->
+                startedAt "/example/hunker/pull/42/files/src/greet.ts"
+                    |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
+                    |> ProgramTest.simulateHttpOk "GET" reviewRequest reviewJson
+                    |> ProgramTest.clickButton "Approve"
+                    |> ProgramTest.ensureViewHas
+                        [ tag "button"
+                        , containing [ text "Approving…" ]
+                        , disabled True
+                        ]
+                    |> ProgramTest.ensureViewHas
+                        [ tag "button"
+                        , containing [ text "Comment" ]
+                        , disabled True
+                        ]
+                    |> ProgramTest.ensureHttpRequests "POST" "/api/reviews/submit" (List.length >> Expect.equal 1)
+                    |> ProgramTest.simulateHttpOk "POST" "/api/reviews/submit" "{\"event\":\"APPROVE\"}"
+                    |> ProgramTest.expectViewHas [ text "Review approved on GitHub." ]
         , test "serializes rapid review setting changes and coalesces the latest document" <|
             \() ->
                 startedAt "/example/hunker/pull/42/files/src/greet.ts"

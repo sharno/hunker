@@ -106,6 +106,10 @@
     @apply shrink-0 rounded-md border border-slate-600 px-3 py-2 text-xs font-bold text-slate-200 no-underline hover:border-slate-400;
   }
 
+  .app-bar-settings-icon {
+    display: none;
+  }
+
   .app-bar-actions {
     @apply flex items-center gap-2;
   }
@@ -380,8 +384,18 @@
   }
 
   .save-feedback,
+  .form-status,
+  .form-success,
   .form-error {
     @apply text-xs;
+  }
+
+  .form-status {
+    @apply text-muted;
+  }
+
+  .form-success {
+    @apply text-emerald-700;
   }
 
   .save-feedback.is-success {
@@ -1310,6 +1324,10 @@
     overflow: visible;
   }
 
+  .compact-review-toolbar.options-open {
+    z-index: 50;
+  }
+
   .diff-options-trigger {
     @apply relative z-20 block h-8 shrink-0 rounded-md border border-slate-600 bg-slate-800 px-2 text-[10px] font-bold text-slate-200;
   }
@@ -1337,10 +1355,58 @@
     padding: 10px;
   }
 
-  .brand-name,
-  .repository-toolbar,
-  .app-bar-button {
+  .brand-name {
     display: none;
+  }
+
+  .app-bar-button {
+    @apply grid size-9 place-items-center overflow-hidden p-0;
+  }
+
+  .app-bar-settings-label {
+    display: none;
+  }
+
+  .app-bar-settings-icon {
+    display: inline;
+    font-size: 14px;
+  }
+
+  .repository-toolbar {
+    @apply fixed right-2 bottom-2 left-2 z-50 block rounded-xl border border-slate-600 bg-ink p-1 shadow-xl;
+  }
+
+  .repository-view-tabs {
+    @apply grid w-full grid-cols-3 bg-transparent p-0;
+  }
+
+  .repository-view-tabs .segmented-button {
+    @apply min-w-0 truncate px-2 py-2.5 text-slate-300;
+  }
+
+  .repository-view-tabs .segmented-button.is-active {
+    @apply bg-white text-ink shadow-sm;
+  }
+
+  .repository-shell {
+    padding-bottom: 60px;
+  }
+
+  .repository-source-control {
+    @apply gap-1.5 px-2.5;
+  }
+
+  .source-control-path {
+    display: none;
+  }
+
+  .source-control-changes {
+    @apply flex-1;
+  }
+
+  .source-control-refresh,
+  .source-control-pull {
+    @apply shrink-0 whitespace-nowrap;
   }
 
   .compact-review-toolbar {
@@ -1418,8 +1484,45 @@
     width: 100%;
   }
 
+  .settings-form,
+  .settings-section,
+  .settings-field,
+  .settings-actions,
+  .settings-field input,
+  .settings-field select {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .settings-field input,
+  .settings-field select {
+    width: 100%;
+  }
+
+  .settings-actions {
+    @apply flex-wrap;
+  }
+
   .settings-field {
     grid-template-columns: 1fr;
+  }
+
+  .repository-pulls-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .repository-pull-filters {
+    @apply grid w-full grid-cols-3;
+  }
+
+  .repository-pull-filters .segmented-button {
+    @apply min-w-0 truncate px-2;
+  }
+
+  .repository-pulls-browser .page-state {
+    min-height: max(240px, calc(100dvh - 340px));
+    padding-bottom: 60px;
   }
 }
 

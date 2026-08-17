@@ -16,6 +16,10 @@
   `NotAsked | Loading identity | Failure identity error | Success identity value`.
   Put request identity inside the ADT and ignore responses that no longer match
   the active route.
+- Every user-triggered async action must expose its in-flight state immediately,
+  disable duplicate or draft-mutating controls until the matching response, and
+  render persistent success or typed error feedback. A transport request with no
+  visible state transition is a UI bug.
 - Decode external JSON directly into domain types in `Hunker.Domain.*`. Do not
   pass `Decode.Value`, unchecked flags, or parallel sentinel fields beyond the
   boundary.
@@ -134,6 +138,9 @@
 - Never silently remove review controls at narrower breakpoints. Keep one DOM
   instance of the controls and move it into a dismissible compact menu so every
   setting remains reachable and has one state owner.
+- Never hide the only route switcher at a narrow breakpoint. Repository tabs and
+  global Settings must remain reachable on mobile, and their open states must be
+  included in horizontal-overflow browser tests.
 - When conditional rendering replaces the focused control, explicitly focus its
   replacement after the render (for example, hide-top-bar to show-top-bar).
   Cover both directions with a real-browser focus assertion.
