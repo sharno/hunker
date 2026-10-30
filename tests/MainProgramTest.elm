@@ -15,7 +15,8 @@ import SimulatedEffect.Navigation as SimulatedNavigation
 import SimulatedEffect.Process as SimulatedProcess
 import SimulatedEffect.Task as SimulatedTask
 import Test exposing (Test, describe, test)
-import Test.Html.Selector exposing (containing, disabled, tag, text)
+import Test.Html.Query as Query
+import Test.Html.Selector exposing (class, containing, disabled, tag, text)
 import Test.Http as TestHttp
 import Time
 
@@ -58,6 +59,30 @@ suite =
                         ]
                     |> ProgramTest.clickButton "Mark reviewed"
                     |> ProgramTest.expectViewHas [ text "Reviewed" ]
+        , test "turning off diff colors marks the diff section" <|
+            \() ->
+                startedAt "/example/hunker/pull/42/files/src/greet.ts"
+                    |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
+                    |> ProgramTest.simulateHttpOk "GET" reviewRequest reviewJson
+                    |> ProgramTest.update (reviewSetting (Settings.SetDiffColors Settings.Disabled))
+                    |> ProgramTest.expectView (Query.find [ class "review-diffs" ] >> Query.has [ class "diff-colors-disabled" ])
+        , test "the full-diff scope renders every file panel" <|
+            \() ->
+                startedAt "/example/hunker/pull/42/files/src/greet.ts"
+                    |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
+                    |> ProgramTest.simulateHttpOk "GET" reviewRequest reviewJson
+                    |> ProgramTest.ensureView (Query.findAll [ class "diff-panel" ] >> Query.count (Expect.equal 1))
+                    |> ProgramTest.update (reviewSetting (Settings.SetReviewScope Settings.FullDiff))
+                    |> ProgramTest.expectView (Query.findAll [ class "diff-panel" ] >> Query.count (Expect.equal 2))
+        , test "renders review analysis progress once and clears it when the snapshot arrives" <|
+            \() ->
+                startedAt "/example/hunker/pull/42/files/src/greet.ts"
+                    |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
+                    |> ProgramTest.simulateHttpOk "GET" reviewRequest reviewJson
+                    |> ProgramTest.update (reviewSetting (Settings.SetReviewScope Settings.FullDiff))
+                    |> ProgramTest.ensureView (Query.findAll [ class "review-analysis-status" ] >> Query.count (Expect.equal 1))
+                    |> ProgramTest.simulateHttpOk "GET" analysisRequest analysisJson
+                    |> ProgramTest.expectView (Query.findAll [ class "review-analysis-status" ] >> Query.count (Expect.equal 0))
         , test "collapses resolved GitHub review threads by default" <|
             \() ->
                 startedAt "/example/hunker/pull/42/files/src/greet.ts"
@@ -506,6 +531,13 @@ reviewJson =
                         , ( "deletions", Encode.int 1 )
                         , ( "patch", Encode.string "@@ -1 +1 @@\n-const greeting = \"hi\";\n+const greeting = \"hello\";" )
                         ]
+                    , Encode.object
+                        [ ( "path", Encode.string "src/other.ts" )
+                        , ( "status", Encode.string "modified" )
+                        , ( "additions", Encode.int 1 )
+                        , ( "deletions", Encode.int 1 )
+                        , ( "patch", Encode.string "@@ -1 +1 @@\n-export const other = false;\n+export const other = true;" )
+                        ]
                     ]
               )
             , ( "revision"
@@ -519,6 +551,16 @@ reviewJson =
             ]
 
 
+analysisRequest : String
+analysisRequest =
+    "/api/analysis?url=https%3A%2F%2Fgithub.com%2Fexample%2Fhunker%2Fpull%2F42&baseOid=1111111111111111111111111111111111111111&headOid=2222222222222222222222222222222222222222&whitespace=ignore&semantic=enabled&syntax=enabled&inlineDiff=token"
+
+
+analysisJson : String
+analysisJson =
+    """{"files":[],"moves":[]}"""
+
+
 resolvedCommentsJson : String
 resolvedCommentsJson =
-    """{"comments":[{"id":7,"rootId":7,"path":"src/greet.ts","body":"This **thread** is resolved.","author":"reviewer","htmlUrl":"https://github.com/example/hunker/pull/42#discussion_r7","createdAt":"2026-08-07T12:00:00Z","line":1,"side":"RIGHT","resolved":true}]}"""
+    """{"comments":[{"id":7,"rootId":7,"path":"src/greet.ts","body":"This **thread** is resolved.","author":"reviewer","htmlUrl":"https://github.com/example/hunker/pull/42#discussion_r7","createdAt":"2026-08-07T12:00:00Z","anchor":{"_tag":"Current","line":1,"side":"RIGHT"},"resolved":true}]}"""

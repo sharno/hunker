@@ -23,7 +23,7 @@ repositoryPulls =
 
 reviewComments : String
 reviewComments =
-    "{\"comments\":[{\"id\":7,\"rootId\":7,\"path\":\"src/main.rs\",\"body\":\"Please keep this typed.\",\"author\":\"reviewer\",\"htmlUrl\":\"https://github.com/acme/hunker/pull/42#discussion_r7\",\"createdAt\":\"2026-08-10T12:00:00Z\",\"line\":12,\"side\":\"RIGHT\",\"resolved\":true}]}"
+    "{\"comments\":[{\"id\":7,\"rootId\":7,\"path\":\"src/main.rs\",\"body\":\"Please keep this typed.\",\"author\":\"reviewer\",\"htmlUrl\":\"https://github.com/acme/hunker/pull/42#discussion_r7\",\"createdAt\":\"2026-08-10T12:00:00Z\",\"anchor\":{\"_tag\":\"Current\",\"line\":12,\"side\":\"RIGHT\"},\"resolved\":true},{\"id\":8,\"rootId\":8,\"path\":\"src/main.rs\",\"body\":\"Please keep this typed.\",\"author\":\"reviewer\",\"htmlUrl\":\"https://github.com/acme/hunker/pull/42#discussion_r8\",\"createdAt\":\"2026-08-10T12:00:00Z\",\"anchor\":{\"_tag\":\"Outdated\",\"originalLine\":3,\"originalSide\":\"LEFT\"},\"resolved\":false},{\"id\":9,\"rootId\":9,\"path\":\"src/main.rs\",\"body\":\"Please keep this typed.\",\"author\":\"reviewer\",\"htmlUrl\":\"https://github.com/acme/hunker/pull/42#discussion_r9\",\"createdAt\":\"2026-08-10T12:00:00Z\",\"anchor\":{\"_tag\":\"File\"},\"resolved\":false}]}"
 
 
 reviewDocument : String

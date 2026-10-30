@@ -272,9 +272,43 @@ pub struct ReviewComment {
     pub author: String,
     pub html_url: String,
     pub created_at: String,
-    pub line: Option<usize>,
-    pub side: CommentSide,
+    pub anchor: CommentAnchor,
     pub resolved: bool,
+}
+
+/// Where a review comment sits. GitHub keeps a comment's original position
+/// once later commits move its line out of the diff, and file-level comments
+/// have no line at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "_tag", rename_all_fields = "camelCase")]
+pub enum CommentAnchor {
+    Current {
+        line: usize,
+        side: CommentSide,
+    },
+    Outdated {
+        original_line: usize,
+        original_side: CommentSide,
+    },
+    File,
+}
+
+impl CommentAnchor {
+    fn new(
+        line: Option<usize>,
+        side: Option<CommentSide>,
+        original_line: Option<usize>,
+        original_side: Option<CommentSide>,
+    ) -> Self {
+        match (line.zip(side), original_line.zip(original_side)) {
+            (Some((line, side)), _) => Self::Current { line, side },
+            (None, Some((original_line, original_side))) => Self::Outdated {
+                original_line,
+                original_side,
+            },
+            (None, None) => Self::File,
+        }
+    }
 }
 
 impl ReviewComment {
@@ -290,11 +324,12 @@ impl ReviewComment {
                 .map_or_else(|| "GitHub user".to_owned(), |user| user.login),
             html_url: value.html_url,
             created_at: value.created_at,
-            line: value.line.or(value.original_line),
-            side: value
-                .side
-                .or(value.original_side)
-                .unwrap_or(CommentSide::Right),
+            anchor: CommentAnchor::new(
+                value.line,
+                value.side,
+                value.original_line,
+                value.original_side,
+            ),
             resolved: resolutions.get(&root_id).copied().unwrap_or(false),
         }
     }
@@ -423,6 +458,33 @@ mod tests {
                 "line": 12,
                 "side": "RIGHT"
             })
+        );
+    }
+
+    #[test]
+    fn anchors_comments_to_current_outdated_or_file_positions() {
+        assert_eq!(
+            CommentAnchor::new(
+                Some(4),
+                Some(CommentSide::Left),
+                Some(2),
+                Some(CommentSide::Right)
+            ),
+            CommentAnchor::Current {
+                line: 4,
+                side: CommentSide::Left
+            }
+        );
+        assert_eq!(
+            CommentAnchor::new(None, None, Some(2), Some(CommentSide::Right)),
+            CommentAnchor::Outdated {
+                original_line: 2,
+                original_side: CommentSide::Right
+            }
+        );
+        assert_eq!(
+            CommentAnchor::new(None, None, None, None),
+            CommentAnchor::File
         );
     }
 

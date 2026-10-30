@@ -3,7 +3,7 @@ module ReviewSessionTest exposing (suite)
 import Dict
 import Expect exposing (Expectation)
 import Hunker.Domain.Git as Git
-import Hunker.Domain.Review exposing (CommentSide(..), FileChange, FileStatus(..), ReviewAction(..), ReviewComment)
+import Hunker.Domain.Review exposing (CommentAnchor(..), CommentSide(..), FileChange, FileStatus(..), ReviewAction(..), ReviewComment)
 import Hunker.Domain.Settings exposing (Feature(..), InlineDiffMode(..), Whitespace(..))
 import Hunker.Domain.Source as Source
 import Hunker.Remote exposing (Remote(..))
@@ -70,6 +70,23 @@ suite =
                                                     |> Expect.equal [ 99 ]
                                             ]
                                             ()
+        , test "an outdated thread is listed with the file, not on a current line" <|
+            \() ->
+                withSessions <|
+                    \firstSession _ ->
+                        let
+                            outdated =
+                                { firstComment | anchor = OutdatedLine RightSide 1 }
+
+                            file =
+                                loadedCollaboration firstSession [ outdated ]
+                                    |> Collaboration.fileState "src/first.elm"
+                        in
+                        Expect.all
+                            [ \_ -> Expect.equal [] (Collaboration.threadsAt RightSide 1 file)
+                            , \_ -> Expect.equal [ outdated.id ] (List.map (.root >> .id) (Collaboration.detachedThreads file))
+                            ]
+                            ()
         , test "a review in flight cannot be submitted twice" <|
             \() ->
                 withSessions <|
@@ -300,8 +317,7 @@ reply id rootId path =
     , author = "reviewer"
     , htmlUrl = ""
     , createdAt = ""
-    , line = Just 1
-    , side = RightSide
+    , anchor = OnLine RightSide 1
     , resolved = False
     }
 

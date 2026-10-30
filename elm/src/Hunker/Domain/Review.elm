@@ -4,6 +4,7 @@ module Hunker.Domain.Review exposing
     , AnalysisSnapshot
     , CharacterRange
     , CharacterRow
+    , CommentAnchor(..)
     , CommentSide(..)
     , FileChange
     , FileStatus(..)
@@ -173,10 +174,18 @@ type alias ReviewComment =
     , author : String
     , htmlUrl : String
     , createdAt : String
-    , line : Maybe Int
-    , side : CommentSide
+    , anchor : CommentAnchor
     , resolved : Bool
     }
+
+
+{-| Where a review comment sits: on a line of the current diff, on the line it
+was written against before later commits moved it, or on the whole file.
+-}
+type CommentAnchor
+    = OnLine CommentSide Int
+    | OutdatedLine CommentSide Int
+    | OnFile
 
 
 type CommentSide
@@ -469,9 +478,22 @@ commentDecoder =
         |> andMap (Decode.field "author" Decode.string)
         |> andMap (Decode.field "htmlUrl" Decode.string)
         |> andMap (Decode.field "createdAt" Decode.string)
-        |> andMap (Decode.field "line" (Decode.nullable Decode.int))
-        |> andMap (Decode.field "side" (Hunker.Decode.enum "review comment side" [ ( "LEFT", LeftSide ), ( "RIGHT", RightSide ) ]))
+        |> andMap (Decode.field "anchor" commentAnchorDecoder)
         |> andMap (Decode.field "resolved" Decode.bool)
+
+
+commentAnchorDecoder : Decoder CommentAnchor
+commentAnchorDecoder =
+    let
+        side field =
+            Decode.field field (Hunker.Decode.enum "review comment side" [ ( "LEFT", LeftSide ), ( "RIGHT", RightSide ) ])
+    in
+    Hunker.Decode.tagged "_tag"
+        "comment anchor"
+        [ ( "Current", Decode.map2 OnLine (side "side") (Decode.field "line" Decode.int) )
+        , ( "Outdated", Decode.map2 OutdatedLine (side "originalSide") (Decode.field "originalLine" Decode.int) )
+        , ( "File", Decode.succeed OnFile )
+        ]
 
 
 revisionDecoder : Decoder Revision

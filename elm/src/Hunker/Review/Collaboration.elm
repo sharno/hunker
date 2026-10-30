@@ -66,7 +66,7 @@ receives a stable value.
 
 import Dict exposing (Dict)
 import Hunker.ApiError exposing (ApiError)
-import Hunker.Domain.Review exposing (CommentSide(..), PullCommit, ReviewAction(..), ReviewComment, Revision)
+import Hunker.Domain.Review exposing (CommentAnchor(..), CommentSide(..), PullCommit, ReviewAction(..), ReviewComment, Revision)
 import Hunker.Remote exposing (Remote(..))
 import Hunker.Review.Session as Session
 import Hunker.Route exposing (PullRequestRef)
@@ -397,14 +397,22 @@ emptyThreads =
 
 placeThread : Thread -> FileThreads -> FileThreads
 placeThread thread threads =
-    case ( thread.root.line, thread.root.side ) of
-        ( Just line, LeftSide ) ->
-            { threads | left = Dict.update line (Maybe.withDefault [] >> (::) thread >> Just) threads.left }
+    let
+        atLine line =
+            Dict.update line (Maybe.withDefault [] >> (::) thread >> Just)
+    in
+    case thread.root.anchor of
+        OnLine LeftSide line ->
+            { threads | left = atLine line threads.left }
 
-        ( Just line, RightSide ) ->
-            { threads | right = Dict.update line (Maybe.withDefault [] >> (::) thread >> Just) threads.right }
+        OnLine RightSide line ->
+            { threads | right = atLine line threads.right }
 
-        ( Nothing, _ ) ->
+        -- Outdated and file-level threads have no line in the current diff.
+        OutdatedLine _ _ ->
+            { threads | detached = thread :: threads.detached }
+
+        OnFile ->
             { threads | detached = thread :: threads.detached }
 
 

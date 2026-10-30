@@ -228,7 +228,12 @@ suite =
                 \() ->
                     expectDecodes Review.commentsDecoder ContractFixtures.reviewComments <|
                         \comments ->
-                            Expect.equal [ ( 7, Review.RightSide, True ) ] (List.map (\comment -> ( comment.id, comment.side, comment.resolved )) comments)
+                            Expect.equal
+                                [ ( 7, Review.OnLine Review.RightSide 12, True )
+                                , ( 8, Review.OutdatedLine Review.LeftSide 3, False )
+                                , ( 9, Review.OnFile, False )
+                                ]
+                                (List.map (\comment -> ( comment.id, comment.anchor, comment.resolved )) comments)
             , test "decodes a stale local revision" <|
                 \() ->
                     expectDecodes Review.revisionDecoder ContractFixtures.revisionBehind <|

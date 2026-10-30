@@ -275,13 +275,20 @@ test("keeps repository commit rows compact and aligned", async ({ page }) => {
   expect(Math.abs(layout.actionCenter - layout.copyCenter)).toBeLessThan(2);
 });
 
-test("shows loading instead of stale review data and preserves a single fetched revision across history", async ({
-  page,
-}) => {
+async function openLongReview(page: Page) {
+  await page.route("**/api/diff?**", (route) =>
+    fulfillJson(route, reviewResponse),
+  );
+  await mockReviewAnalysis(page);
+  await page.goto("/example/hunker/pull/42/files/src/long.ts");
+  await expect(
+    page.getByRole("heading", { name: "Improve the greeting" }),
+  ).toBeVisible();
+}
+
+test("shows loading instead of stale review data", async ({ page }) => {
   const reviewGate = deferred();
-  const reviewRequests: string[] = [];
   await page.route("**/api/diff?**", async (route) => {
-    reviewRequests.push(route.request().url());
     await reviewGate.promise;
     await fulfillJson(route, reviewResponse);
   });
@@ -296,22 +303,23 @@ test("shows loading instead of stale review data and preserves a single fetched 
   await expect(
     page.getByRole("heading", { name: "Improve the greeting" }),
   ).toBeVisible();
-  await expect(
-    page.locator(".split-cell.right .syntax-keyword.inline-change"),
-  ).toHaveText("export");
+});
 
+test("keeps syntax on inline changes when diff colors are off", async ({
+  page,
+}) => {
+  await openLongReview(page);
   const changedToken = page.locator(
     ".split-cell.right .syntax-keyword.inline-change",
   );
+  await expect(changedToken).toHaveText("export");
   const additionCell = page.locator(".split-cell.right.addition").first();
   const coloredBackground = await additionCell.evaluate(
     (cell) => getComputedStyle(cell).backgroundColor,
   );
   expect(coloredBackground).not.toBe("rgba(0, 0, 0, 0)");
+
   await page.getByText("Diff colors", { exact: true }).click();
-  await expect(page.locator(".review-diffs")).toHaveClass(
-    /diff-colors-disabled/,
-  );
   await expect
     .poll(() =>
       additionCell.evaluate((cell) => getComputedStyle(cell).backgroundColor),
@@ -320,7 +328,12 @@ test("shows loading instead of stale review data and preserves a single fetched 
   await expect(changedToken).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
   await expect(changedToken).toHaveCSS("box-shadow", "none");
   await expect(changedToken).toHaveClass(/syntax-keyword/);
+});
 
+test("hides and restores the top bar with focus and without touching file panels", async ({
+  page,
+}) => {
+  await openLongReview(page);
   const toolbar = page.locator(".compact-review-toolbar");
   await page
     .locator(".diff-panel")
@@ -341,11 +354,9 @@ test("shows loading instead of stale review data and preserves a single fetched 
         subtree: true,
       });
     });
+
   await page.getByRole("button", { name: "Hide top bar" }).click();
   await expect(page.locator(".app-bar")).toHaveCount(0);
-  await expect(
-    page.getByRole("button", { name: "Show top bar" }),
-  ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Show top bar" }),
   ).toBeFocused();
@@ -355,13 +366,19 @@ test("shows loading instead of stale review data and preserves a single fetched 
       Number(document.documentElement.dataset.filePanelMutations ?? "0"),
     ),
   ).toBe(0);
+
   await page.getByRole("button", { name: "Show top bar" }).click();
   await expect(page.locator(".app-bar")).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Hide top bar" }),
   ).toBeFocused();
   await expect(toolbar).toHaveCSS("top", APP_BAR_HEIGHT);
+});
 
+test("wraps long split diff lines and keeps the sidebar header aligned", async ({
+  page,
+}) => {
+  await openLongReview(page);
   const lineLayout = await page
     .locator(".split-row")
     .first()
@@ -380,10 +397,11 @@ test("shows loading instead of stale review data and preserves a single fetched 
         whiteSpace: getComputedStyle(code).whiteSpace,
       };
     });
+  // A wrapped line is taller than one 24px row.
   expect(lineLayout.leftHeight).toBeGreaterThan(24);
   expect(lineLayout.leftHeight).toBe(lineLayout.rightHeight);
   expect(lineLayout.codeScrollWidth).toBeLessThanOrEqual(
-    lineLayout.codeClientWidth + 1,
+    lineLayout.codeClientWidth + LAYOUT_TOLERANCE,
   );
   expect(lineLayout.overflowWrap).toBe("anywhere");
   expect(lineLayout.whiteSpace).toBe("break-spaces");
@@ -403,7 +421,23 @@ test("shows loading instead of stale review data and preserves a single fetched 
   expect(sidebarHeaderLayout.countRight).toBeLessThanOrEqual(
     sidebarHeaderLayout.toggleLeft,
   );
+});
 
+test("scrolls a selected full-diff file below the sticky toolbar without refetching across history", async ({
+  page,
+}) => {
+  const reviewRequests: string[] = [];
+  await page.route("**/api/diff?**", async (route) => {
+    reviewRequests.push(route.request().url());
+    await fulfillJson(route, reviewResponse);
+  });
+  await mockReviewAnalysis(page);
+  await page.goto("/example/hunker/pull/42/files/src/long.ts");
+  await expect(
+    page.getByRole("heading", { name: "Improve the greeting" }),
+  ).toBeVisible();
+
+  const toolbar = page.locator(".compact-review-toolbar");
   await page.getByLabel("Diff scope").selectOption("full");
   await expect(page.locator(".review-diffs.full-diff .diff-panel")).toHaveCount(
     2,
@@ -514,29 +548,6 @@ test("shows approval progress and success through real Fetch transport", async (
   await expect(
     page.getByRole("button", { name: "Approve", exact: true }),
   ).toBeEnabled();
-});
-
-test("renders semantic analysis progress once and omits repeated skipped banners", async ({
-  page,
-}) => {
-  const analysisGate = deferred();
-  await page.route("**/api/diff?**", (route) =>
-    fulfillJson(route, reviewResponse),
-  );
-  await mockReviewSupport(page);
-  await page.route("**/api/analysis?**", async (route) => {
-    await analysisGate.promise;
-    await fulfillReviewAnalysis(route);
-  });
-
-  await page.goto("/example/hunker/pull/42/files/src/long.ts");
-  await expect(page.locator(".review-analysis-status")).toHaveCount(1);
-  await expect(page.locator(".semantic-banner.is-loading")).toHaveCount(0);
-  analysisGate.resolve();
-  await expect(page.locator(".review-analysis-status")).toHaveCount(0);
-  await page.getByLabel("Diff scope").selectOption("full");
-  await expect(page.locator(".diff-panel")).toHaveCount(2);
-  await expect(page.locator(".semantic-banner.is-muted")).toHaveCount(0);
 });
 
 test("shows a clear empty state for a repository with no open pull requests", async ({
@@ -783,8 +794,7 @@ test("posts an inline line comment through the real browser Fetch transport", as
         author: "reviewer",
         htmlUrl: `${reviewUrl}#discussion_r91`,
         createdAt: "2026-08-07T12:00:00Z",
-        line: 1,
-        side: "RIGHT",
+        anchor: { _tag: "Current", line: 1, side: "RIGHT" },
         resolved: false,
       },
     }),

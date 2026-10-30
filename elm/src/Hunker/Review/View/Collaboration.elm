@@ -210,6 +210,15 @@ threadView actions collaboration path thread =
 
               else
                 text ""
+            , case root.anchor of
+                Review.OutdatedLine side line ->
+                    span [ class "resolved-tag" ] [ text ("Outdated · " ++ Review.commentSideToString side ++ " " ++ String.fromInt line) ]
+
+                Review.OnLine _ _ ->
+                    text ""
+
+                Review.OnFile ->
+                    text ""
             , span [] [ text root.createdAt ]
             ]
         , if collapsed then

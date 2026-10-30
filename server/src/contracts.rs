@@ -14,8 +14,8 @@ use crate::{
     character_diff::{CharacterDiffRow, CharacterRange},
     error::{AppError, AppResult},
     github::{
-        CommentSide, PullRequestState, PullRequestStatus, PullsPage, RepositoryPullRequest,
-        RepositoryPullsPage, ReviewComment,
+        CommentAnchor, CommentSide, PullRequestState, PullRequestStatus, PullsPage,
+        RepositoryPullRequest, RepositoryPullsPage, ReviewComment,
     },
     local::{
         Branch, BranchPresence, Checkout, History, RemoteState, RepositoryCommit,
@@ -220,19 +220,37 @@ fn source_control() -> SourceControlResponse {
 }
 
 fn review_comments() -> CommentsResponse {
+    let comment = |id: &str, anchor: CommentAnchor, resolved: bool| ReviewComment {
+        id: serde_json::from_str(id).expect("fixture comment ID is valid"),
+        root_id: serde_json::from_str(id).expect("fixture comment ID is valid"),
+        path: "src/main.rs".to_owned(),
+        body: "Please keep this typed.".to_owned(),
+        author: "reviewer".to_owned(),
+        html_url: format!("https://github.com/acme/hunker/pull/42#discussion_r{id}"),
+        created_at: "2026-08-10T12:00:00Z".to_owned(),
+        anchor,
+        resolved,
+    };
     CommentsResponse {
-        comments: vec![ReviewComment {
-            id: serde_json::from_str("7").expect("fixture comment ID is valid"),
-            root_id: serde_json::from_str("7").expect("fixture comment ID is valid"),
-            path: "src/main.rs".to_owned(),
-            body: "Please keep this typed.".to_owned(),
-            author: "reviewer".to_owned(),
-            html_url: "https://github.com/acme/hunker/pull/42#discussion_r7".to_owned(),
-            created_at: "2026-08-10T12:00:00Z".to_owned(),
-            line: Some(12),
-            side: CommentSide::Right,
-            resolved: true,
-        }],
+        comments: vec![
+            comment(
+                "7",
+                CommentAnchor::Current {
+                    line: 12,
+                    side: CommentSide::Right,
+                },
+                true,
+            ),
+            comment(
+                "8",
+                CommentAnchor::Outdated {
+                    original_line: 3,
+                    original_side: CommentSide::Left,
+                },
+                false,
+            ),
+            comment("9", CommentAnchor::File, false),
+        ],
     }
 }
 

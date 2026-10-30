@@ -16,7 +16,7 @@ mod transport;
 pub use repository::{
     PullRequestState, PullRequestStatus, PullsPage, RepositoryPullRequest, RepositoryPullsPage,
 };
-pub(crate) use reviews::CommentSide;
+pub(crate) use reviews::{CommentAnchor, CommentSide};
 pub use reviews::{InlineComment, ReviewComment, ReviewSubmission};
 pub use transport::GitHub;
 

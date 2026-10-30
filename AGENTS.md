@@ -217,6 +217,13 @@
   local blobs with one `git cat-file --batch` process and reuse the resulting
   file pairs for word diff, AST analysis, and whole-review move detection. Do
   not introduce per-file analysis endpoint fan-out.
+- Revision snapshots cache only immutable material. Whether a local clone backs
+  a revision is resolved per request (`Local::materialize`), so a clone made
+  after the first load is used immediately.
+- Blob sides are `Contents::Text | NotText`. A binary or non-UTF-8 file is
+  skipped by analysis with a reason and never fails the whole review.
+- Review comments carry a `CommentAnchor` (`Current`, `Outdated`, `File`); only
+  `Current` threads render on a diff line.
 - Keep revision preparation and option-dependent analysis as separate immutable
   caches. The revision cache owns the Rust-parsed file changes and lazily loaded
   file pairs; all analysis-option snapshots reuse it. Prepare each syntax tree
@@ -240,6 +247,9 @@
   command boundary and normalize paths before they enter application state.
 - Retain one watched FFF picker per repository. Recreating it per query turns
   fuzzy search back into indexing work.
+- Repository search reads the tree at the requested OID: `git grep` for content
+  and `ls-tree` for names. FFF only ranks names, and its working-copy results
+  are restricted to paths in that tree.
 - Shallow clones expand refs/history only when a selected branch or immutable
   object requires it.
 - Keep local Git responsibilities in feature modules: `catalog` discovers and
