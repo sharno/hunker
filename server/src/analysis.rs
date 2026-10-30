@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use futures::{StreamExt, TryStreamExt, stream};
 use serde::{Deserialize, Serialize};
@@ -8,12 +11,10 @@ use crate::{
     character_diff::{self, CharacterDiffRow},
     diff,
     error::{AppError, AppResult},
-    github::GitHub,
-    local::Local,
-    revision::{RevisionKey, RevisionSnapshot},
+    revision::{Backing, FilePairs, RevisionKey, RevisionSnapshot},
     semantic::{MovedBlock, SemanticResult},
     source_presentation::FilePresentation,
-    types::{FilePair, RelativePath},
+    types::RelativePath,
 };
 
 const SNAPSHOT_CACHE_SIZE: usize = 16;
@@ -80,14 +81,29 @@ pub enum AnalysisFeature<T> {
     Complete { value: T },
 }
 
+/// Whether a changed file's two sides could be read as text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Readability {
+    Text,
+    NotText,
+}
+
 impl<T: Clone> AnalysisFeature<T> {
-    fn from_lookup(toggle: Toggle, value: Option<&T>, skipped: &str) -> Self {
-        match (toggle, value) {
-            (Toggle::Disabled, _) => Self::Disabled,
-            (Toggle::Enabled, Some(value)) => Self::Complete {
+    fn from_lookup(
+        toggle: Toggle,
+        readability: Readability,
+        value: Option<&T>,
+        skipped: &str,
+    ) -> Self {
+        match (toggle, readability, value) {
+            (Toggle::Disabled, _, _) => Self::Disabled,
+            (Toggle::Enabled, Readability::NotText, _) => Self::Skipped {
+                reason: "This file is not UTF-8 text.".to_owned(),
+            },
+            (Toggle::Enabled, Readability::Text, Some(value)) => Self::Complete {
                 value: value.clone(),
             },
-            (Toggle::Enabled, None) => Self::Skipped {
+            (Toggle::Enabled, Readability::Text, None) => Self::Skipped {
                 reason: skipped.to_owned(),
             },
         }
@@ -117,19 +133,19 @@ struct SyntaxResults {
 }
 
 pub async fn build(
-    local: &Local,
-    github: &GitHub,
+    backing: Backing<'_>,
     revision: Arc<RevisionSnapshot>,
     options: AnalysisOptions,
 ) -> AppResult<AnalysisSnapshot> {
-    let (syntax, words) = if options.requests_nothing() {
-        (SyntaxResults::default(), HashMap::new())
+    let (syntax, words, not_text) = if options.requests_nothing() {
+        (SyntaxResults::default(), HashMap::new(), HashSet::new())
     } else {
-        let pairs = revision.file_pairs(local, github).await?;
-        tokio::try_join!(
-            syntax_analysis(local, github, &revision, options),
-            word_analysis(pairs, options),
-        )?
+        let pairs = revision.file_pairs(backing).await?;
+        let (syntax, words) = tokio::try_join!(
+            syntax_analysis(backing, &revision, options),
+            word_analysis(Arc::clone(&pairs), options),
+        )?;
+        (syntax, words, pairs.not_text.clone())
     };
     let inline_toggle = match options.inline_diff {
         InlineDiff::Off => Toggle::Disabled,
@@ -141,6 +157,11 @@ pub async fn build(
             .iter()
             .map(|file| {
                 let lines = diff::patch_lines(&file.patch);
+                let readability = if not_text.contains(&file.path) {
+                    Readability::NotText
+                } else {
+                    Readability::Text
+                };
                 let visible = syntax
                     .presentations
                     .get(&file.path)
@@ -148,16 +169,19 @@ pub async fn build(
                 FileAnalysis {
                     semantic: AnalysisFeature::from_lookup(
                         options.semantic,
+                        readability,
                         syntax.semantic.get(&file.path),
                         "This file has no analyzable textual hunk.",
                     ),
                     syntax: AnalysisFeature::from_lookup(
                         options.syntax,
+                        readability,
                         visible.as_ref(),
                         "This file has no presentable textual hunk.",
                     ),
                     word_diff: AnalysisFeature::from_lookup(
                         inline_toggle,
+                        readability,
                         words.get(&file.path),
                         "This file has no textual hunk to compare.",
                     ),
@@ -170,15 +194,14 @@ pub async fn build(
 }
 
 async fn syntax_analysis(
-    local: &Local,
-    github: &GitHub,
+    backing: Backing<'_>,
     revision: &RevisionSnapshot,
     options: AnalysisOptions,
 ) -> AppResult<SyntaxResults> {
     if options.semantic == Toggle::Disabled && options.syntax == Toggle::Disabled {
         return Ok(SyntaxResults::default());
     }
-    let prepared = revision.prepared(local, github).await?;
+    let prepared = revision.prepared(backing).await?;
     tokio::task::spawn_blocking(move || match (options.semantic, options.syntax) {
         (Toggle::Enabled, syntax) => SyntaxResults {
             semantic: prepared.file_results().into_iter().collect(),
@@ -205,17 +228,17 @@ fn presentations(
 }
 
 async fn word_analysis(
-    pairs: Arc<Vec<FilePair>>,
+    pairs: Arc<FilePairs>,
     options: AnalysisOptions,
 ) -> AppResult<HashMap<RelativePath, Vec<CharacterDiffRow>>> {
     let Some(granularity) = character_diff::Granularity::for_inline(options.inline_diff) else {
         return Ok(HashMap::new());
     };
-    stream::iter(0..pairs.len())
+    stream::iter(0..pairs.text.len())
         .map(|index| {
             let pairs = Arc::clone(&pairs);
             async move {
-                let pair = &pairs[index];
+                let pair = &pairs.text[index];
                 character_diff::analyze(
                     pair.path.as_str(),
                     &pair.old_text,
@@ -253,5 +276,28 @@ mod tests {
             Toggle::Enabled
         );
         assert!(serde_json::from_str::<Toggle>("true").is_err());
+    }
+
+    #[test]
+    fn skips_every_enabled_feature_of_a_file_that_is_not_text() {
+        let skipped = AnalysisFeature::<usize>::from_lookup(
+            Toggle::Enabled,
+            Readability::NotText,
+            Some(&1),
+            "unused",
+        );
+        assert!(matches!(
+            skipped,
+            AnalysisFeature::Skipped { reason } if reason == "This file is not UTF-8 text."
+        ));
+        assert!(matches!(
+            AnalysisFeature::<usize>::from_lookup(
+                Toggle::Disabled,
+                Readability::NotText,
+                None,
+                "unused"
+            ),
+            AnalysisFeature::Disabled
+        ));
     }
 }

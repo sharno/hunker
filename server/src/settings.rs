@@ -128,22 +128,13 @@ impl RepositoryRoots {
     }
 
     /// Every location a local copy of `repository` may occupy, in lookup order.
-    pub fn candidates(&self, repository: &RepositorySlug) -> [(PathBuf, RepositoryRoot); 3] {
+    pub fn candidates(&self, repository: &RepositorySlug) -> [PathBuf; 3] {
         [
-            (
-                self.clone_target(repository, RepositoryRoot::Configured),
-                RepositoryRoot::Configured,
-            ),
-            (
-                self.configured
-                    .join(repository.owner())
-                    .join(repository.name()),
-                RepositoryRoot::Configured,
-            ),
-            (
-                self.clone_target(repository, RepositoryRoot::Temporary),
-                RepositoryRoot::Temporary,
-            ),
+            self.clone_target(repository, RepositoryRoot::Configured),
+            self.configured
+                .join(repository.owner())
+                .join(repository.name()),
+            self.clone_target(repository, RepositoryRoot::Temporary),
         ]
     }
 }

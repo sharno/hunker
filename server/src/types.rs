@@ -268,6 +268,36 @@ pub struct FilePair {
     pub new_text: String,
 }
 
+/// One side of a file at a revision. Binary and non-UTF-8 content cannot be
+/// diffed or parsed as text, so it is kept apart rather than failing a review.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Contents {
+    Text(String),
+    NotText,
+}
+
+/// A changed file whose two sides were read: either both are text, or the
+/// file is not text and analysis skips it.
+#[derive(Debug, Clone)]
+pub enum PairRead {
+    Text(FilePair),
+    NotText(RelativePath),
+}
+
+impl PairRead {
+    pub fn new(file: &FileChange, old: Contents, new: Contents) -> Self {
+        match (old, new) {
+            (Contents::Text(old_text), Contents::Text(new_text)) => Self::Text(FilePair {
+                path: file.path.clone(),
+                status: file.status.clone(),
+                old_text,
+                new_text,
+            }),
+            (Contents::NotText, _) | (_, Contents::NotText) => Self::NotText(file.path.clone()),
+        }
+    }
+}
+
 fn path_on<'a>(
     path: &'a RelativePath,
     status: &'a FileStatus,
@@ -324,7 +354,6 @@ pub struct PullCommit {
 #[derive(Debug, Clone)]
 pub struct LocalGitRepository {
     pub path: PathBuf,
-    pub root: RepositoryRoot,
 }
 
 #[derive(Debug, Clone, Serialize)]

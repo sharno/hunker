@@ -10,7 +10,7 @@ use regex::Regex;
 use crate::{
     command::Git,
     error::{AppError, AppResult},
-    types::{LocalGitRepository, Oid, RelativePath, RepositoryRoot, RepositorySlug},
+    types::{Contents, LocalGitRepository, Oid, RelativePath, RepositoryRoot, RepositorySlug},
 };
 
 use super::{
@@ -33,9 +33,9 @@ impl Local {
     /// candidate directory is a Git repository.
     pub async fn find(&self, repository: &RepositorySlug) -> AppResult<Option<LocalGitRepository>> {
         let roots = self.settings.roots().await?;
-        for (path, root) in roots.candidates(repository) {
+        for path in roots.candidates(repository) {
             if is_repository(&path).await? {
-                return Ok(Some(LocalGitRepository { path, root }));
+                return Ok(Some(LocalGitRepository { path }));
             }
         }
         Ok(None)
@@ -96,12 +96,9 @@ impl Local {
         oid: &Oid,
     ) -> AppResult<Vec<RepositoryFile>> {
         let root = self.repository_path(repository).await?;
-        let raw = Git::at(&root)
-            .ok(&["ls-tree", "-r", "-z", "--long", oid.as_str(), "--"])
-            .await?;
-        Ok(raw
-            .split('\0')
-            .filter_map(parse_tree_file)
+        Ok(tree_files(&root, oid)
+            .await?
+            .into_iter()
             .take(MAX_LISTED_FILES)
             .collect())
     }
@@ -115,9 +112,15 @@ impl Local {
         let root = self.repository_path(repository).await?;
         let mut contents =
             objects::cat_file_batch(&root, vec![format!("{oid}:{relative}")]).await?;
-        let content = contents
-            .pop()
-            .ok_or_else(|| AppError::not_found(format!("Could not read {relative}.")))?;
+        let content = match contents.pop() {
+            Some(Contents::Text(content)) => content,
+            Some(Contents::NotText) => {
+                return Err(AppError::bad_request(format!(
+                    "{relative} is not UTF-8 text."
+                )));
+            }
+            None => return Err(AppError::not_found(format!("Could not read {relative}."))),
+        };
         let (content, truncated) = match content.char_indices().nth(MAX_FILE_CHARACTERS) {
             Some((cutoff, _)) => (content[..cutoff].to_owned(), true),
             None => (content, false),
@@ -209,6 +212,14 @@ fn directory_slug(path: &Path) -> Option<RepositorySlug> {
 
 fn display(path: &Path) -> String {
     path.to_string_lossy().into_owned()
+}
+
+/// Every blob in the tree at `oid`, with its size.
+pub(super) async fn tree_files(root: &Path, oid: &Oid) -> AppResult<Vec<RepositoryFile>> {
+    let raw = Git::at(root)
+        .ok(&["ls-tree", "-r", "-z", "--long", oid.as_str(), "--"])
+        .await?;
+    Ok(raw.split('\0').filter_map(parse_tree_file).collect())
 }
 
 fn parse_tree_file(record: &str) -> Option<RepositoryFile> {

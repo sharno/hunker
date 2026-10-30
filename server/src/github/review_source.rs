@@ -3,7 +3,8 @@ use serde::Deserialize;
 use crate::{
     error::{AppError, AppResult},
     types::{
-        FileChange, FilePair, Oid, PullCommit, RelativePath, RepositorySlug, ReviewRevision, Side,
+        Contents, FileChange, Oid, PairRead, PullCommit, RelativePath, RepositorySlug,
+        ReviewRevision, Side,
     },
 };
 
@@ -143,27 +144,22 @@ impl GitHub {
         base: &Oid,
         head: &Oid,
         file: &FileChange,
-    ) -> AppResult<FilePair> {
-        let (old_text, new_text) = futures::try_join!(
-            self.side_text(repository, file.path_on(Side::Old), base),
-            self.side_text(repository, file.path_on(Side::New), head),
+    ) -> AppResult<PairRead> {
+        let (old, new) = futures::try_join!(
+            self.contents(repository, file.path_on(Side::Old), base),
+            self.contents(repository, file.path_on(Side::New), head),
         )?;
-        Ok(FilePair {
-            path: file.path.clone(),
-            status: file.status.clone(),
-            old_text,
-            new_text,
-        })
+        Ok(PairRead::new(file, old, new))
     }
 
-    async fn side_text(
+    async fn contents(
         &self,
         repository: &RepositorySlug,
         path: Option<&RelativePath>,
         reference: &Oid,
-    ) -> AppResult<String> {
+    ) -> AppResult<Contents> {
         let Some(path) = path else {
-            return Ok(String::new());
+            return Ok(Contents::Text(String::new()));
         };
         let encoded_path = path
             .as_str()
@@ -171,13 +167,15 @@ impl GitHub {
             .map(encode)
             .collect::<Vec<_>>()
             .join("/");
-        self.text(
-            &format!(
-                "https://api.github.com/repos/{repository}/contents/{encoded_path}?ref={reference}"
-            ),
-            "application/vnd.github.raw+json",
-        )
-        .await
+        let bytes = self
+            .bytes(
+                &format!(
+                    "https://api.github.com/repos/{repository}/contents/{encoded_path}?ref={reference}"
+                ),
+                "application/vnd.github.raw+json",
+            )
+            .await?;
+        Ok(String::from_utf8(bytes).map_or(Contents::NotText, Contents::Text))
     }
 
     pub async fn pull_commits(&self, target: &PullTarget) -> AppResult<Vec<PullCommit>> {

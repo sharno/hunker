@@ -1,26 +1,31 @@
-use std::{collections::BTreeMap, path::Path, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::Path,
+    time::Duration,
+};
 
 use fff_search::{
     FFFMode, FilePicker, FilePickerOptions, FuzzySearchOptions, PaginationArgs, QueryParser,
     SharedFilePicker, SharedFrecency,
 };
-use futures::{StreamExt, stream};
-use regex::RegexBuilder;
-use serde::Deserialize;
+use regex::{Regex, RegexBuilder};
 
 use crate::{
-    command::{self, Git},
+    command::Git,
     error::{AppError, AppResult},
     types::{Oid, RepositorySlug, SearchMode},
 };
 
-use super::{Local, RepositoryFile, RepositorySearchMatch, SearchResults};
+use super::{Local, RepositoryFile, RepositorySearchMatch, SearchResults, catalog::tree_files};
 
 const MAX_FILE_RESULTS: usize = 24;
 const MAX_CONTENT_RESULTS: usize = 100;
+const MATCHES_PER_FILE: &str = "--max-count=4";
 const CONTEXT_LINES: usize = 2;
 
 impl Local {
+    /// Searches the immutable tree at `oid`, never the working copy, so
+    /// uncommitted and untracked files cannot appear in the results.
     pub async fn search(
         &self,
         repository: &RepositorySlug,
@@ -28,25 +33,27 @@ impl Local {
         query: &str,
         mode: SearchMode,
     ) -> AppResult<SearchResults> {
-        let root = self.repository_path(repository).await?;
-        if Git::at(&root).head().await? != *oid {
-            return Err(AppError::conflict(
-                "The repository changed while this search was loading. Refresh and try again.",
-            ));
-        }
         if query.trim().is_empty() {
             return Err(AppError::bad_request("Enter a search query."));
         }
+        let root = self.repository_path(repository).await?;
+        let matcher = Matcher::new(query, mode)?;
+        let tree = tree_files(&root, oid).await?;
         let files = async {
             match mode {
-                SearchMode::Fuzzy => {
-                    fuzzy_files(&root, query, self.fuzzy_index(&root).await?).await
-                }
-                SearchMode::Literal | SearchMode::Regex => matching_files(&root, query, mode).await,
+                SearchMode::Fuzzy => fuzzy_files(query, self.fuzzy_index(&root).await?, tree).await,
+                SearchMode::Literal | SearchMode::Regex => Ok(tree
+                    .into_iter()
+                    .filter(|file| matcher.expression.is_match(&file.path))
+                    .take(MAX_FILE_RESULTS)
+                    .collect()),
             }
         };
-        let (files, matches) = tokio::try_join!(files, content_matches(&root, query, mode))?;
-        Ok(SearchResults { files, matches })
+        let (files, content) = tokio::try_join!(files, content_matches(&root, oid, &matcher))?;
+        Ok(SearchResults {
+            files,
+            matches: content,
+        })
     }
 
     async fn fuzzy_index(&self, root: &Path) -> AppResult<SharedFilePicker> {
@@ -73,39 +80,59 @@ impl Local {
     }
 }
 
-/// File paths whose name matches the query, using ripgrep's smart-case rule.
-async fn matching_files(
-    root: &Path,
-    query: &str,
+/// One query, interpreted the same way for file names, `git grep`, and
+/// highlight ranges. Literal and regex searches are smart-case.
+struct Matcher {
+    expression: Regex,
+    grep_flags: &'static [&'static str],
     mode: SearchMode,
-) -> AppResult<Vec<RepositoryFile>> {
-    let pattern = match mode {
-        SearchMode::Regex => query.to_owned(),
-        SearchMode::Literal | SearchMode::Fuzzy => regex::escape(query),
-    };
-    let expression = RegexBuilder::new(&pattern)
-        .case_insensitive(!query.chars().any(char::is_uppercase))
-        .build()
-        .map_err(|error| AppError::bad_request(error.to_string()))?;
-    let all_files = command::checked(
-        "rg",
-        &["--files", "--hidden", "--glob", "!.git"],
-        Some(root),
-    )
-    .await?;
-    let paths = all_files
-        .lines()
-        .filter(|path| expression.is_match(path))
-        .take(MAX_FILE_RESULTS)
-        .map(str::to_owned)
-        .collect();
-    Ok(sized_files(root, paths).await)
 }
 
+impl Matcher {
+    fn new(query: &str, mode: SearchMode) -> AppResult<Self> {
+        let smart_case_insensitive = !query.chars().any(char::is_uppercase);
+        let (pattern, ignore_case, grep_flags): (String, bool, &'static [&'static str]) =
+            match (mode, smart_case_insensitive) {
+                (SearchMode::Literal, true) | (SearchMode::Fuzzy, _) => {
+                    (regex::escape(query), true, &["-F", "-i"])
+                }
+                (SearchMode::Literal, false) => (regex::escape(query), false, &["-F"]),
+                // PCRE is the Git regex dialect closest to Rust's syntax.
+                (SearchMode::Regex, true) => (query.to_owned(), true, &["-P", "-i"]),
+                (SearchMode::Regex, false) => (query.to_owned(), false, &["-P"]),
+            };
+        let expression = RegexBuilder::new(&pattern)
+            .case_insensitive(ignore_case)
+            .build()
+            .map_err(|error| AppError::bad_request(error.to_string()))?;
+        Ok(Self {
+            expression,
+            grep_flags,
+            mode,
+        })
+    }
+
+    /// Character ranges of every match in `line`.
+    fn ranges(&self, line: &str) -> Vec<[usize; 2]> {
+        self.expression
+            .find_iter(line)
+            .map(|found| {
+                [
+                    byte_to_character(line, found.start()),
+                    byte_to_character(line, found.end()),
+                ]
+            })
+            .collect()
+    }
+}
+
+/// FFF ranks names from the working copy because its index cannot be scoped
+/// to a Git object. Results are restricted to paths in the tree at the
+/// requested OID, and sizes come from that tree.
 async fn fuzzy_files(
-    root: &Path,
     query: &str,
     picker: SharedFilePicker,
+    tree: Vec<RepositoryFile>,
 ) -> AppResult<Vec<RepositoryFile>> {
     let picker_query = query.to_owned();
     let ranked = tokio::task::spawn_blocking(move || -> AppResult<Vec<String>> {
@@ -121,13 +148,14 @@ async fn fuzzy_files(
             .as_ref()
             .ok_or_else(|| AppError::internal("FFF index unavailable."))?;
         let parsed = QueryParser::default().parse(&picker_query);
+        // Rank extra candidates: some may be untracked at the requested OID.
         let result = picker.fuzzy_search(
             &parsed,
             None,
             FuzzySearchOptions {
                 pagination: PaginationArgs {
                     offset: 0,
-                    limit: MAX_FILE_RESULTS,
+                    limit: MAX_FILE_RESULTS * 4,
                 },
                 ..FuzzySearchOptions::default()
             },
@@ -140,188 +168,149 @@ async fn fuzzy_files(
     })
     .await
     .map_err(|error| AppError::internal(format!("FFF search task failed: {error}")))??;
-    Ok(sized_files(root, ranked).await)
-}
-
-/// Pairs each path with its size; a path deleted since it was listed is
-/// dropped rather than reported with a made-up size.
-async fn sized_files(root: &Path, paths: Vec<String>) -> Vec<RepositoryFile> {
-    stream::iter(paths)
-        .then(|path| async move {
-            let metadata = tokio::fs::metadata(root.join(&path)).await.ok()?;
-            Some(RepositoryFile {
-                path,
-                size: metadata.len(),
-            })
+    let sizes = tree
+        .into_iter()
+        .map(|file| (file.path, file.size))
+        .collect::<HashMap<_, _>>();
+    Ok(ranked
+        .into_iter()
+        .filter_map(|path| {
+            let size = *sizes.get(&path)?;
+            Some(RepositoryFile { path, size })
         })
-        .filter_map(futures::future::ready)
-        .collect()
-        .await
+        .take(MAX_FILE_RESULTS)
+        .collect())
 }
 
 async fn content_matches(
     root: &Path,
-    query: &str,
-    mode: SearchMode,
+    oid: &Oid,
+    matcher: &Matcher,
 ) -> AppResult<Vec<RepositorySearchMatch>> {
-    let mode_flags: &[&str] = match mode {
-        SearchMode::Literal => &["--fixed-strings", "--smart-case"],
-        SearchMode::Regex => &["--smart-case"],
-        SearchMode::Fuzzy => &["--fixed-strings", "--ignore-case"],
-    };
-    let context = CONTEXT_LINES.to_string();
+    let context = format!("--context={CONTEXT_LINES}");
     let arguments = [
-        "--json",
+        "grep",
+        "-z",
         "--line-number",
-        "--max-count",
-        "4",
-        "--context",
+        "--column",
+        "-I",
+        "--no-color",
+        MATCHES_PER_FILE,
         &context,
-        "--max-filesize",
-        "2M",
-        "--hidden",
-        "--glob",
-        "!.git",
     ]
     .into_iter()
-    .chain(mode_flags.iter().copied())
-    .chain(["--", query, "."])
+    .chain(matcher.grep_flags.iter().copied())
+    .chain(["-e", matcher.expression.as_str(), oid.as_str(), "--"])
     .collect::<Vec<_>>();
-    let result = command::run("rg", &arguments, Some(root)).await?;
-    match (result.status.code(), mode) {
+    let result = Git::at(root).run(&arguments).await?;
+    // `git grep` exits 1 when nothing matches.
+    match (result.status.code(), matcher.mode) {
         (Some(0 | 1), _) => {}
-        (_, SearchMode::Regex) => return Err(AppError::bad_request(result.message("ripgrep"))),
+        (_, SearchMode::Regex) => return Err(AppError::bad_request(result.message("git grep"))),
         (_, SearchMode::Literal | SearchMode::Fuzzy) => {
-            return Err(AppError::upstream(
-                "ripgrep could not search this repository.",
-            ));
+            return Err(AppError::upstream(result.message("git grep")));
         }
     }
-    let records = result
+    let prefix = format!("{oid}:");
+    let lines = result
         .stdout
         .lines()
+        // Git separates non-adjacent context groups with `--`.
+        .filter(|line| *line != "--")
         .map(|line| {
-            serde_json::from_str::<RipgrepRecord>(line).map_err(|error| {
-                AppError::upstream(format!("ripgrep returned malformed output: {error}"))
-            })
+            line.strip_prefix(&prefix)
+                .ok_or_else(|| {
+                    AppError::upstream("git grep returned a line from another revision.")
+                })
+                .and_then(GrepLine::parse)
         })
         .collect::<AppResult<Vec<_>>>()?;
-    Ok(search_hits(records))
+    Ok(search_hits(&lines, matcher))
 }
 
-/// One line ripgrep reported, with a UTF-8 path and text. Non-UTF-8 lines
-/// arrive as base64 `bytes` and are not searchable text, so they are dropped.
-struct TextLine {
-    path: String,
-    number: usize,
-    text: String,
-    submatches: Vec<RipgrepSubmatch>,
+/// One `git grep -z` output line: `path\0line\0column\0text` for a match and
+/// `path\0line\0text` for context. Text never contains NUL because binary
+/// files are skipped.
+enum GrepLine<'a> {
+    Match {
+        path: &'a str,
+        number: usize,
+        text: &'a str,
+    },
+    Context {
+        path: &'a str,
+        number: usize,
+        text: &'a str,
+    },
 }
 
-impl TextLine {
-    fn from_data(data: RipgrepLine) -> Option<Self> {
-        let path = data.path.text?;
-        let text = data.lines.text?;
-        Some(Self {
-            path: path.strip_prefix("./").unwrap_or(&path).to_owned(),
-            number: data.line_number,
-            text: trim_newline(&text).to_owned(),
-            submatches: data.submatches,
-        })
+impl<'a> GrepLine<'a> {
+    fn parse(line: &'a str) -> AppResult<Self> {
+        let number = |value: &str| {
+            value
+                .parse::<usize>()
+                .map_err(|_| AppError::upstream("git grep returned an invalid line number."))
+        };
+        match line.split('\0').collect::<Vec<_>>()[..] {
+            [path, line_number, _column, text] => Ok(Self::Match {
+                path,
+                number: number(line_number)?,
+                text,
+            }),
+            [path, line_number, text] => Ok(Self::Context {
+                path,
+                number: number(line_number)?,
+                text,
+            }),
+            _ => Err(AppError::upstream("git grep returned a malformed line.")),
+        }
+    }
+
+    fn location(&self) -> ((&'a str, usize), &'a str) {
+        match self {
+            Self::Match { path, number, text } | Self::Context { path, number, text } => {
+                ((path, *number), text)
+            }
+        }
     }
 }
 
-/// Rebuilds each match with its surrounding lines from ripgrep's own context
-/// records, so results describe exactly what ripgrep read.
-fn search_hits(records: Vec<RipgrepRecord>) -> Vec<RepositorySearchMatch> {
-    let (matches, context): (Vec<_>, Vec<_>) = records
-        .into_iter()
-        .filter_map(|record| match record {
-            RipgrepRecord::Match { data } => TextLine::from_data(data).map(|line| (true, line)),
-            RipgrepRecord::Context { data } => TextLine::from_data(data).map(|line| (false, line)),
-            RipgrepRecord::Other => None,
-        })
-        .partition(|(is_match, _)| *is_match);
-    let lines = matches
+/// Rebuilds each match with its surrounding lines from Git's own context
+/// output, so results describe exactly the searched revision.
+fn search_hits(lines: &[GrepLine<'_>], matcher: &Matcher) -> Vec<RepositorySearchMatch> {
+    let text_at = lines
         .iter()
-        .chain(&context)
-        .map(|(_, line)| ((line.path.as_str(), line.number), line.text.as_str()))
+        .map(GrepLine::location)
         .collect::<BTreeMap<_, _>>();
     let around = |path: &str, numbers: std::ops::Range<usize>| {
         numbers
-            .filter_map(|number| lines.get(&(path, number)).map(|text| (*text).to_owned()))
+            .filter_map(|number| text_at.get(&(path, number)).map(|text| (*text).to_owned()))
             .collect::<Vec<_>>()
     };
-    matches
+    lines
         .iter()
+        .filter_map(|line| match line {
+            GrepLine::Match { path, number, text } => Some((*path, *number, *text)),
+            GrepLine::Context { .. } => None,
+        })
         .take(MAX_CONTENT_RESULTS)
-        .map(|(_, hit)| {
-            let ranges = hit
-                .submatches
-                .iter()
-                .map(|part| {
-                    [
-                        byte_to_character(&hit.text, part.start),
-                        byte_to_character(&hit.text, part.end),
-                    ]
-                })
-                .collect::<Vec<_>>();
+        .map(|(path, number, text)| {
+            let ranges = matcher.ranges(text);
             RepositorySearchMatch {
+                path: path.to_owned(),
+                line: number,
                 column: ranges.first().map_or(1, |range| range[0] + 1),
-                context_before: around(
-                    &hit.path,
-                    hit.number.saturating_sub(CONTEXT_LINES).max(1)..hit.number,
-                ),
-                context_after: around(&hit.path, hit.number + 1..hit.number + 1 + CONTEXT_LINES),
-                path: hit.path.clone(),
-                line: hit.number,
-                line_content: hit.text.clone(),
+                line_content: text.to_owned(),
+                context_before: around(path, number.saturating_sub(CONTEXT_LINES).max(1)..number),
+                context_after: around(path, number + 1..number + 1 + CONTEXT_LINES),
                 ranges,
             }
         })
         .collect()
 }
 
-fn trim_newline(text: &str) -> &str {
-    text.trim_end_matches(['\r', '\n'])
-}
-
 fn byte_to_character(value: &str, byte: usize) -> usize {
     value.get(..byte).unwrap_or(value).chars().count()
-}
-
-#[derive(Deserialize)]
-struct RipgrepText {
-    /// Absent when ripgrep reports non-UTF-8 content as base64 `bytes`.
-    text: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct RipgrepSubmatch {
-    start: usize,
-    end: usize,
-}
-
-#[derive(Deserialize)]
-struct RipgrepLine {
-    path: RipgrepText,
-    lines: RipgrepText,
-    line_number: usize,
-    #[serde(default)]
-    submatches: Vec<RipgrepSubmatch>,
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
-enum RipgrepRecord {
-    Match {
-        data: RipgrepLine,
-    },
-    Context {
-        data: RipgrepLine,
-    },
-    #[serde(other)]
-    Other,
 }
 
 #[cfg(test)]
@@ -329,22 +318,74 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rebuilds_matches_with_ripgrep_context_and_character_offsets() {
+    fn rebuilds_matches_with_git_context_and_character_offsets() {
+        let matcher = Matcher::new("needle", SearchMode::Literal).unwrap();
         let output = [
-            r#"{"type":"begin","data":{"path":{"text":"./src/a.rs"}}}"#,
-            r#"{"type":"context","data":{"path":{"text":"./src/a.rs"},"lines":{"text":"fn main() {\n"},"line_number":1,"absolute_offset":0,"submatches":[]}}"#,
-            r#"{"type":"match","data":{"path":{"text":"./src/a.rs"},"lines":{"text":"    let café = needle;\n"},"line_number":2,"absolute_offset":12,"submatches":[{"match":{"text":"needle"},"start":16,"end":22}]}}"#,
-            r#"{"type":"end","data":{"path":{"text":"./src/a.rs"}}}"#,
+            "src/a.rs\u{0}1\u{0}fn main() {",
+            "src/a.rs\u{0}2\u{0}11\u{0}    let café = needle;",
+            "src/a.rs\u{0}3\u{0}}",
         ];
-        let records = output
+        let lines = output
             .iter()
-            .map(|line| serde_json::from_str::<RipgrepRecord>(line).unwrap())
-            .collect();
-        let hits = search_hits(records);
+            .map(|line| GrepLine::parse(line).unwrap())
+            .collect::<Vec<_>>();
+        let hits = search_hits(&lines, &matcher);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].path, "src/a.rs");
         assert_eq!(hits[0].context_before, vec!["fn main() {".to_owned()]);
-        assert_eq!(hits[0].context_after, Vec::<String>::new());
+        assert_eq!(hits[0].context_after, vec!["}".to_owned()]);
         assert_eq!(hits[0].ranges, vec![[15, 21]]);
+        assert!(GrepLine::parse("no separators").is_err());
+    }
+
+    #[test]
+    fn applies_smart_case_to_literal_and_regex_queries() {
+        assert!(
+            Matcher::new("readme", SearchMode::Literal)
+                .unwrap()
+                .expression
+                .is_match("README.md")
+        );
+        assert!(
+            !Matcher::new("Readme", SearchMode::Literal)
+                .unwrap()
+                .expression
+                .is_match("README.md")
+        );
+        assert!(Matcher::new("(unclosed", SearchMode::Regex).is_err());
+    }
+
+    #[tokio::test]
+    async fn searches_the_committed_tree_not_the_working_copy() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let git = Git::at(root);
+        for args in [
+            &["init", "-q"][..],
+            &["config", "user.email", "test@example.com"],
+            &["config", "user.name", "Test"],
+        ] {
+            git.ok(args).await.unwrap();
+        }
+        tokio::fs::write(root.join("tracked.txt"), "committed needle\n")
+            .await
+            .unwrap();
+        git.ok(&["add", "tracked.txt"]).await.unwrap();
+        git.ok(&["commit", "-q", "-m", "seed"]).await.unwrap();
+        tokio::fs::write(root.join("tracked.txt"), "edited needle\n")
+            .await
+            .unwrap();
+        tokio::fs::write(root.join("untracked.txt"), "untracked needle\n")
+            .await
+            .unwrap();
+        let oid = git.head().await.unwrap();
+        let matcher = Matcher::new("needle", SearchMode::Literal).unwrap();
+        let hits = content_matches(root, &oid, &matcher).await.unwrap();
+        assert_eq!(
+            hits.iter()
+                .map(|hit| (hit.path.as_str(), hit.line_content.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("tracked.txt", "committed needle")]
+        );
     }
 }

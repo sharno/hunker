@@ -14,7 +14,7 @@ use crate::{
         GitHubTarget, InlineComment, PullTarget, ReviewComment, ReviewSubmission,
         reviews::{CommentId, ReviewAction},
     },
-    revision::{RevisionKey, RevisionSnapshot},
+    revision::{Backing, RevisionKey, RevisionSnapshot},
     source_presentation::FilePresentation,
     types::{NonEmptyText, Oid, PullCommit, RelativePath, ReviewDocument, ReviewSource},
 };
@@ -33,6 +33,14 @@ pub fn routes() -> Router<Arc<AppState>> {
 }
 
 impl AppState {
+    fn backing(&self, target: &GitHubTarget) -> Backing<'_> {
+        Backing {
+            local: &self.local,
+            github: &self.github,
+            pull: target.pull().map(|pull| pull.number),
+        }
+    }
+
     async fn revision(
         &self,
         target: &GitHubTarget,
@@ -44,11 +52,9 @@ impl AppState {
             base_oid,
             head_oid,
         };
-        let pull = target.pull().map(|pull| pull.number);
+        let backing = self.backing(target);
         self.revisions
-            .get_or_build(key, |key| {
-                crate::revision::load(&self.local, &self.github, key, pull)
-            })
+            .get_or_build(key, |key| crate::revision::load(backing, key))
             .await
     }
 }
@@ -127,13 +133,19 @@ async fn get_diff(
             metadata.revision.head_oid.clone(),
         )
         .await?;
-    let source = snapshot
-        .local_repository()
-        .map_or(ReviewSource::GitHub, |repository| {
-            tracing::debug!(root = ?repository.root, path = %repository.path.display(), "reading review from local Git");
-            ReviewSource::Local {
-                path: repository.path.to_string_lossy().into_owned(),
-            }
+    // Resolved per request: a clone made after this revision was first cached
+    // backs it from now on.
+    let source = state
+        .local
+        .materialize(
+            &target.repository,
+            &metadata.revision.base_oid,
+            &metadata.revision.head_oid,
+            target.pull().map(|pull| pull.number),
+        )
+        .await?
+        .map_or(ReviewSource::GitHub, |repository| ReviewSource::Local {
+            path: repository.path.to_string_lossy().into_owned(),
         });
     Ok(Json(ReviewDocument {
         title: metadata.title,
@@ -215,13 +227,21 @@ async fn get_file(
             query.path
         ))
     };
-    let pairs = snapshot.file_pairs(&state.local, &state.github).await?;
+    let backing = state.backing(&query.url);
+    let pairs = snapshot.file_pairs(backing).await?;
+    if pairs.not_text.contains(&query.path) {
+        return Err(AppError::bad_request(format!(
+            "{} is not UTF-8 text.",
+            query.path
+        )));
+    }
     let pair = pairs
+        .text
         .iter()
         .find(|pair| pair.path == query.path)
         .ok_or_else(missing)?;
     let presentation = snapshot
-        .prepared(&state.local, &state.github)
+        .prepared(backing)
         .await?
         .file_presentation(&query.path)
         .ok_or_else(missing)?;
@@ -263,7 +283,7 @@ async fn get_analysis(
     let analysis = state
         .analysis
         .get_or_build(key, |key| {
-            analysis::build(&state.local, &state.github, snapshot, key.options)
+            analysis::build(state.backing(&query.url), snapshot, key.options)
         })
         .await?;
     Ok(Json(analysis))

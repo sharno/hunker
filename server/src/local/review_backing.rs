@@ -5,8 +5,8 @@ use crate::{
     error::{AppError, AppResult},
     github::{PullNumber, PullTarget},
     types::{
-        FileChange, FilePair, LocalGitRepository, Oid, PullCommit, RepositorySlug, ReviewRevision,
-        Side,
+        Contents, FileChange, LocalGitRepository, Oid, PairRead, PullCommit, RepositorySlug,
+        ReviewRevision, Side,
     },
 };
 
@@ -82,7 +82,7 @@ impl Local {
     /// Makes `revision` readable from the local clone, fetching missing
     /// commits. `None` means there is no local clone; every other failure is
     /// returned so it is not hidden behind a GitHub fallback.
-    async fn prepare(
+    pub async fn materialize(
         &self,
         repository: &RepositorySlug,
         base: &Oid,
@@ -126,8 +126,8 @@ impl Local {
         base: &Oid,
         head: &Oid,
         pull: Option<PullNumber>,
-    ) -> AppResult<Option<(LocalGitRepository, String)>> {
-        let Some(found) = self.prepare(repository, base, head, pull).await? else {
+    ) -> AppResult<Option<String>> {
+        let Some(found) = self.materialize(repository, base, head, pull).await? else {
             return Ok(None);
         };
         let diff = Git::at(&found.path)
@@ -144,7 +144,7 @@ impl Local {
                 "--",
             ])
             .await?;
-        Ok(Some((found, diff)))
+        Ok(Some(diff))
     }
 
     pub async fn load_file_pairs_at(
@@ -153,7 +153,7 @@ impl Local {
         base: &Oid,
         head: &Oid,
         files: &[FileChange],
-    ) -> AppResult<Vec<FilePair>> {
+    ) -> AppResult<Vec<PairRead>> {
         let blobs = files
             .iter()
             .map(|file| {
@@ -173,8 +173,8 @@ impl Local {
             .await?
             .into_iter();
         let mut read = |blob: Blob| match blob {
-            Blob::Absent => Ok(String::new()),
-            Blob::Inline(text) => Ok(text),
+            Blob::Absent => Ok(Contents::Text(String::new())),
+            Blob::Inline(text) => Ok(Contents::Text(text)),
             Blob::Object(spec) => contents
                 .next()
                 .ok_or_else(|| AppError::upstream(format!("Git did not return {spec}."))),
@@ -182,14 +182,7 @@ impl Local {
         files
             .iter()
             .zip(blobs)
-            .map(|(file, (old, new))| {
-                Ok(FilePair {
-                    path: file.path.clone(),
-                    status: file.status.clone(),
-                    old_text: read(old)?,
-                    new_text: read(new)?,
-                })
-            })
+            .map(|(file, (old, new))| Ok(PairRead::new(file, read(old)?, read(new)?)))
             .collect()
     }
 
@@ -199,7 +192,7 @@ impl Local {
         revision: &ReviewRevision,
     ) -> AppResult<Option<Vec<PullCommit>>> {
         let Some(found) = self
-            .prepare(
+            .materialize(
                 &target.repository,
                 &revision.base_oid,
                 &revision.head_oid,

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use futures::{StreamExt, TryStreamExt, stream};
 use serde::Serialize;
@@ -11,7 +11,7 @@ use crate::{
     github::{GitHub, PullNumber},
     local::Local,
     semantic::PreparedReview,
-    types::{FileChange, FilePair, LocalGitRepository, Oid, RepositorySlug},
+    types::{FileChange, FilePair, Oid, PairRead, RelativePath, RepositorySlug},
 };
 
 const REVISION_CACHE_SIZE: usize = 8;
@@ -25,10 +25,35 @@ pub struct RevisionKey {
     pub head_oid: Oid,
 }
 
-#[derive(Debug)]
-enum RevisionSource {
-    Local(LocalGitRepository),
-    GitHub,
+/// Where a revision's objects can be read. Only the objects are immutable;
+/// whether a local clone has them can change at any time, so this is resolved
+/// per request and never cached.
+#[derive(Clone, Copy)]
+pub struct Backing<'a> {
+    pub local: &'a Local,
+    pub github: &'a GitHub,
+    pub pull: Option<PullNumber>,
+}
+
+/// The text file pairs of a revision, and the changed files that are not text.
+#[derive(Debug, Default)]
+pub struct FilePairs {
+    pub text: Vec<FilePair>,
+    pub not_text: HashSet<RelativePath>,
+}
+
+impl FromIterator<PairRead> for FilePairs {
+    fn from_iter<I: IntoIterator<Item = PairRead>>(reads: I) -> Self {
+        reads.into_iter().fold(Self::default(), |mut pairs, read| {
+            match read {
+                PairRead::Text(pair) => pairs.text.push(pair),
+                PairRead::NotText(path) => {
+                    pairs.not_text.insert(path);
+                }
+            }
+            pairs
+        })
+    }
 }
 
 /// The immutable material of one review revision. File pairs and the parsed
@@ -37,24 +62,12 @@ enum RevisionSource {
 pub struct RevisionSnapshot {
     pub key: RevisionKey,
     pub files: Arc<Vec<FileChange>>,
-    source: RevisionSource,
-    pairs: OnceCell<Arc<Vec<FilePair>>>,
+    pairs: OnceCell<Arc<FilePairs>>,
     prepared: OnceCell<Arc<PreparedReview>>,
 }
 
 impl RevisionSnapshot {
-    pub fn local_repository(&self) -> Option<&LocalGitRepository> {
-        match &self.source {
-            RevisionSource::Local(repository) => Some(repository),
-            RevisionSource::GitHub => None,
-        }
-    }
-
-    pub async fn file_pairs(
-        &self,
-        local: &Local,
-        github: &GitHub,
-    ) -> AppResult<Arc<Vec<FilePair>>> {
+    pub async fn file_pairs(&self, backing: Backing<'_>) -> AppResult<Arc<FilePairs>> {
         let pairs = self
             .pairs
             .get_or_try_init(|| async {
@@ -69,36 +82,42 @@ impl RevisionSnapshot {
                     base_oid,
                     head_oid,
                 } = &self.key;
-                let pairs = match &self.source {
-                    RevisionSource::Local(found) => {
-                        local
-                            .load_file_pairs_at(found, base_oid, head_oid, &analyzable)
+                let local = backing
+                    .local
+                    .materialize(repository, base_oid, head_oid, backing.pull)
+                    .await?;
+                let reads = match local {
+                    Some(found) => {
+                        backing
+                            .local
+                            .load_file_pairs_at(&found, base_oid, head_oid, &analyzable)
                             .await?
                     }
-                    RevisionSource::GitHub => {
+                    None => {
                         stream::iter(analyzable)
                             .map(|file| async move {
-                                github
+                                backing
+                                    .github
                                     .file_pair(repository, base_oid, head_oid, &file)
                                     .await
                             })
                             .buffered(FILE_LOAD_CONCURRENCY)
-                            .try_collect()
+                            .try_collect::<Vec<_>>()
                             .await?
                     }
                 };
-                AppResult::Ok(Arc::new(pairs))
+                AppResult::Ok(Arc::new(reads.into_iter().collect()))
             })
             .await?;
         Ok(Arc::clone(pairs))
     }
 
-    pub async fn prepared(&self, local: &Local, github: &GitHub) -> AppResult<Arc<PreparedReview>> {
+    pub async fn prepared(&self, backing: Backing<'_>) -> AppResult<Arc<PreparedReview>> {
         let prepared = self
             .prepared
             .get_or_try_init(|| async {
-                let pairs = self.file_pairs(local, github).await?;
-                tokio::task::spawn_blocking(move || Arc::new(PreparedReview::new(&pairs)))
+                let pairs = self.file_pairs(backing).await?;
+                tokio::task::spawn_blocking(move || Arc::new(PreparedReview::new(&pairs.text)))
                     .await
                     .map_err(|error| {
                         AppError::internal(format!("Syntax tree preparation stopped: {error}"))
@@ -117,29 +136,64 @@ pub fn cache() -> RevisionCache {
 
 /// Loads a revision's diff from the local clone when one exists, and from
 /// GitHub only when there is none.
-pub async fn load(
-    local: &Local,
-    github: &GitHub,
-    key: RevisionKey,
-    pull: Option<PullNumber>,
-) -> AppResult<RevisionSnapshot> {
-    let local_diff = local
-        .load_diff(&key.repository, &key.base_oid, &key.head_oid, pull)
+pub async fn load(backing: Backing<'_>, key: RevisionKey) -> AppResult<RevisionSnapshot> {
+    let local_diff = backing
+        .local
+        .load_diff(&key.repository, &key.base_oid, &key.head_oid, backing.pull)
         .await?;
-    let (diff_text, source) = match local_diff {
-        Some((repository, text)) => (text, RevisionSource::Local(repository)),
-        None => (
-            github
+    let diff_text = match local_diff {
+        Some(text) => text,
+        None => {
+            backing
+                .github
                 .revision_diff(&key.repository, &key.base_oid, &key.head_oid)
-                .await?,
-            RevisionSource::GitHub,
-        ),
+                .await?
+        }
     };
     Ok(RevisionSnapshot {
         files: Arc::new(diff::parse_git_diff(&diff_text)?),
         key,
-        source,
         pairs: OnceCell::new(),
         prepared: OnceCell::new(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{Contents, FileStatus};
+
+    #[test]
+    fn keeps_files_that_are_not_text_out_of_the_text_pairs() {
+        let change = |path: &str| FileChange {
+            path: RelativePath::parse(path).unwrap(),
+            status: FileStatus::Modified,
+            additions: 1,
+            deletions: 1,
+            patch: "@@ -1 +1 @@\n-a\n+b".to_owned(),
+        };
+        let pairs = [
+            PairRead::new(
+                &change("src/a.rs"),
+                Contents::Text("a".to_owned()),
+                Contents::Text("b".to_owned()),
+            ),
+            PairRead::new(&change("logo.png"), Contents::NotText, Contents::NotText),
+        ]
+        .into_iter()
+        .collect::<FilePairs>();
+        assert_eq!(
+            pairs
+                .text
+                .iter()
+                .map(|pair| pair.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["src/a.rs"]
+        );
+        assert!(
+            pairs
+                .not_text
+                .contains(&RelativePath::parse("logo.png").unwrap())
+        );
+    }
 }

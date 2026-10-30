@@ -118,6 +118,15 @@ impl GitHub {
             .await
     }
 
+    pub(super) async fn bytes(&self, url: &str, accept: &str) -> AppResult<Vec<u8>> {
+        self.request(Method::GET, url, accept)
+            .await?
+            .bytes()
+            .await
+            .map(|bytes| bytes.to_vec())
+            .map_err(|error| AppError::upstream(format!("GitHub stopped sending data: {error}")))
+    }
+
     pub(super) async fn text(&self, url: &str, accept: &str) -> AppResult<String> {
         self.request(Method::GET, url, accept)
             .await?

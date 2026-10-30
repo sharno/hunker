@@ -4,7 +4,7 @@ use tokio::{io::AsyncWriteExt, process::Command};
 
 use crate::{
     error::{AppError, AppResult},
-    types::Side,
+    types::{Contents, Side},
 };
 
 /// Git renders a submodule bump as `±Subproject commit <oid>` instead of blob
@@ -23,7 +23,7 @@ pub(super) fn gitlink_text(patch: &str, side: Side) -> Option<String> {
 pub(super) async fn cat_file_batch(
     repository: &Path,
     objects: Vec<String>,
-) -> AppResult<Vec<String>> {
+) -> AppResult<Vec<Contents>> {
     if objects.is_empty() {
         return Ok(Vec::new());
     }
@@ -68,7 +68,7 @@ pub(super) async fn cat_file_batch(
     parse_cat_file_batch(&output.stdout, &objects)
 }
 
-fn parse_cat_file_batch(output: &[u8], objects: &[String]) -> AppResult<Vec<String>> {
+fn parse_cat_file_batch(output: &[u8], objects: &[String]) -> AppResult<Vec<Contents>> {
     objects
         .iter()
         .try_fold(
@@ -83,7 +83,7 @@ fn parse_cat_file_batch(output: &[u8], objects: &[String]) -> AppResult<Vec<Stri
 }
 
 /// Parses one `<oid> <type> <size>\n<content>\n` record starting at `cursor`.
-fn parse_object(output: &[u8], cursor: usize, object: &str) -> AppResult<(String, usize)> {
+fn parse_object(output: &[u8], cursor: usize, object: &str) -> AppResult<(Contents, usize)> {
     let remaining = output
         .get(cursor..)
         .ok_or_else(|| AppError::upstream("git cat-file returned an incomplete response."))?;
@@ -109,7 +109,7 @@ fn parse_object(output: &[u8], cursor: usize, object: &str) -> AppResult<(String
         .filter(|end| output.get(*end) == Some(&b'\n'))
         .ok_or_else(|| AppError::upstream("git cat-file returned an incomplete object."))?;
     let content = String::from_utf8(output[content_start..content_end].to_vec())
-        .map_err(|_| AppError::upstream("Git returned a non-text file."))?;
+        .map_or(Contents::NotText, Contents::Text);
     Ok((content, content_end + 1))
 }
 
@@ -123,7 +123,14 @@ mod tests {
         let output = b"1111111111111111111111111111111111111111 blob 5\nhello\n2222222222222222222222222222222222222222 blob 6\nworld\n\n";
         assert_eq!(
             parse_cat_file_batch(output, &objects).unwrap(),
-            vec!["hello".to_owned(), "world\n".to_owned()]
+            vec![
+                Contents::Text("hello".to_owned()),
+                Contents::Text("world\n".to_owned())
+            ]
+        );
+        assert_eq!(
+            parse_cat_file_batch(b"1111 blob 2\n\xff\xfe\n", &objects[..1]).unwrap(),
+            vec![Contents::NotText]
         );
         assert!(parse_cat_file_batch(b"1111 blob 9\nshort\n", &objects[..1]).is_err());
     }
