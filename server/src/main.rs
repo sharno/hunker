@@ -16,7 +16,12 @@ mod settings;
 mod source_presentation;
 mod types;
 
-use std::{env, sync::Arc};
+use std::{
+    env,
+    io::{self, IsTerminal},
+    process::ExitCode,
+    sync::Arc,
+};
 
 use axum::{
     Router,
@@ -59,8 +64,25 @@ impl AppState {
     }
 }
 
+const USAGE: &str = "\
+Hunker: a local GitHub pull-request and Git diff reviewer.
+
+Usage: hunker [--help | --version]
+
+Starts the reviewer on http://127.0.0.1:5173.
+
+Environment:
+  HUNKER_PORT          Port to listen on (default 5173)
+  HUNKER_CONFIG_FILE   Settings file (default ~/.config/hunker/settings.json)
+  HUNKER_REPOS_ROOT    Default repositories root (default ~/src)
+  HUNKER_CACHE_ROOT    Temporary clone root (default /tmp/hunker/repositories)
+  GITHUB_TOKEN         GitHub token; falls back to GH_TOKEN, then `gh auth token`
+";
+
 enum Cli {
     Serve,
+    Help,
+    Version,
     WriteContractFixtures,
     CheckContractFixtures,
 }
@@ -69,24 +91,45 @@ impl Cli {
     fn parse(argument: Option<&str>) -> AppResult<Self> {
         match argument {
             None => Ok(Self::Serve),
+            Some("-h" | "--help") => Ok(Self::Help),
+            Some("-V" | "--version") => Ok(Self::Version),
             Some("--write-contract-fixtures") => Ok(Self::WriteContractFixtures),
             Some("--check-contract-fixtures") => Ok(Self::CheckContractFixtures),
             Some(other) => Err(AppError::bad_request(format!(
-                "Unknown argument {other}. Use --write-contract-fixtures or --check-contract-fixtures."
+                "Unknown argument {other}. Run hunker --help."
             ))),
         }
     }
 }
 
 #[tokio::main]
-async fn main() -> AppResult<()> {
+async fn main() -> ExitCode {
     tracing_subscriber::fmt()
+        .with_ansi(io::stdout().is_terminal())
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "hunker_server=info,tower_http=info".into()),
+                .unwrap_or_else(|_| "hunker=info,tower_http=info".into()),
         )
         .init();
+    match run().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("hunker: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+async fn run() -> AppResult<()> {
     match Cli::parse(env::args().nth(1).as_deref())? {
+        Cli::Help => {
+            print!("{USAGE}");
+            Ok(())
+        }
+        Cli::Version => {
+            println!("hunker {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
         Cli::WriteContractFixtures => contracts::write(),
         Cli::CheckContractFixtures => contracts::check(),
         Cli::Serve => serve().await,
@@ -104,7 +147,7 @@ async fn serve() -> AppResult<()> {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
         .await
         .map_err(|error| AppError::internal(format!("Could not bind port {port}: {error}")))?;
-    tracing::info!(port, "Hunker listening");
+    tracing::info!("Hunker listening on http://127.0.0.1:{port}");
     axum::serve(listener, app)
         .await
         .map_err(|error| AppError::internal(format!("Hunker server stopped: {error}")))
@@ -162,6 +205,8 @@ mod tests {
     #[test]
     fn rejects_unknown_command_line_arguments() {
         assert!(matches!(Cli::parse(None), Ok(Cli::Serve)));
+        assert!(matches!(Cli::parse(Some("--version")), Ok(Cli::Version)));
+        assert!(matches!(Cli::parse(Some("-h")), Ok(Cli::Help)));
         assert!(Cli::parse(Some("--chekc-contract-fixtures")).is_err());
     }
 

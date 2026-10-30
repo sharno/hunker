@@ -291,6 +291,11 @@
   strict types, Oxlint type-aware checks, and Oxfmt. Do not add Prettier.
 - Do not add lint-disable or suppression comments to hide first-party design or
   type problems.
+- Hunker ships as one `hunker` binary with every asset embedded; runtime
+  dependencies stay limited to `git` (and optionally `gh`). Release by bumping
+  the version in `server/Cargo.toml` and pushing a matching `vX.Y.Z` tag. The
+  release workflow's target matrix and the target table in
+  `scripts/homebrew-formula.ts` must list the same platforms.
 - Before pushing, run `bun run format:check`, `bun run lint`,
   `bun run typecheck`, `bun run test`, `bun run build`, and
   `bun run test:integration`.

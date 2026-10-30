@@ -1,0 +1,79 @@
+# Pushing a vX.Y.Z tag that matches server/Cargo.toml builds a self-contained
+# `hunker` binary per platform, publishes them as a GitHub release, and points
+# the sharno/homebrew-tap formula at them.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    strategy:
+      matrix:
+        include:
+          - { target: aarch64-apple-darwin, runner: macos-15 }
+          - { target: x86_64-apple-darwin, runner: macos-15 }
+          - { target: aarch64-unknown-linux-gnu, runner: ubuntu-22.04-arm }
+          - { target: x86_64-unknown-linux-gnu, runner: ubuntu-22.04 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: bun install --frozen-lockfile
+      - name: Check the tag matches the crate version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "hunker") | .version')
+          test "$GITHUB_REF_NAME" = "v$version"
+      - run:
+          cargo build --release --locked -p hunker --target ${{ matrix.target }}
+      - name: Package
+        run:
+          tar -czf "hunker-$GITHUB_REF_NAME-${{ matrix.target }}.tar.gz" -C
+          "target/${{ matrix.target }}/release" hunker
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}
+          path: hunker-*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run:
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz --verify-tag
+          --generate-notes
+      - uses: actions/checkout@v7
+        with:
+          repository: sharno/homebrew-tap
+          ssh-key: ${{ secrets.TAP_DEPLOY_KEY }}
+          path: tap
+      - name: Point the Homebrew formula at the release
+        run: |
+          mkdir -p tap/Formula
+          bun scripts/homebrew-formula.ts "$GITHUB_REF_NAME" dist > tap/Formula/hunker.rb
+          git -C tap config user.name "github-actions[bot]"
+          git -C tap config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C tap add Formula/hunker.rb
+          git -C tap commit -m "hunker $GITHUB_REF_NAME"
+          git -C tap push

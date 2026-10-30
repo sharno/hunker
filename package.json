@@ -4,15 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "cargo run --quiet -p hunker-server",
-    "dev:api": "cargo run --quiet -p hunker-server",
+    "dev": "cargo run --quiet -p hunker",
+    "dev:api": "cargo run --quiet -p hunker",
     "elm:build": "elm make elm/src/Main.elm --optimize --output=dist/elm.js",
     "elm:format": "elm-format elm/src tests --yes",
     "elm:format:check": "elm-format elm/src tests --validate",
     "elm:test": "elm-test",
-    "contracts:write": "cargo run --quiet -p hunker-server -- --write-contract-fixtures",
-    "contracts:check": "cargo run --quiet -p hunker-server -- --check-contract-fixtures",
-    "build": "cargo build --release -p hunker-server",
+    "contracts:write": "cargo run --quiet -p hunker -- --write-contract-fixtures",
+    "contracts:check": "cargo run --quiet -p hunker -- --check-contract-fixtures",
+    "build": "cargo build --release -p hunker",
     "format": "oxfmt --write . && cargo fmt --all",
     "format:check": "oxfmt --check . && cargo fmt --all --check",
     "lint": "oxlint --disable-nested-config . && cargo clippy --workspace --all-targets -- -D warnings",
@@ -20,9 +20,9 @@
     "test": "bun run contracts:check && bun run elm:test && cargo test --workspace",
     "test:integration": "playwright test",
     "test:integration:ui": "playwright test --ui",
-    "start:api": "cargo run --release --quiet -p hunker-server",
-    "start": "cargo run --release --quiet -p hunker-server",
-    "preview": "cargo run --release --quiet -p hunker-server"
+    "start:api": "cargo run --release --quiet -p hunker",
+    "start": "cargo run --release --quiet -p hunker",
+    "preview": "cargo run --release --quiet -p hunker"
   },
   "devDependencies": {
     "@playwright/test": "1.62.1",

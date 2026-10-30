@@ -9,6 +9,21 @@ The frontend is Elm 0.19.2. The backend is Rust with Axum and Tokio. A single
 Rust process compiles, embeds, and serves the optimized Elm application,
 Tailwind CSS, and typed API.
 
+## Install
+
+```bash
+brew install sharno/tap/hunker
+```
+
+Run `hunker`, or `brew services start hunker` to keep it running, and open
+[http://127.0.0.1:5173](http://127.0.0.1:5173). `hunker --help` lists the
+environment variables. Git must be on `PATH`.
+
+Hunker ships as one self-contained binary per platform. Pushing a `vX.Y.Z` tag
+that matches `server/Cargo.toml` runs `.github/workflows/release.yml`, which
+builds macOS and Linux binaries, publishes a GitHub release, and points the
+[sharno/homebrew-tap](https://github.com/sharno/homebrew-tap) formula at it.
+
 ## Run locally
 
 Requirements: Bun, Node.js 22+, Rust 1.97+, Git, and GitHub CLI. ast-grep and
