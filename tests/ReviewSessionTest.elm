@@ -15,6 +15,7 @@ import Hunker.Review.Session as Session
 import Hunker.Route as Route
 import Hunker.SemanticMove exposing (Endpoint(..))
 import Test exposing (Test, describe, test)
+import Time
 
 
 suite : Test
@@ -316,7 +317,7 @@ reply id rootId path =
     , body = "comment"
     , author = "reviewer"
     , htmlUrl = ""
-    , createdAt = ""
+    , createdAt = Time.millisToPosix 0
     , anchor = OnLine RightSide 1
     , resolved = False
     }

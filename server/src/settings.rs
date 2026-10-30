@@ -108,6 +108,14 @@ pub struct RepositoryRoots {
 }
 
 impl RepositoryRoots {
+    #[cfg(test)]
+    pub fn new(configured: PathBuf, temporary: PathBuf) -> Self {
+        Self {
+            configured,
+            temporary,
+        }
+    }
+
     pub fn path(&self, root: RepositoryRoot) -> &Path {
         match root {
             RepositoryRoot::Configured => &self.configured,

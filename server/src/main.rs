@@ -122,6 +122,7 @@ fn router(state: Arc<AppState>) -> Router {
         .route("/assets/app.js", get(frontend::javascript))
         .route("/assets/app.css", get(frontend::stylesheet))
         .route("/assets/viewport.js", get(frontend::viewport))
+        .route("/assets/time.js", get(frontend::time))
         .fallback(get(frontend::index))
         .layer(middleware::from_fn(local_host_only))
         .layer(TraceLayer::new_for_http())

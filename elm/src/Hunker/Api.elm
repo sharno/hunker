@@ -6,6 +6,7 @@ module Hunker.Api exposing
     , fetchAnalysis
     , fetchCommits
     , fetchFullFile
+    , fetchRemote
     , fetchRepositoryCommits
     , fetchRepositoryFile
     , fetchRepositoryFiles
@@ -17,9 +18,9 @@ module Hunker.Api exposing
     , postInlineComment
     , postReply
     , pullRepository
-    , refreshSourceControl
     , saveSettings
     , searchRepository
+    , sourceControl
     , submitReview
     , switchBranch
     )
@@ -129,9 +130,18 @@ cloneRepository repository destination =
         Repository.cloneDecoder
 
 
-refreshSourceControl : RepositoryId -> (Repository.SourceControlStatus -> msg) -> (ApiError -> msg) -> Effect msg
-refreshSourceControl repository =
+{-| The checkout as local Git sees it, without the network.
+-}
+sourceControl : RepositoryId -> (Repository.SourceControlStatus -> msg) -> (ApiError -> msg) -> Effect msg
+sourceControl repository =
     get [ "repository", "source-control" ] [ repositoryParameter repository ] Repository.sourceControlDecoder
+
+
+{-| Fetches `origin`, then reads the checkout.
+-}
+fetchRemote : RepositoryId -> (Repository.SourceControlStatus -> msg) -> (ApiError -> msg) -> Effect msg
+fetchRemote repository =
+    send Post [ "repository", "fetch" ] [ ( "repository", Encode.string (Git.repositoryToString repository) ) ] Repository.sourceControlDecoder
 
 
 switchBranch : RepositoryId -> BranchName -> (Repository.SourceControlStatus -> msg) -> (ApiError -> msg) -> Effect msg

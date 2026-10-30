@@ -457,6 +457,15 @@
     @apply ml-auto rounded-md border border-line bg-white px-3 py-1.5 text-xs font-bold disabled:opacity-50;
   }
 
+  .source-control-refresh.is-fetching span {
+    @apply inline-block;
+    animation: refresh-spin 800ms linear infinite;
+  }
+
+  .source-control-remote {
+    @apply shrink-0 rounded bg-red-50 px-1.5 py-0.5 text-[11px] font-bold text-red-700;
+  }
+
   .source-control-pull {
     @apply ml-0 bg-ink text-white;
   }
@@ -611,6 +620,11 @@
     @apply min-h-6 justify-between py-0.5 pr-2 pl-1 leading-5;
   }
 
+  .repository-source .source-line.is-target,
+  .repository-source .source-line.is-target .line-number {
+    @apply bg-amber-100;
+  }
+
   .repository-source .line-code {
     @apply min-h-6 min-w-max py-0.5 leading-5;
     overflow-wrap: normal;
@@ -633,6 +647,18 @@
 
   .repository-search-match pre {
     @apply col-span-full m-0 overflow-x-auto rounded bg-slate-100 p-2 text-[11px];
+  }
+
+  .repository-search-match .search-line {
+    @apply block min-h-[1lh] text-muted;
+  }
+
+  .repository-search-match .search-line.is-match {
+    @apply -mx-2 bg-lime/30 px-2 text-ink;
+  }
+
+  .repository-search-match mark {
+    @apply rounded-sm bg-amber-200 text-ink;
   }
 
   .repository-pull-row {
@@ -834,6 +860,14 @@
 
   .review-analysis-status.is-error {
     @apply border-red-200 bg-red-50 text-red-800;
+  }
+
+  .compact-review-toolbar .review-analysis-status {
+    @apply min-h-0 shrink-0 gap-1.5 border-0 bg-transparent px-1 py-0 text-[11px] font-semibold text-slate-300;
+  }
+
+  .compact-review-toolbar .review-analysis-status .loading-spinner {
+    @apply size-3.5 border-2;
   }
 
   .diff-options select,
@@ -1336,6 +1370,10 @@
     overflow: visible;
   }
 
+  .compact-review-toolbar .review-progress-label {
+    @apply sr-only;
+  }
+
   .compact-review-toolbar.options-open {
     z-index: 50;
   }
@@ -1412,10 +1450,20 @@
     display: none;
   }
 
+  .source-control-branch {
+    @apply min-w-0 flex-1;
+  }
+
+  .source-control-branch select {
+    @apply w-full min-w-0 max-w-none;
+  }
+
   .source-control-changes {
     @apply flex-1;
   }
 
+  .source-control-count,
+  .source-control-remote,
   .source-control-refresh,
   .source-control-pull {
     @apply shrink-0 whitespace-nowrap;

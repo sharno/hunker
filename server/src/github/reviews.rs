@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     error::{AppError, AppResult},
-    types::{LineNumber, NonEmptyText, Oid, RelativePath},
+    types::{LineNumber, NonEmptyText, Oid, RelativePath, Timestamp},
 };
 
 use super::{GitHub, PullTarget};
@@ -249,7 +249,7 @@ struct ReviewCommentResponse {
     body: String,
     user: Option<CommentUser>,
     html_url: String,
-    created_at: String,
+    created_at: Timestamp,
     in_reply_to_id: Option<CommentId>,
     line: Option<usize>,
     original_line: Option<usize>,
@@ -271,7 +271,7 @@ pub struct ReviewComment {
     pub body: String,
     pub author: String,
     pub html_url: String,
-    pub created_at: String,
+    pub created_at: Timestamp,
     pub anchor: CommentAnchor,
     pub resolved: bool,
 }

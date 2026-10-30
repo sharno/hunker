@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     cache::SingleFlightCache,
-    character_diff::{self, CharacterDiffRow},
+    character_diff::{self, WordChanges},
     diff,
     error::{AppError, AppResult},
     revision::{Backing, FilePairs, RevisionKey, RevisionSnapshot},
@@ -70,7 +70,7 @@ pub struct FileAnalysis {
     pub path: RelativePath,
     pub semantic: AnalysisFeature<SemanticResult>,
     pub syntax: AnalysisFeature<FilePresentation>,
-    pub word_diff: AnalysisFeature<Vec<CharacterDiffRow>>,
+    pub word_diff: AnalysisFeature<WordChanges>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -230,7 +230,7 @@ fn presentations(
 async fn word_analysis(
     pairs: Arc<FilePairs>,
     options: AnalysisOptions,
-) -> AppResult<HashMap<RelativePath, Vec<CharacterDiffRow>>> {
+) -> AppResult<HashMap<RelativePath, WordChanges>> {
     let Some(granularity) = character_diff::Granularity::for_inline(options.inline_diff) else {
         return Ok(HashMap::new());
     };

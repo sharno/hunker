@@ -11,7 +11,7 @@ use crate::{
         repository::SourceControlResponse,
         review::{CommentsResponse, CommitsResponse, HeadFreshness, RevisionResponse},
     },
-    character_diff::{CharacterDiffRow, CharacterRange},
+    character_diff::{CharacterRange, LineWords, WordChanges},
     error::{AppError, AppResult},
     github::{
         CommentAnchor, CommentSide, PullRequestState, PullRequestStatus, PullsPage,
@@ -25,7 +25,7 @@ use crate::{
     source_presentation::{FilePresentation, SourcePresentationResult},
     types::{
         BranchName, FileChange, FileStatus, Oid, PullCommit, RelativePath, ReviewDocument,
-        ReviewRevision, ReviewSource, SourceRange,
+        ReviewRevision, ReviewSource, SourceRange, Timestamp,
     },
 };
 
@@ -67,7 +67,15 @@ const FIXTURES: &[Fixture] = &[
     ("reviewComments", || json(&review_comments())),
     ("reviewDocument", || json(&review_document())),
     ("revisionBehind", || json(&revision_behind())),
-    ("sourceControl", || json(&source_control())),
+    ("sourceControl", || {
+        json(&source_control(RemoteState::Unavailable {
+            checked_at: 1_786_363_200_000,
+            error: "Could not resolve host".to_owned(),
+        }))
+    }),
+    ("sourceControlNotChecked", || {
+        json(&source_control(RemoteState::NotChecked))
+    }),
 ];
 
 fn render() -> AppResult<String> {
@@ -165,7 +173,7 @@ fn repository_pulls() -> RepositoryPullsPage {
                 author: "agent".to_owned(),
                 avatar_url: Some("https://avatars.example/agent".to_owned()),
                 status: PullRequestStatus::Draft,
-                updated_at: "2026-08-10T12:00:00Z".to_owned(),
+                updated_at: timestamp("2026-08-10T12:00:00Z"),
                 base: "main".to_owned(),
                 head: "agent:typed-contracts".to_owned(),
                 labels: vec!["rust".to_owned(), "elm".to_owned()],
@@ -176,7 +184,7 @@ fn repository_pulls() -> RepositoryPullsPage {
                 author: "ghost".to_owned(),
                 avatar_url: None,
                 status: PullRequestStatus::Merged,
-                updated_at: "2026-08-09T12:00:00Z".to_owned(),
+                updated_at: timestamp("2026-08-09T12:00:00Z"),
                 base: "main".to_owned(),
                 head: "ghost:older".to_owned(),
                 labels: Vec::new(),
@@ -185,7 +193,11 @@ fn repository_pulls() -> RepositoryPullsPage {
     }
 }
 
-fn source_control() -> SourceControlResponse {
+fn timestamp(value: &str) -> Timestamp {
+    Timestamp::parse(value).expect("fixture timestamp is valid")
+}
+
+fn source_control(remote: RemoteState) -> SourceControlResponse {
     SourceControlResponse {
         status: SourceControlStatus {
             path: "/Users/example/src/hunker".to_owned(),
@@ -211,10 +223,7 @@ fn source_control() -> SourceControlResponse {
                 unstaged: 2,
                 untracked: 3,
             },
-            remote: RemoteState::RemoteUnavailable {
-                checked_at: 1_786_363_200_000,
-                error: "Could not resolve host".to_owned(),
-            },
+            remote,
         },
     }
 }
@@ -227,7 +236,7 @@ fn review_comments() -> CommentsResponse {
         body: "Please keep this typed.".to_owned(),
         author: "reviewer".to_owned(),
         html_url: format!("https://github.com/acme/hunker/pull/42#discussion_r{id}"),
-        created_at: "2026-08-10T12:00:00Z".to_owned(),
+        created_at: timestamp("2026-08-10T12:00:00Z"),
         anchor,
         resolved,
     };
@@ -271,7 +280,7 @@ fn pull_commits() -> CommitsResponse {
             message: "Type the boundary".to_owned(),
             author: "agent".to_owned(),
             avatar_url: None,
-            authored_at: Some("2026-08-10T12:00:00Z".to_owned()),
+            authored_at: Some(timestamp("2026-08-10T12:00:00Z")),
             html_url:
                 "https://github.com/acme/hunker/commit/4444444444444444444444444444444444444444"
                     .to_owned(),
@@ -288,7 +297,7 @@ fn repository_commits() -> RepositoryCommits {
             parents: vec![oid('1')],
             author_name: "Ada".to_owned(),
             author_email: "ada@example.com".to_owned(),
-            authored_at: "2026-08-10T12:00:00Z".to_owned(),
+            authored_at: timestamp("2026-08-10T12:00:00Z"),
             subject: "Keep history typed".to_owned(),
         }],
     }
@@ -322,12 +331,16 @@ fn analysis_snapshot() -> AnalysisSnapshot {
                 },
             },
             word_diff: AnalysisFeature::Complete {
-                value: vec![CharacterDiffRow {
-                    old_line: Some(1),
-                    new_line: Some(1),
-                    old_ranges: vec![CharacterRange { start: 0, end: 3 }],
-                    new_ranges: vec![CharacterRange { start: 0, end: 3 }],
-                }],
+                value: WordChanges {
+                    old: vec![LineWords {
+                        line: 1,
+                        ranges: vec![CharacterRange { start: 0, end: 3 }],
+                    }],
+                    new: vec![LineWords {
+                        line: 1,
+                        ranges: vec![CharacterRange { start: 0, end: 3 }],
+                    }],
+                },
             },
         }],
         moves: vec![MovedBlock {

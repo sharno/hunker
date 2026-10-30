@@ -10,7 +10,10 @@ use regex::Regex;
 use crate::{
     command::Git,
     error::{AppError, AppResult},
-    types::{Contents, LocalGitRepository, Oid, RelativePath, RepositoryRoot, RepositorySlug},
+    settings::RepositoryRoots,
+    types::{
+        Contents, LocalGitRepository, Oid, RelativePath, RepositoryRoot, RepositorySlug, Timestamp,
+    },
 };
 
 use super::{
@@ -70,13 +73,20 @@ impl Local {
             .buffered(CATALOG_CONCURRENCY)
             .collect::<Vec<_>>()
             .await;
-        // Collecting keeps the last entry per key, so reverse to let the
-        // configured root win over the temporary cache.
-        let unique = summaries
+        // Worktrees and forks can share a slug. List the checkout `find`
+        // opens for it, so the path shown is the path used; other duplicates
+        // keep discovery order (configured root before the temporary cache).
+        let mut ranked = summaries
             .into_iter()
             .flatten()
-            .rev()
-            .map(|summary| {
+            .enumerate()
+            .map(|(order, summary)| ((opened_rank(&roots, &summary), order), summary))
+            .collect::<Vec<_>>();
+        // Collecting keeps the last entry per key, so the best rank goes last.
+        ranked.sort_unstable_by_key(|(rank, _)| std::cmp::Reverse(*rank));
+        let unique = ranked
+            .into_iter()
+            .map(|(_, summary)| {
                 (
                     format!("{}/{}", summary.owner, summary.name).to_lowercase(),
                     summary,
@@ -204,6 +214,20 @@ async fn summarize(path: PathBuf, root: RepositoryRoot) -> Option<LocalRepositor
     })
 }
 
+/// Where `summary` sits in [`RepositoryRoots::candidates`] for its slug;
+/// checkouts `find` would never open rank after every candidate.
+fn opened_rank(roots: &RepositoryRoots, summary: &LocalRepositorySummary) -> usize {
+    RepositorySlug::new(&summary.owner, &summary.name)
+        .ok()
+        .and_then(|slug| {
+            roots
+                .candidates(&slug)
+                .iter()
+                .position(|candidate| display(candidate) == summary.path)
+        })
+        .unwrap_or(usize::MAX)
+}
+
 fn directory_slug(path: &Path) -> Option<RepositorySlug> {
     let name = path.file_name()?.to_str()?;
     let owner = path.parent()?.file_name()?.to_str()?;
@@ -291,7 +315,7 @@ fn parse_repository_commits(raw: &str) -> AppResult<Vec<RepositoryCommit>> {
                     .collect::<AppResult<_>>()?,
                 author_name: author_name.to_owned(),
                 author_email: author_email.to_owned(),
-                authored_at: authored_at.to_owned(),
+                authored_at: Timestamp::parse(authored_at).map_err(AppError::upstream)?,
                 subject: subject.to_owned(),
             })
         })
@@ -313,6 +337,23 @@ mod tests {
             Some(RepositorySlug::parse("acme/demo").unwrap())
         );
         assert_eq!(parse_github_remote("https://gitlab.com/acme/demo"), None);
+    }
+
+    #[test]
+    fn ranks_the_checkout_find_opens_ahead_of_other_worktrees() {
+        let roots = RepositoryRoots::new("/src".into(), "/cache".into());
+        let summary = |path: &str| LocalRepositorySummary {
+            owner: "acme".to_owned(),
+            name: "data".to_owned(),
+            path: path.to_owned(),
+            source: RepositoryRoot::Configured,
+        };
+        assert_eq!(opened_rank(&roots, &summary("/src/data")), 0);
+        assert_eq!(opened_rank(&roots, &summary("/cache/acme/data")), 2);
+        assert_eq!(
+            opened_rank(&roots, &summary("/src/data-feature-worktree")),
+            usize::MAX
+        );
     }
 
     #[test]

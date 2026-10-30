@@ -14,7 +14,7 @@ use crate::{
     github::PullNumber,
     settings::SettingsStore,
     source_presentation::SourcePresentationResult,
-    types::{BranchName, LocalGitRepository, Oid, RepositoryRoot},
+    types::{BranchName, LocalGitRepository, Oid, RepositoryRoot, Timestamp},
 };
 
 const MAX_FILE_CHARACTERS: usize = 500_000;
@@ -115,7 +115,7 @@ pub struct RepositoryCommit {
     pub parents: Vec<Oid>,
     pub author_name: String,
     pub author_email: String,
-    pub authored_at: String,
+    pub authored_at: Timestamp,
     pub subject: String,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -162,14 +162,17 @@ pub enum Checkout {
         oid: Oid,
     },
 }
+/// What Hunker last learned from `origin` while producing a status. Opening
+/// a repository reads only local Git, so its status has not checked yet.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "_tag")]
 pub enum RemoteState {
-    RemoteCurrent {
+    NotChecked,
+    Current {
         #[serde(rename = "checkedAt")]
         checked_at: u64,
     },
-    RemoteUnavailable {
+    Unavailable {
         #[serde(rename = "checkedAt")]
         checked_at: u64,
         error: String,

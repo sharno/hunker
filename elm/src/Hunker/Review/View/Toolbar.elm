@@ -29,6 +29,7 @@ type alias Config msg =
     , optionsOpen : Bool
     , toggleOptions : msg
     , closeOptions : msg
+    , progress : Maybe String
     }
 
 
@@ -58,6 +59,15 @@ view config =
                 ]
             , input [ type_ "search", attribute "aria-label" "Search this change", attribute "placeholder" "Search this change", value config.filter, onInput config.changeFilter ] []
             ]
+        , case config.progress of
+            -- Progress lives in the sticky toolbar so finishing it never
+            -- shifts the diff below.
+            Just label ->
+                span [ class "review-analysis-status is-loading", attribute "role" "status" ]
+                    [ span [ class "loading-spinner" ] [], span [ class "review-progress-label" ] [ text label ] ]
+
+            Nothing ->
+                text ""
         , button
             [ type_ "button"
             , class "diff-options-trigger"

@@ -1,11 +1,11 @@
 module Hunker.Repository.View.SourceControl exposing (Config, view)
 
 import Html exposing (Html, button, label, option, section, select, span, text)
-import Html.Attributes exposing (attribute, class, disabled, selected, type_, value)
+import Html.Attributes exposing (attribute, class, classList, disabled, selected, title, type_, value)
 import Html.Events exposing (onClick, onInput)
 import Hunker.ApiError as ApiError
 import Hunker.Domain.Git as Git exposing (BranchName)
-import Hunker.Domain.Repository as Repository exposing (BranchPresence(..), Checkout(..))
+import Hunker.Domain.Repository as Repository exposing (BranchPresence(..), Checkout(..), RemoteState(..))
 import Hunker.Repository.SourceControl as SourceControl exposing (Activity(..), Operation(..), Outcome(..))
 
 
@@ -152,9 +152,21 @@ readyView config source =
                 )
             ]
         , feedback source.activity status.path
+        , remoteView status.remote
         , button
-            [ type_ "button", class "source-control-refresh", disabled busy, attribute "aria-label" "Refresh repository source control", onClick config.requestedRefresh ]
-            [ text "↻" ]
+            [ type_ "button"
+            , classList [ ( "source-control-refresh", True ), ( "is-fetching", source.activity == Refreshing ) ]
+            , disabled busy
+            , attribute "aria-label"
+                (if source.activity == Refreshing then
+                    "Fetching from origin"
+
+                 else
+                    "Fetch from origin and refresh"
+                )
+            , onClick config.requestedRefresh
+            ]
+            [ span [] [ text "↻" ] ]
         , button [ type_ "button", class "source-control-pull", disabled (busy || not (SourceControl.canPull status)), onClick config.requestedPull ]
             [ text
                 (case source.activity of
@@ -181,6 +193,22 @@ readyView config source =
                 )
             ]
         ]
+
+
+{-| Only an unreachable remote is worth a word: the counts beside it may be
+stale.
+-}
+remoteView : RemoteState -> Html msg
+remoteView remote =
+    case remote of
+        RemoteUnavailable _ error ->
+            span [ class "source-control-remote is-error", title error ] [ text "Origin unreachable" ]
+
+        RemoteCurrent _ ->
+            text ""
+
+        RemoteNotChecked ->
+            text ""
 
 
 pullLabel : Int -> String

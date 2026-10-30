@@ -1,4 +1,4 @@
-module Hunker.FileTree exposing (Tree(..), ancestors, build, directoryPaths)
+module Hunker.FileTree exposing (Tree(..), ancestors, build, directoryPaths, leaves)
 
 
 type Tree item
@@ -15,6 +15,22 @@ build pathOf items =
             )
             []
         |> sortForest
+
+
+{-| Items in the order the tree shows them, so a list of files can follow
+the sidebar.
+-}
+leaves : List (Tree item) -> List item
+leaves =
+    List.concatMap
+        (\tree ->
+            case tree of
+                Folder _ _ children ->
+                    leaves children
+
+                Leaf _ item ->
+                    [ item ]
+        )
 
 
 insert : item -> List String -> String -> List (Tree item) -> List (Tree item)

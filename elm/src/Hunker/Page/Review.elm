@@ -34,6 +34,7 @@ import Hunker.Review.View.DiffPanel as DiffPanelView
 import Hunker.Review.View.FileTree as FileTreeView
 import Hunker.Review.View.Toolbar as ToolbarView
 import Hunker.Route as Route exposing (PullView(..), ReviewLocation, ReviewSubject(..))
+import Hunker.View.Time as TimeView
 import Time
 
 
@@ -367,7 +368,7 @@ updateReady settings msg ready model =
 
                 ( withComments, commentsEffect ) =
                     if settings.gitHubReviews == Disabled && next.gitHubReviews == Enabled then
-                        beginComments next model.location analyzed
+                        beginComments next analyzed
 
                     else
                         ( analyzed, Effect.none )
@@ -581,14 +582,22 @@ startReady settings document model =
         session =
             Session.create (Route.diffUrl model.location) document.revision.headOid
 
+        tree =
+            FileTree.build .path document.files
+
+        -- Panels follow the sidebar's order, so scrolling the full diff
+        -- walks the tree top to bottom.
+        ordered =
+            FileTree.leaves tree
+
         canonical =
-            canonicalLocation document.files model.location
+            canonicalLocation ordered model.location
 
         initial =
             { session = session
             , document = document
-            , tree = FileTree.build .path document.files
-            , analysis = Analysis.init (FileIndex.fromChanges document.files)
+            , tree = tree
+            , analysis = Analysis.init (FileIndex.fromChanges ordered)
             , kind =
                 case Route.pullRequest model.location of
                     Just pullRequest ->
@@ -604,7 +613,7 @@ startReady settings document model =
             beginAnalysis settings initial
 
         ( withComments, commentsEffect ) =
-            beginComments settings canonical analyzed
+            beginComments settings analyzed
 
         ( checked, revisionEffect ) =
             checkRevision withComments
@@ -620,8 +629,25 @@ startReady settings document model =
         , analysisEffect
         , commentsEffect
         , revisionEffect
+        , landOnSelection settings model.location
         ]
     )
+
+
+{-| A full diff opened on a named file lands on that file's panel, as a
+GitHub file anchor does. One-file scope already shows only that file.
+-}
+landOnSelection : Settings -> ReviewLocation -> Effect Msg
+landOnSelection settings requested =
+    case ( settings.reviewScope, Route.selectedPath requested ) of
+        ( FullDiff, Just path ) ->
+            Effect.ScrollIntoView (DiffPanelView.fileAnchor path) (ReadyMsg ScrolledToLocation)
+
+        ( FullDiff, Nothing ) ->
+            Effect.none
+
+        ( OneFile, _ ) ->
+            Effect.none
 
 
 {-| A refresh at the same head keeps every draft; a new head starts over,
@@ -706,30 +732,19 @@ beginAnalysis settings ready =
     )
 
 
-{-| GitHub threads belong to the pull request, not to one of its commits.
+{-| GitHub threads belong to the pull request, so only a review of its head
+loads them.
 -}
-beginComments : Settings -> ReviewLocation -> ReadyReview -> ( ReadyReview, Effect Msg )
-beginComments settings reviewLocation ready =
-    case ( ready.kind, settings.gitHubReviews, reviewLocation.subject ) of
-        ( PullReview collaboration, Enabled, PullRequest _ (PullFiles _) ) ->
+beginComments : Settings -> ReadyReview -> ( ReadyReview, Effect Msg )
+beginComments settings ready =
+    case ( ready.kind, settings.gitHubReviews ) of
+        ( PullReview collaboration, Enabled ) ->
             startComments collaboration ready
 
-        ( PullReview collaboration, Enabled, PullRequest _ PullCommits ) ->
-            startComments collaboration ready
-
-        ( PullReview _, Enabled, PullRequest _ (PullCommitFiles _ _) ) ->
+        ( PullReview _, Disabled ) ->
             ( ready, Effect.none )
 
-        ( PullReview _, Enabled, Compare _ _ ) ->
-            ( ready, Effect.none )
-
-        ( PullReview _, Enabled, Commit _ _ ) ->
-            ( ready, Effect.none )
-
-        ( PullReview _, Disabled, _ ) ->
-            ( ready, Effect.none )
-
-        ( ChangeReview, _, _ ) ->
+        ( ChangeReview, _ ) ->
             ( ready, Effect.none )
 
 
@@ -842,23 +857,11 @@ readyView settings reviewLocation ready =
 
             Commit _ _ ->
                 div [] [ reviewStatus ready, workspace ]
-        , case ( ready.kind, reviewLocation.subject ) of
-            ( PullReview collaboration, PullRequest _ (PullFiles _) ) ->
+        , case ready.kind of
+            PullReview collaboration ->
                 Html.map ReadyMsg (CollaborationView.reviewComposer collaborationActions collaboration)
 
-            ( PullReview collaboration, PullRequest _ PullCommits ) ->
-                Html.map ReadyMsg (CollaborationView.reviewComposer collaborationActions collaboration)
-
-            ( PullReview _, PullRequest _ (PullCommitFiles _ _) ) ->
-                text ""
-
-            ( PullReview _, Compare _ _ ) ->
-                text ""
-
-            ( PullReview _, Commit _ _ ) ->
-                text ""
-
-            ( ChangeReview, _ ) ->
+            ChangeReview ->
                 text ""
         ]
 
@@ -880,7 +883,7 @@ reviewHeader reviewLocation ready =
                 , backingBadge ready.document
                 ]
             , h1 [] [ text ready.document.title ]
-            , p [] [ text (ready.document.author ++ " wants to merge "), code [] [ text ready.document.head ], text " into ", code [] [ text ready.document.base ] ]
+            , p [] (changeSummary reviewLocation ready.document)
             ]
         , div [ class "review-summary" ]
             [ metric (String.fromInt (List.length files)) "files" ""
@@ -914,15 +917,47 @@ reviewHeader reviewLocation ready =
         ]
 
 
-{-| Review-wide progress and failures, rendered once instead of per file.
+{-| Describes the change the way GitHub does for its subject.
+-}
+changeSummary : ReviewLocation -> ReviewDocument -> List (Html msg)
+changeSummary reviewLocation document =
+    let
+        merge =
+            [ text (document.author ++ " wants to merge "), code [] [ text document.head ], text " into ", code [] [ text document.base ] ]
+
+        committed =
+            [ text (document.author ++ " committed ")
+            , code [] [ text (Git.shortOid document.revision.headOid) ]
+            , text " on parent "
+            , code [] [ text (Git.shortOid document.revision.baseOid) ]
+            ]
+    in
+    case reviewLocation.subject of
+        PullRequest _ (PullFiles _) ->
+            merge
+
+        PullRequest _ PullCommits ->
+            merge
+
+        PullRequest _ (PullCommitFiles _ _) ->
+            committed
+
+        Commit _ _ ->
+            committed
+
+        Compare _ _ ->
+            [ text "Comparing ", code [] [ text document.base ], text " … ", code [] [ text document.head ] ]
+
+
+{-| Review-wide failures, rendered once instead of per file. Progress is in
+the toolbar.
 -}
 reviewStatus : ReadyReview -> Html Msg
 reviewStatus ready =
     div []
         [ case Analysis.status ready.analysis of
             Analysis.AnalysisInFlight ->
-                div [ class "review-analysis-status is-loading", attribute "role" "status" ]
-                    [ span [ class "loading-spinner" ] [], text "Analyzing syntax trees…" ]
+                text ""
 
             Analysis.AnalysisFailure error ->
                 div [ class "review-analysis-status is-error", attribute "role" "alert" ] [ text (ApiError.message error) ]
@@ -1021,6 +1056,19 @@ reviewToolbar settings reviewLocation ready =
             , optionsOpen = DiffView.optionsOpen ready.diff
             , toggleOptions = ToggledDiffOptions
             , closeOptions = ClosedDiffOptions
+            , progress =
+                case Analysis.status ready.analysis of
+                    Analysis.AnalysisInFlight ->
+                        Just "Analyzing syntax trees…"
+
+                    Analysis.AnalysisFailure _ ->
+                        Nothing
+
+                    Analysis.AnalysisComplete ->
+                        Nothing
+
+                    Analysis.AnalysisDisabled ->
+                        Nothing
             }
         )
 
@@ -1193,7 +1241,14 @@ commitRow commit =
                 text ""
         , div []
             [ strong [] [ text commit.message ]
-            , span [] [ text (commit.author ++ (commit.authoredAt |> Maybe.map ((++) " · ") |> Maybe.withDefault "")) ]
+            , span []
+                (case commit.authoredAt of
+                    Just authoredAt ->
+                        [ text (commit.author ++ " · "), TimeView.view authoredAt ]
+
+                    Nothing ->
+                        [ text commit.author ]
+                )
             ]
         , code [] [ text (Git.shortOid commit.sha) ]
         ]

@@ -343,8 +343,10 @@ removed lines, then its added lines.
 unifiedLines : List SplitRow -> List DiffLine
 unifiedLines rows =
     let
+        -- Every list here is reversed, so the reversed block (removed lines,
+        -- then added lines) is the added lines followed by the removed ones.
         flushed state =
-            List.reverse state.added ++ List.reverse state.removed ++ state.lines
+            state.added ++ state.removed ++ state.lines
 
         step row state =
             case ( row.left, row.right ) of

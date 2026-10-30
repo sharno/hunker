@@ -27,6 +27,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/repository/clone", post(clone))
         .route("/api/repository/branch", post(switch_branch))
         .route("/api/repository/pull", post(pull))
+        .route("/api/repository/fetch", post(fetch))
 }
 
 #[derive(Deserialize)]
@@ -96,6 +97,15 @@ async fn get_source_control(
 ) -> AppResult<Json<SourceControlResponse>> {
     Ok(Json(SourceControlResponse {
         status: state.local.source_control(&query.repository).await?,
+    }))
+}
+
+async fn fetch(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<RepositoryQuery>,
+) -> AppResult<Json<SourceControlResponse>> {
+    Ok(Json(SourceControlResponse {
+        status: state.local.fetch(&body.repository).await?,
     }))
 }
 

@@ -15,6 +15,7 @@ import Hunker.SemanticMove as SemanticMove exposing (Endpoint(..))
 import Json.Decode as Decode
 import Set
 import Test exposing (Test, describe, test)
+import Time
 import Url
 
 
@@ -41,10 +42,25 @@ suite =
                         route =
                             Repository
                                 { repository = Git.repositoryId "mohamed-rdr" "hunker"
-                                , view = FilesView { ref = Just "main", path = Nothing, search = Search "fn main" RegexSearch }
+                                , view = FilesView { ref = Just "main", file = Nothing, search = Search "fn main" RegexSearch }
                                 }
                     in
                     Expect.equal route (routeFrom ("http://localhost:8787" ++ Route.toPath route))
+            , test "round trips a file line as GitHub's #L fragment" <|
+                \() ->
+                    let
+                        route =
+                            Repository
+                                { repository = Git.repositoryId "acme" "demo"
+                                , view = FilesView { ref = Just "main", file = Just { path = "src/a.rs", line = Just 42 }, search = Search "needle" LiteralSearch }
+                                }
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal "/acme/demo/blob/main/src/a.rs?q=needle#L42" (Route.toPath route)
+                        , \_ -> Expect.equal route (routeFrom ("http://localhost:8787" ++ Route.toPath route))
+                        , \_ -> Expect.equal (Ok route) (Route.fromGithubString "https://github.com/acme/demo/blob/main/src/a.rs?q=needle#L42-L50")
+                        ]
+                        ()
             , test "round trips a selected commit file through the canonical query" <|
                 \() ->
                     let
@@ -69,6 +85,19 @@ suite =
                     Expect.all
                         [ \_ -> Expect.equal (Route.PullRequest 7 (PullCommitFiles "abc1234" (Just "src/a.rs"))) location.subject
                         , \_ -> Expect.equal (Review location) (routeFrom ("http://localhost:8787" ++ Route.toPath (Review location)))
+                        ]
+                        ()
+            , test "treats a file selection as the same screen and a tab switch as a new one" <|
+                \() ->
+                    let
+                        pull view =
+                            Review { repository = Git.repositoryId "acme" "demo", subject = Route.PullRequest 7 view }
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal True (Route.sameScreen (pull (PullFiles (Just "a.rs"))) (pull (PullFiles (Just "b.rs"))))
+                        , \_ -> Expect.equal False (Route.sameScreen (pull (PullFiles (Just "a.rs"))) (pull PullCommits))
+                        , \_ -> Expect.equal False (Route.sameScreen (pull (PullCommitFiles "abc1234" Nothing)) (pull (PullCommitFiles "def5678" Nothing)))
+                        , \_ -> Expect.equal False (Route.sameScreen Home Route.Settings)
                         ]
                         ()
             , test "round trips a selected compare file through the canonical query" <|
@@ -114,6 +143,12 @@ suite =
                         |> List.concatMap (Diff.splitRows True >> Diff.unifiedLines)
                         |> List.map Diff.lineText
                         |> Expect.equal [ "old", "new" ]
+            , test "keeps multi-line change blocks in file order in unified view" <|
+                \() ->
+                    Diff.parsePatch "@@ -47,4 +47,4 @@\n ctx\n-old 48\n-old 49\n+new 48\n+new 49\n ctx"
+                        |> List.concatMap (Diff.splitRows False >> Diff.unifiedLines)
+                        |> List.map Diff.lineText
+                        |> Expect.equal [ "ctx", "old 48", "old 49", "new 48", "new 49", "ctx" ]
             , test "anchors the footer comment on the last new-side line" <|
                 \() ->
                     Expect.all
@@ -157,6 +192,17 @@ suite =
                     ]
                     |> List.map treeName
                     |> Expect.equal [ "docs", "src", "README.md" ]
+        , test "lists tree leaves in sidebar order" <|
+            \() ->
+                FileTree.build .path
+                    [ { path = "README.md" }
+                    , { path = "src/view/app.ts" }
+                    , { path = "src/index.ts" }
+                    , { path = "docs/guide.md" }
+                    ]
+                    |> FileTree.leaves
+                    |> List.map .path
+                    |> Expect.equal [ "docs/guide.md", "src/view/app.ts", "src/index.ts", "README.md" ]
         , test "gives every file path a distinct DOM anchor" <|
             \() ->
                 List.map DiffPanel.fileAnchor [ "a_b.ts", "a-b.ts", "a/b.ts", "a.b.ts" ]
@@ -253,7 +299,7 @@ suite =
                 \() ->
                     expectDecodes Review.commitsDecoder ContractFixtures.pullCommits <|
                         \commits ->
-                            Expect.equal [ ( Nothing, Just "2026-08-10T12:00:00Z" ) ] (List.map (\commit -> ( commit.avatarUrl, commit.authoredAt )) commits)
+                            Expect.equal [ ( Nothing, Just (Time.millisToPosix 1786363200000) ) ] (List.map (\commit -> ( commit.avatarUrl, commit.authoredAt )) commits)
             , test "decodes repository commit history" <|
                 \() ->
                     expectDecodes Repository.commitsDecoder ContractFixtures.repositoryCommits <|
@@ -271,8 +317,8 @@ suite =
                                 [ \_ -> Expect.equal [ "moved" ] (List.map .label snapshot.moves)
                                 , \_ ->
                                     case Dict.get "src/main.rs" snapshot.files |> Maybe.map .wordDiff of
-                                        Just (Review.FeatureComplete rows) ->
-                                            Expect.equal [ Just 1 ] (List.map .oldLine rows)
+                                        Just (Review.FeatureComplete changes) ->
+                                            Expect.equal [ 1 ] (List.map .line changes.old)
 
                                         _ ->
                                             Expect.fail "Expected a completed word diff"

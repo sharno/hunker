@@ -138,8 +138,8 @@ withAnalysis snapshot =
                 { file
                     | prepared =
                         case Maybe.map .wordDiff analyzed of
-                            Just (FeatureComplete rows) ->
-                                PreparedDiff.withWordDiff rows file.prepared
+                            Just (FeatureComplete words) ->
+                                PreparedDiff.withWordDiff words file.prepared
 
                             Just FeatureDisabled ->
                                 file.prepared

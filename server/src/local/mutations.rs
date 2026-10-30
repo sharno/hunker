@@ -7,7 +7,7 @@ use crate::{
 };
 
 use super::{
-    BranchPresence, Checkout, Local, PullResult, SourceControlStatus,
+    BranchPresence, Checkout, Local, PullResult, RemoteState, SourceControlStatus,
     source_control::{inspect, refresh_remote},
 };
 
@@ -64,14 +64,17 @@ pub(super) async fn switch_branch(
             "{name} is not a valid branch name."
         )));
     }
-    let remote = refresh_remote(root).await?;
-    let current = inspect(root, remote.clone()).await?;
-    let presence = current
-        .branches
-        .iter()
-        .find(|candidate| candidate.name == *branch)
-        .map(|candidate| candidate.presence)
-        .ok_or_else(|| AppError::not_found(format!("Branch {name} was not found.")))?;
+    // The branch list the browser chose from is already local; only a
+    // branch pushed since then needs a round trip to the remote.
+    let (presence, remote) = if let Some(presence) = branch_presence(root, branch).await? {
+        (presence, RemoteState::NotChecked)
+    } else {
+        let remote = refresh_remote(root).await?;
+        let presence = branch_presence(root, branch)
+            .await?
+            .ok_or_else(|| AppError::not_found(format!("Branch {name} was not found.")))?;
+        (presence, remote)
+    };
     match presence {
         BranchPresence::Local | BranchPresence::Both => {
             refusable(git, &["switch", "--", name]).await?;
@@ -112,6 +115,15 @@ pub(super) async fn switch_branch(
     inspect(root, remote).await
 }
 
+async fn branch_presence(root: &Path, branch: &BranchName) -> AppResult<Option<BranchPresence>> {
+    Ok(inspect(root, RemoteState::NotChecked)
+        .await?
+        .branches
+        .into_iter()
+        .find(|candidate| candidate.name == *branch)
+        .map(|candidate| candidate.presence))
+}
+
 pub(super) async fn pull(root: &Path) -> AppResult<PullResult> {
     let git = Git::at(root);
     let current = inspect(root, refresh_remote(root).await?).await?;
@@ -119,7 +131,8 @@ pub(super) async fn pull(root: &Path) -> AppResult<PullResult> {
     if behind == 0 {
         return Ok(PullResult { pulled_commits: 0 });
     }
-    refusable(git, &["pull", "--ff-only"]).await?;
+    // The fetch above already brought the upstream in.
+    refusable(git, &["merge", "--ff-only", "--quiet", "@{upstream}"]).await?;
     let after = git.head().await?;
     let pulled_commits = git
         .ok(&["rev-list", "--count", &format!("{before}..{after}")])

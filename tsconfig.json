@@ -10,5 +10,5 @@
     "verbatimModuleSyntax": true,
     "types": ["node"]
   },
-  "include": ["tests/browser.spec.ts", "playwright.config.ts"]
+  "include": ["tests/**/*.ts", "playwright.config.ts"]
 }

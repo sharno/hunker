@@ -12,6 +12,7 @@ import Html.Events exposing (onClick, onInput, onSubmit)
 import Hunker.ApiError as ApiError exposing (ApiError)
 import Hunker.Domain.Review as Review exposing (CommentSide, ReviewAction(..), ReviewComment)
 import Hunker.Review.Collaboration as Collaboration exposing (Inline(..), ReplyDraft(..), ReviewDraft(..), ReviewOutcome(..), Thread)
+import Hunker.View.Time as TimeView
 import Markdown
 
 
@@ -219,7 +220,7 @@ threadView actions collaboration path thread =
 
                 Review.OnFile ->
                     text ""
-            , span [] [ text root.createdAt ]
+            , span [] [ TimeView.view root.createdAt ]
             ]
         , if collapsed then
             text ""
@@ -245,7 +246,7 @@ disclosure collapsed =
 commentBody : ReviewComment -> Html msg
 commentBody comment =
     div [ class "github-review-reply" ]
-        [ header [] [ strong [] [ text comment.author ], span [] [ text comment.createdAt ] ]
+        [ header [] [ strong [] [ text comment.author ], span [] [ TimeView.view comment.createdAt ] ]
         , Markdown.toHtml [ class "github-markdown" ] comment.body
         ]
 

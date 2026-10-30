@@ -32,6 +32,7 @@ type Effect msg
     | LoadExternal String
     | Focus String msg
     | ScrollIntoView String msg
+    | ResetViewport msg
     | After Float msg
 
 
@@ -102,6 +103,9 @@ isSome effect =
             True
 
         ScrollIntoView _ _ ->
+            True
+
+        ResetViewport _ ->
             True
 
         After _ _ ->
@@ -176,6 +180,9 @@ map transform effect =
         ScrollIntoView id message ->
             ScrollIntoView id (transform message)
 
+        ResetViewport message ->
+            ResetViewport (transform message)
+
         After milliseconds message ->
             After milliseconds (transform message)
 
@@ -223,6 +230,10 @@ perform key effect =
             scrollIntoView id
                 |> Task.attempt (always message)
 
+        ResetViewport message ->
+            Browser.Dom.setViewport 0 0
+                |> Task.perform (always message)
+
         After milliseconds message ->
             Process.sleep milliseconds
                 |> Task.perform (always message)
@@ -241,26 +252,36 @@ settled result =
 scrollIntoView : String -> Task.Task Browser.Dom.Error ()
 scrollIntoView id =
     let
-        align element =
-            let
-                -- Matches the sticky app bar plus review toolbar heights in
-                -- styles.css at the narrow and wide breakpoints.
-                stickyOffset =
-                    if element.viewport.width <= 760 then
-                        56
+        -- Matches the sticky app bar plus review toolbar heights in
+        -- styles.css at the narrow and wide breakpoints.
+        stickyOffset element =
+            if element.viewport.width <= 760 then
+                56
 
-                    else
-                        120
-            in
-            Browser.Dom.setViewport element.viewport.x (max 0 (element.element.y - stickyOffset))
+            else
+                120
+
+        -- Lazily rendered chunks near the target take their real height
+        -- only once a scroll brings them into view, which moves the target.
+        -- Each `getElement` waits for the next frame, so align until the
+        -- target stays put, a few frames at most.
+        settle attempts =
+            Browser.Dom.getElement id
+                |> Task.andThen
+                    (\element ->
+                        let
+                            target =
+                                max 0 (element.element.y - stickyOffset element)
+                        in
+                        if attempts == 0 || abs (target - element.viewport.y) < 1 then
+                            Task.succeed ()
+
+                        else
+                            Browser.Dom.setViewport element.viewport.x target
+                                |> Task.andThen (\_ -> settle (attempts - 1))
+                    )
     in
-    -- Align twice: lazily rendered chunks above the target can change height
-    -- after the first scroll brings them into view.
-    Browser.Dom.getElement id
-        |> Task.andThen align
-        |> Task.andThen (\_ -> Process.sleep 0)
-        |> Task.andThen (\_ -> Browser.Dom.getElement id)
-        |> Task.andThen align
+    settle 6
 
 
 {-| Interprets an HTTP response for both the browser runtime and the

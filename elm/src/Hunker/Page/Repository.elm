@@ -3,6 +3,7 @@ module Hunker.Page.Repository exposing
     , Msg(..)
     , init
     , navigate
+    , repositoryLocation
     , repositoryName
     , subscriptions
     , toolbar
@@ -31,6 +32,7 @@ import Hunker.Repository.View.PullRequests as PullRequestsView
 import Hunker.Repository.View.SourceControl as SourceControlView
 import Hunker.Repository.View.Toolbar as ToolbarView exposing (Tab(..))
 import Hunker.Route as Route exposing (FilesLocation, RepositoryLocation, RepositoryView(..), Search(..))
+import Hunker.SourceView as SourceView
 import Time
 
 
@@ -139,6 +141,8 @@ type Msg
     | SubmittedSearch
     | SelectedTab Tab
     | SelectedFile String
+    | SelectedMatch String Int
+    | RevealedLine
     | ClosedFile
     | ToggledFolder String
     | ToggledSourceFold String
@@ -168,7 +172,7 @@ init location =
 
 discover : RepositoryId -> Effect Msg
 discover repository =
-    Api.refreshSourceControl repository (SourceLoaded (DiscoverSource repository)) (SourceFailed (DiscoverSource repository))
+    Api.sourceControl repository (SourceLoaded (DiscoverSource repository)) (SourceFailed (DiscoverSource repository))
 
 
 {-| Builds the view for a location. Views that read local Git wait for a
@@ -255,9 +259,11 @@ activateView location model =
         ( Files files, Just ready ) ->
             let
                 ( browsed, requests ) =
-                    RepositoryFiles.navigate files.path files.search ready.files
+                    RepositoryFiles.navigate (Maybe.map .path files.file) files.search ready.files
             in
-            ( { model | view = activeView, local = LocalReady { ready | files = browsed } }, fileRequests requests )
+            ( { model | view = activeView, local = LocalReady { ready | files = browsed } }
+            , Effect.batch [ fileRequests requests, revealLine files ]
+            )
 
         ( Files _, Nothing ) ->
             ( { model | view = activeView }, viewEffect )
@@ -402,7 +408,23 @@ update msg model =
                 unchanged model
 
         FileLoaded request file ->
-            mapFiles (RepositoryFiles.fileLoaded request file)
+            let
+                ( loaded, effect ) =
+                    mapFiles (RepositoryFiles.fileLoaded request file)
+            in
+            case model.view of
+                Files location ->
+                    if Maybe.map .path location.file == Just (RepositoryFiles.fileRequestPath request) then
+                        ( loaded, Effect.batch [ effect, revealLine location ] )
+
+                    else
+                        ( loaded, effect )
+
+                Commits _ _ ->
+                    ( loaded, effect )
+
+                PullRequests _ _ ->
+                    ( loaded, effect )
 
         FileFailed request error ->
             mapFiles (RepositoryFiles.fileFailed request error)
@@ -435,7 +457,7 @@ update msg model =
             withIdleSource requested model <|
                 \snapshot source ->
                     ( { model | local = LocalReady { snapshot | sourceControl = { source | activity = PullSynchronizing count } } }
-                    , Api.refreshSourceControl model.repository
+                    , Api.sourceControl model.repository
                         (SourceLoaded (SnapshotSource requested (PulledSnapshot count)))
                         (SourceFailed (SnapshotSource requested (PulledSnapshot count)))
                     )
@@ -483,7 +505,7 @@ update msg model =
                     push
                         (FilesView
                             { ref = activeRef model
-                            , path = Nothing
+                            , file = Nothing
                             , search =
                                 if query == "" then
                                     NoSearch
@@ -500,7 +522,7 @@ update msg model =
             push
                 (case tab of
                     FilesTab ->
-                        FilesView { ref = activeRef model, path = Nothing, search = NoSearch }
+                        FilesView { ref = activeRef model, file = Nothing, search = NoSearch }
 
                     PullsTab ->
                         PullsView OpenPulls
@@ -510,10 +532,16 @@ update msg model =
                 )
 
         SelectedFile path ->
-            push (FilesView { ref = activeRef model, path = Just path, search = activeSearch model })
+            push (FilesView { ref = activeRef model, file = Just { path = path, line = Nothing }, search = activeSearch model })
+
+        SelectedMatch path line ->
+            push (FilesView { ref = activeRef model, file = Just { path = path, line = Just line }, search = activeSearch model })
+
+        RevealedLine ->
+            unchanged model
 
         ClosedFile ->
-            push (FilesView { ref = activeRef model, path = Nothing, search = activeSearch model })
+            push (FilesView { ref = activeRef model, file = Nothing, search = activeSearch model })
 
         ToggledFolder path ->
             mapFiles (RepositoryFiles.toggleFolder path)
@@ -715,7 +743,7 @@ finishSnapshot request files model =
         ( path, search ) =
             case model.view of
                 Files location ->
-                    ( location.path, location.search )
+                    ( Maybe.map .path location.file, location.search )
 
                 Commits _ _ ->
                     ( Nothing, NoSearch )
@@ -739,15 +767,52 @@ finishSnapshot request files model =
                         }
             }
     in
-    case model.view of
-        Files _ ->
-            ( ready, fileRequests requests )
+    fetchAfterOpening request.completion
+        (case model.view of
+            Files _ ->
+                ( ready, fileRequests requests )
 
-        Commits _ _ ->
-            activateView (repositoryLocation ready).view ready
+            Commits _ _ ->
+                activateView (repositoryLocation ready).view ready
 
-        PullRequests _ _ ->
-            ( ready, Effect.none )
+            PullRequests _ _ ->
+                ( ready, Effect.none )
+        )
+
+
+{-| Opening reads local Git alone, so the tree never waits on the network;
+the remote fetch follows in the background.
+-}
+fetchAfterOpening : SnapshotCompletion -> ( Model, Effect Msg ) -> ( Model, Effect Msg )
+fetchAfterOpening completion ( model, effect ) =
+    case completion of
+        InitialSnapshot ->
+            refreshSource PolledSnapshot model
+                |> Tuple.mapSecond (\fetch -> Effect.batch [ effect, fetch ])
+
+        RefreshedSnapshot ->
+            ( model, effect )
+
+        PolledSnapshot ->
+            ( model, effect )
+
+        SwitchedSnapshot _ ->
+            ( model, effect )
+
+        PulledSnapshot _ ->
+            ( model, effect )
+
+
+{-| Scrolls an open file to its `#L` line once that line is rendered.
+-}
+revealLine : FilesLocation -> Effect Msg
+revealLine location =
+    case Maybe.andThen .line location.file of
+        Just line ->
+            Effect.ScrollIntoView (SourceView.lineAnchor line) RevealedLine
+
+        Nothing ->
+            Effect.none
 
 
 {-| The checked-out branch, or the commit for a detached HEAD, as a URL ref.
@@ -911,7 +976,7 @@ refreshSource completion model =
                     SnapshotSource snapshot.revision completion
             in
             ( { model | local = LocalReady { snapshot | sourceControl = { source | activity = Refreshing } } }
-            , Api.refreshSourceControl model.repository (SourceLoaded request) (SourceFailed request)
+            , Api.fetchRemote model.repository (SourceLoaded request) (SourceFailed request)
             )
 
 
@@ -1028,10 +1093,11 @@ view syntaxHighlighting model =
                             Just snapshot ->
                                 FilesView.FilesReady
                                     { syntaxHighlighting = syntaxHighlighting
-                                    , selectedPath = location.path
+                                    , openFile = location.file
                                     , search = location.search
                                     , files = snapshot.files
                                     , selectedFile = SelectedFile
+                                    , selectedMatch = SelectedMatch
                                     , closedFile = ClosedFile
                                     , toggledFolder = ToggledFolder
                                     , toggledSourceFold = ToggledSourceFold

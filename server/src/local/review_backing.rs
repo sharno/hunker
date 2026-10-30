@@ -6,7 +6,7 @@ use crate::{
     github::{PullNumber, PullTarget},
     types::{
         Contents, FileChange, LocalGitRepository, Oid, PairRead, PullCommit, RepositorySlug,
-        ReviewRevision, Side,
+        ReviewRevision, Side, Timestamp,
     },
 };
 
@@ -312,6 +312,6 @@ fn parse_pull_commit(repository: &RepositorySlug, record: &str) -> AppResult<Pul
         message: message.trim_end().to_owned(),
         author: author.to_owned(),
         avatar_url: None,
-        authored_at: Some(authored_at.to_owned()),
+        authored_at: Some(Timestamp::parse(authored_at).map_err(AppError::upstream)?),
     })
 }

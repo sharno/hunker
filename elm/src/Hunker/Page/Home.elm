@@ -131,7 +131,7 @@ repositoryCard repository =
             (Route.toPath
                 (Route.Repository
                     { repository = Git.repositoryId repository.owner repository.name
-                    , view = Route.FilesView { ref = Nothing, path = Nothing, search = Route.NoSearch }
+                    , view = Route.FilesView { ref = Nothing, file = Nothing, search = Route.NoSearch }
                     }
                 )
             )

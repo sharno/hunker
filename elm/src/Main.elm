@@ -65,6 +65,7 @@ type Msg
     | SubmittedGitHubInput
     | ChangedTopBar Visibility
     | TopBarFocusSettled
+    | ViewportReset
     | HomeMsg Home.Msg
     | SettingsMsg SettingsPage.Msg
     | RepositoryMsg Repository.Msg
@@ -204,6 +205,9 @@ update msg model =
         ( TopBarFocusSettled, _ ) ->
             unchanged model
 
+        ( ViewportReset, _ ) ->
+            unchanged model
+
         ( HomeMsg message, Ready sync (HomePage home) ) ->
             Home.update message home |> mapPage HomePage HomeMsg sync model
 
@@ -248,10 +252,39 @@ mapPage toPage toMsg sync model ( childModel, childEffect ) =
 
 
 {-| The single route transition for cold loads, history moves, and pasted
-URLs. A route for the page already shown navigates within it.
+URLs. A route for the page already shown navigates within it; a route to
+another screen also starts at the top of the page.
 -}
 enterRoute : SettingsSync.Sync -> Route -> Maybe Page -> Model -> ( Model, Effect Msg )
 enterRoute sync route current model =
+    if Maybe.map (pageRoute >> Route.sameScreen route) current == Just True then
+        enterPage sync route current model
+
+    else
+        enterPage sync route current model |> addEffect (Effect.ResetViewport ViewportReset)
+
+
+pageRoute : Page -> Route
+pageRoute page =
+    case page of
+        HomePage _ ->
+            Route.Home
+
+        SettingsPage _ ->
+            Route.Settings
+
+        RepositoryPage repository ->
+            Route.Repository (Repository.repositoryLocation repository)
+
+        ReviewPage review ->
+            Route.Review (Review.location review)
+
+        NotFoundPage path ->
+            Route.NotFound path
+
+
+enterPage : SettingsSync.Sync -> Route -> Maybe Page -> Model -> ( Model, Effect Msg )
+enterPage sync route current model =
     case ( route, current ) of
         ( Route.Review location, Just (ReviewPage review) ) ->
             Review.navigate location review |> mapPage ReviewPage ReviewMsg sync model

@@ -41,6 +41,7 @@ import Hunker.Decode exposing (andMap)
 import Hunker.Domain.Git as Git exposing (BranchName, Oid)
 import Hunker.Domain.Source as Source exposing (Presentation)
 import Json.Decode as Decode exposing (Decoder)
+import Time
 
 
 type RepositoryRoot
@@ -105,7 +106,7 @@ type alias Commit =
     , parents : List Oid
     , authorName : String
     , authorEmail : String
-    , authoredAt : String
+    , authoredAt : Time.Posix
     , subject : String
     }
 
@@ -141,7 +142,7 @@ type alias PullRequest =
     , author : String
     , avatarUrl : Maybe String
     , status : PullRequestStatus
-    , updatedAt : String
+    , updatedAt : Time.Posix
     , base : String
     , head : String
     , labels : List String
@@ -174,8 +175,11 @@ type Checkout
     | DetachedHead { oid : Oid }
 
 
+{-| A status read from local Git alone has not checked the remote yet.
+-}
 type RemoteState
-    = RemoteCurrent Int
+    = RemoteNotChecked
+    | RemoteCurrent Int
     | RemoteUnavailable Int String
 
 
@@ -364,7 +368,7 @@ commitDecoder =
         (Decode.field "parents" (Decode.list Git.oidDecoder))
         (Decode.field "authorName" Decode.string)
         (Decode.field "authorEmail" Decode.string)
-        (Decode.field "authoredAt" Decode.string)
+        (Decode.field "authoredAt" Hunker.Decode.posix)
         (Decode.field "subject" Decode.string)
 
 
@@ -390,7 +394,7 @@ pullRequestDecoder =
                     [ ( "draft", DraftPull ), ( "open", OpenPull ), ( "merged", MergedPull ), ( "closed", ClosedPull ) ]
                 )
             )
-        |> andMap (Decode.field "updatedAt" Decode.string)
+        |> andMap (Decode.field "updatedAt" Hunker.Decode.posix)
         |> andMap (Decode.field "base" Decode.string)
         |> andMap (Decode.field "head" Decode.string)
         |> andMap (Decode.field "labels" (Decode.list Decode.string))
@@ -464,8 +468,9 @@ remoteDecoder : Decoder RemoteState
 remoteDecoder =
     Hunker.Decode.tagged "_tag"
         "remote state"
-        [ ( "RemoteCurrent", Decode.map RemoteCurrent (Decode.field "checkedAt" Decode.int) )
-        , ( "RemoteUnavailable"
+        [ ( "NotChecked", Decode.succeed RemoteNotChecked )
+        , ( "Current", Decode.map RemoteCurrent (Decode.field "checkedAt" Decode.int) )
+        , ( "Unavailable"
           , Decode.map2 RemoteUnavailable
                 (Decode.field "checkedAt" Decode.int)
                 (Decode.field "error" Decode.string)

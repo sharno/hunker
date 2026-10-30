@@ -8,6 +8,7 @@ import Hunker.Domain.Git as Git
 import Hunker.Domain.Repository exposing (Commit, Commits, History(..))
 import Hunker.Remote exposing (Remote(..))
 import Hunker.Repository.View.Local as Local
+import Hunker.View.Time as TimeView
 
 
 type alias Config identity msg =
@@ -66,7 +67,7 @@ rowView selectedCommit commit =
         [ span [ class "commit-avatar" ] [ text (String.left 2 (String.toUpper commit.authorName)) ]
         , span [ class "commit-copy" ]
             [ strong [] [ text commit.subject ]
-            , span [] [ text (commit.authorName ++ " · " ++ commit.authoredAt) ]
+            , span [] [ text (commit.authorName ++ " · "), TimeView.view commit.authoredAt ]
             ]
         , span [ class "commit-action" ]
             [ code [ class "commit-sha" ] [ text (String.left 7 (Git.oidToString commit.sha)) ]

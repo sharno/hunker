@@ -1,6 +1,7 @@
 use std::{fmt, num::NonZeroUsize, path::PathBuf, sync::Arc};
 
 use serde::{Deserialize, Serialize};
+use time::format_description::well_known::Rfc3339;
 
 /// Declares a `String` newtype whose only constructor is a normalizing parser,
 /// so serde, query extraction, and internal callers share one boundary check.
@@ -340,6 +341,30 @@ pub struct ReviewDocument {
     pub source: ReviewSource,
 }
 
+/// An instant from Git or GitHub. It is decoded once from RFC 3339 and sent
+/// to the browser as Unix milliseconds, which Elm reads as `Time.Posix`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(transparent)]
+pub struct Timestamp(i64);
+
+impl Timestamp {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        let invalid =
+            |reason: &dyn fmt::Display| format!("{value} is not an RFC 3339 time: {reason}");
+        let instant =
+            time::OffsetDateTime::parse(value.trim(), &Rfc3339).map_err(|error| invalid(&error))?;
+        i64::try_from(instant.unix_timestamp_nanos() / 1_000_000)
+            .map(Self)
+            .map_err(|error| invalid(&error))
+    }
+}
+
+impl<'de> Deserialize<'de> for Timestamp {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::parse(&String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PullCommit {
@@ -347,7 +372,7 @@ pub struct PullCommit {
     pub message: String,
     pub author: String,
     pub avatar_url: Option<String>,
-    pub authored_at: Option<String>,
+    pub authored_at: Option<Timestamp>,
     pub html_url: String,
 }
 
@@ -374,6 +399,15 @@ impl SourceRange {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timestamps_decode_offsets_into_one_instant() {
+        let git = Timestamp::parse("2026-10-28T10:30:25-04:00").unwrap();
+        let github = serde_json::from_str::<Timestamp>(r#""2026-10-28T14:30:25Z""#).unwrap();
+        assert_eq!(git, github);
+        assert_eq!(serde_json::to_string(&git).unwrap(), "1793197825000");
+        assert!(Timestamp::parse("yesterday").is_err());
+    }
 
     #[test]
     fn boundary_identifiers_decode_once_into_closed_types() {

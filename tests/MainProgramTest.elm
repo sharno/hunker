@@ -1,6 +1,7 @@
 module MainProgramTest exposing (suite)
 
 import Expect
+import Html.Attributes
 import Hunker.Domain.Git as Git
 import Hunker.Domain.Settings as Settings
 import Hunker.Effect as AppEffect
@@ -16,7 +17,7 @@ import SimulatedEffect.Process as SimulatedProcess
 import SimulatedEffect.Task as SimulatedTask
 import Test exposing (Test, describe, test)
 import Test.Html.Query as Query
-import Test.Html.Selector exposing (class, containing, disabled, tag, text)
+import Test.Html.Selector exposing (attribute, class, containing, disabled, tag, text)
 import Test.Http as TestHttp
 import Time
 
@@ -59,6 +60,16 @@ suite =
                         ]
                     |> ProgramTest.clickButton "Mark reviewed"
                     |> ProgramTest.expectViewHas [ text "Reviewed" ]
+        , test "a commit inside a pull request is pinned: no head check, threads, or composer" <|
+            \() ->
+                startedAt ("/example/hunker/pull/42/commits/" ++ headOid)
+                    |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
+                    |> ProgramTest.simulateHttpOk "GET" ("/api/diff?url=https%3A%2F%2Fgithub.com%2Fexample%2Fhunker%2Fcommit%2F" ++ headOid) reviewJson
+                    |> ProgramTest.ensureViewHas [ text "agent committed ", text "2222222" ]
+                    |> ProgramTest.ensureViewHasNot [ text "Submit review" ]
+                    |> ProgramTest.ensureHttpRequests "GET" ("/api/revision?url=https%3A%2F%2Fgithub.com%2Fexample%2Fhunker%2Fpull%2F42&headOid=" ++ headOid) (List.length >> Expect.equal 0)
+                    |> ProgramTest.ensureHttpRequests "GET" "/api/commits?url=https%3A%2F%2Fgithub.com%2Fexample%2Fhunker%2Fpull%2F42" (List.length >> Expect.equal 0)
+                    |> ProgramTest.expectHttpRequests "GET" "/api/reviews?url=https%3A%2F%2Fgithub.com%2Fexample%2Fhunker%2Fpull%2F42" (List.length >> Expect.equal 0)
         , test "turning off diff colors marks the diff section" <|
             \() ->
                 startedAt "/example/hunker/pull/42/files/src/greet.ts"
@@ -138,6 +149,7 @@ suite =
                     |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
                     |> ProgramTest.simulateHttpOk "GET" sourceControlRequest (sourceControlJson 2)
                     |> ProgramTest.simulateHttpOk "GET" repositoryFilesRequest repositoryFilesJson
+                    |> ProgramTest.simulateHttpOk "POST" fetchRequest (sourceControlJson 2)
                     |> ProgramTest.clickButton "Pull 2 ↓"
                     |> ProgramTest.update (Main.RepositoryMsg (Repository.PollSourceControl (Time.millisToPosix 120000)))
                     |> ProgramTest.ensureViewHas
@@ -165,12 +177,38 @@ suite =
                         , containing [ text "Pull 1 ↓" ]
                         , disabled False
                         ]
+        , test "opens the file tree from local Git while origin is fetched in the background" <|
+            \() ->
+                startedAt "/mohamed-rdr/hunker"
+                    |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
+                    |> ProgramTest.simulateHttpOk "GET" sourceControlRequest (sourceControlWith "main" repositoryOid 0 remoteNotChecked)
+                    |> ProgramTest.simulateHttpOk "GET" repositoryFilesRequest repositoryFilesJson
+                    |> ProgramTest.ensureViewHas [ text "README.md" ]
+                    |> ProgramTest.ensureViewHas
+                        [ tag "button"
+                        , attribute (Html.Attributes.attribute "aria-label" "Fetching from origin")
+                        , disabled True
+                        ]
+                    |> ProgramTest.simulateHttpOk "POST"
+                        fetchRequest
+                        (sourceControlWith "main"
+                            repositoryOid
+                            0
+                            (Encode.object
+                                [ ( "_tag", Encode.string "Unavailable" )
+                                , ( "checkedAt", Encode.int 1 )
+                                , ( "error", Encode.string "Could not resolve host" )
+                                ]
+                            )
+                        )
+                    |> ProgramTest.expectViewHas [ text "Origin unreachable", text "README.md" ]
         , test "opens a repository file without reloading the tree or Git status" <|
             \() ->
                 startedAt "/mohamed-rdr/hunker"
                     |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
                     |> ProgramTest.simulateHttpOk "GET" sourceControlRequest (sourceControlJson 2)
                     |> ProgramTest.simulateHttpOk "GET" repositoryFilesRequest repositoryFilesJson
+                    |> ProgramTest.simulateHttpOk "POST" fetchRequest (sourceControlJson 2)
                     |> ProgramTest.clickButton "README.md"
                     |> ProgramTest.ensureViewHas
                         [ text "Opening README.md…"
@@ -179,28 +217,46 @@ suite =
                         ]
                     |> ProgramTest.ensureHttpRequestWasMade "GET" repositoryFileRequest
                     |> ProgramTest.simulateHttpOk "GET" repositoryFileRequest repositoryFileJson
+                    |> ProgramTest.ensureViewHasNot [ text "Could not open file" ]
                     |> ProgramTest.expectViewHas
                         [ text "README.md"
-                        , text "Local file contents"
+                        , text "# Local file contents"
                         , text "Pull 2 ↓"
                         ]
+        , test "opens a content search hit at its matched line" <|
+            \() ->
+                startedAt "/mohamed-rdr/hunker/tree/main?q=Local"
+                    |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
+                    |> ProgramTest.simulateHttpOk "GET" sourceControlRequest (sourceControlJson 0)
+                    |> ProgramTest.simulateHttpOk "GET" repositoryFilesRequest repositoryFilesJson
+                    |> ProgramTest.simulateHttpOk "POST" fetchRequest (sourceControlJson 0)
+                    |> ProgramTest.simulateHttpOk "GET"
+                        ("/api/repository/search?repository=mohamed-rdr%2Fhunker&oid=" ++ repositoryOid ++ "&query=Local&mode=literal")
+                        """{"files":[],"matches":[{"path":"README.md","line":1,"column":3,"lineContent":"# Local file contents","contextBefore":[],"contextAfter":[],"ranges":[[2,7]]}]}"""
+                    |> ProgramTest.ensureViewHas [ tag "mark", containing [ text "Local" ] ]
+                    |> ProgramTest.clickButton ":1"
+                    |> ProgramTest.ensureBrowserUrl (Expect.equal "http://localhost:8787/mohamed-rdr/hunker/blob/main/README.md?q=Local#L1")
+                    |> ProgramTest.simulateHttpOk "GET" repositoryFileRequest repositoryFileJson
+                    |> ProgramTest.expectView (Query.find [ class "is-target" ] >> Query.has [ text "# Local file contents" ])
         , test "a background status poll keeps the open file and its tree" <|
             \() ->
                 startedAt "/mohamed-rdr/hunker/blob/main/README.md"
                     |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
                     |> ProgramTest.simulateHttpOk "GET" sourceControlRequest (sourceControlJson 0)
                     |> ProgramTest.simulateHttpOk "GET" repositoryFilesRequest repositoryFilesJson
+                    |> ProgramTest.simulateHttpOk "POST" fetchRequest (sourceControlJson 0)
                     |> ProgramTest.simulateHttpOk "GET" repositoryFileRequest repositoryFileJson
                     |> ProgramTest.update (Main.RepositoryMsg (Repository.PollSourceControl (Time.millisToPosix 120000)))
-                    |> ProgramTest.simulateHttpOk "GET" sourceControlRequest (sourceControlJson 0)
-                    |> ProgramTest.ensureViewHasNot [ text "Repository refreshed." ]
-                    |> ProgramTest.expectViewHas [ text "Local file contents" ]
+                    |> ProgramTest.simulateHttpOk "POST" fetchRequest (sourceControlJson 0)
+                    |> ProgramTest.ensureViewHasNot [ text "Repository refreshed.", text "Could not open file" ]
+                    |> ProgramTest.expectViewHas [ text "# Local file contents" ]
         , test "a refused branch switch keeps the checkout controls" <|
             \() ->
                 startedAt "/mohamed-rdr/hunker"
                     |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
                     |> ProgramTest.simulateHttpOk "GET" sourceControlRequest (sourceControlJson 0)
                     |> ProgramTest.simulateHttpOk "GET" repositoryFilesRequest repositoryFilesJson
+                    |> ProgramTest.simulateHttpOk "POST" fetchRequest (sourceControlJson 0)
                     |> ProgramTest.update (Main.RepositoryMsg (Repository.SelectedBranch (Git.branchName "feature")))
                     |> ProgramTest.simulateHttpResponse "POST"
                         "/api/repository/branch"
@@ -235,6 +291,7 @@ suite =
                     |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
                     |> ProgramTest.simulateHttpOk "GET" sourceControlRequest (sourceControlJson 0)
                     |> ProgramTest.simulateHttpOk "GET" repositoryFilesRequest repositoryFilesJson
+                    |> ProgramTest.simulateHttpOk "POST" fetchRequest (sourceControlJson 0)
                     |> ProgramTest.update (Main.RepositoryMsg (Repository.SelectedBranch (Git.branchName "feature")))
                     |> ProgramTest.simulateHttpOk "POST" "/api/repository/branch" (sourceControlAt "feature" featureOid 0)
                     |> ProgramTest.ensureViewHas [ text "Reading repository files…" ]
@@ -372,6 +429,9 @@ simulateEffect effect =
         AppEffect.ScrollIntoView _ message ->
             SimulatedTask.perform identity (SimulatedTask.succeed message)
 
+        AppEffect.ResetViewport message ->
+            SimulatedTask.perform identity (SimulatedTask.succeed message)
+
         AppEffect.After milliseconds message ->
             SimulatedTask.perform (always message) (SimulatedProcess.sleep milliseconds)
 
@@ -433,13 +493,23 @@ repositoryFileRequest =
 
 repositoryFileJson : String
 repositoryFileJson =
-    """{"path":"README.md","content":"# Local file contents
-","truncated":false,"presentation":{"_tag":"Unsupported","reason":"Markdown is not highlighted."}}"""
+    Encode.encode 0 <|
+        Encode.object
+            [ ( "path", Encode.string "README.md" )
+            , ( "content", Encode.string "# Local file contents\n" )
+            , ( "truncated", Encode.bool False )
+            , ( "presentation"
+              , Encode.object
+                    [ ( "_tag", Encode.string "Unsupported" )
+                    , ( "reason", Encode.string "Markdown is not highlighted." )
+                    ]
+              )
+            ]
 
 
 repositoryCommitsJson : String
 repositoryCommitsJson =
-    """{"ref":"2222222222222222222222222222222222222222","history":"complete","commits":[{"sha":"1111111111111111111111111111111111111111","parents":[],"subject":"A stale commit","authorName":"Mohamed","authorEmail":"mohamed@example.com","authoredAt":"2026-08-10T00:00:00Z"}]}"""
+    """{"ref":"2222222222222222222222222222222222222222","history":"complete","commits":[{"sha":"1111111111111111111111111111111111111111","parents":[],"subject":"A stale commit","authorName":"Mohamed","authorEmail":"mohamed@example.com","authoredAt":1786320000000}]}"""
 
 
 repositoryCommitsRequest : String
@@ -449,7 +519,7 @@ repositoryCommitsRequest =
 
 repositoryPullsJson : String
 repositoryPullsJson =
-    """{"state":"open","page":1,"hasMore":false,"pullRequests":[{"number":7,"title":"Remote pull request","author":"agent","avatarUrl":null,"status":"open","updatedAt":"2026-08-10T00:00:00Z","base":"main","head":"feature","labels":[]}]}"""
+    """{"state":"open","page":1,"hasMore":false,"pullRequests":[{"number":7,"title":"Remote pull request","author":"agent","avatarUrl":null,"status":"open","updatedAt":1786320000000,"base":"main","head":"feature","labels":[]}]}"""
 
 
 sourceControlRequest : String
@@ -462,8 +532,30 @@ sourceControlJson behind =
     sourceControlAt "main" repositoryOid behind
 
 
+fetchRequest : String
+fetchRequest =
+    "/api/repository/fetch"
+
+
 sourceControlAt : String -> String -> Int -> String
 sourceControlAt branch oid behind =
+    sourceControlWith branch
+        oid
+        behind
+        (Encode.object
+            [ ( "_tag", Encode.string "Current" )
+            , ( "checkedAt", Encode.int 1 )
+            ]
+        )
+
+
+remoteNotChecked : Encode.Value
+remoteNotChecked =
+    Encode.object [ ( "_tag", Encode.string "NotChecked" ) ]
+
+
+sourceControlWith : String -> String -> Int -> Encode.Value -> String
+sourceControlWith branch oid behind remote =
     Encode.encode 0 <|
         Encode.object
             [ ( "status"
@@ -498,15 +590,15 @@ sourceControlAt branch oid behind =
                             , ( "untracked", Encode.int 0 )
                             ]
                       )
-                    , ( "remote"
-                      , Encode.object
-                            [ ( "_tag", Encode.string "RemoteCurrent" )
-                            , ( "checkedAt", Encode.int 1 )
-                            ]
-                      )
+                    , ( "remote", remote )
                     ]
               )
             ]
+
+
+headOid : String
+headOid =
+    "2222222222222222222222222222222222222222"
 
 
 reviewRequest : String
@@ -563,4 +655,4 @@ analysisJson =
 
 resolvedCommentsJson : String
 resolvedCommentsJson =
-    """{"comments":[{"id":7,"rootId":7,"path":"src/greet.ts","body":"This **thread** is resolved.","author":"reviewer","htmlUrl":"https://github.com/example/hunker/pull/42#discussion_r7","createdAt":"2026-08-07T12:00:00Z","anchor":{"_tag":"Current","line":1,"side":"RIGHT"},"resolved":true}]}"""
+    """{"comments":[{"id":7,"rootId":7,"path":"src/greet.ts","body":"This **thread** is resolved.","author":"reviewer","htmlUrl":"https://github.com/example/hunker/pull/42#discussion_r7","createdAt":1786104000000,"anchor":{"_tag":"Current","line":1,"side":"RIGHT"},"resolved":true}]}"""

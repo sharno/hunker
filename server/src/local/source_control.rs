@@ -12,10 +12,19 @@ use super::{
 };
 
 impl Local {
+    /// Reads the checkout without the network, so a repository opens at
+    /// local speed; [`Local::fetch`] brings in the remote afterwards.
     pub async fn source_control(
         &self,
         repository: &RepositorySlug,
     ) -> AppResult<SourceControlStatus> {
+        let root = self.repository_path(repository).await?;
+        let lock = self.repository_lock(&root).await;
+        let _guard = lock.lock().await;
+        inspect(&root, RemoteState::NotChecked).await
+    }
+
+    pub async fn fetch(&self, repository: &RepositorySlug) -> AppResult<SourceControlStatus> {
         let root = self.repository_path(repository).await?;
         let lock = self.repository_lock(&root).await;
         let _guard = lock.lock().await;
@@ -43,21 +52,16 @@ impl Local {
 
 /// Fetches `origin` and reports whether the remote could be reached.
 pub(super) async fn refresh_remote(root: &Path) -> AppResult<RemoteState> {
-    let git = Git::at(root);
     let checked_at = now_ms();
-    let fetch = git.run(&["fetch", "--prune", "--quiet", "origin"]).await?;
-    let list = git.run(&["ls-remote", "--heads", "origin"]).await?;
-    Ok(if fetch.status.success() && list.status.success() {
-        RemoteState::RemoteCurrent { checked_at }
+    let fetch = Git::at(root)
+        .run(&["fetch", "--prune", "--quiet", "origin"])
+        .await?;
+    Ok(if fetch.status.success() {
+        RemoteState::Current { checked_at }
     } else {
-        RemoteState::RemoteUnavailable {
+        RemoteState::Unavailable {
             checked_at,
-            error: [&fetch, &list]
-                .into_iter()
-                .filter(|run| !run.status.success())
-                .map(|run| run.message("git"))
-                .collect::<Vec<_>>()
-                .join("\n"),
+            error: fetch.message("git fetch"),
         }
     })
 }

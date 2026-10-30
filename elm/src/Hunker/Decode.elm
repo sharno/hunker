@@ -1,4 +1,4 @@
-module Hunker.Decode exposing (andMap, enum, tagged)
+module Hunker.Decode exposing (andMap, enum, posix, tagged)
 
 {-| Decoding helpers shared by every domain module.
 
@@ -8,6 +8,14 @@ values that a later step overwrites.
 -}
 
 import Json.Decode as Decode exposing (Decoder)
+import Time
+
+
+{-| The server sends every instant as Unix milliseconds.
+-}
+posix : Decoder Time.Posix
+posix =
+    Decode.map Time.millisToPosix Decode.int
 
 
 andMap : Decoder a -> Decoder (a -> b) -> Decoder b

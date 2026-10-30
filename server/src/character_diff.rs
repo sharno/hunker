@@ -1,5 +1,10 @@
-use std::path::Path;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+    sync::LazyLock,
+};
 
+use regex::Regex;
 use serde::Serialize;
 use tempfile::tempdir;
 
@@ -40,137 +45,273 @@ pub struct CharacterRange {
     pub end: usize,
 }
 
+/// Changed words on one line, in characters from the line start.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct CharacterDiffRow {
-    pub old_line: Option<usize>,
-    pub new_line: Option<usize>,
-    pub old_ranges: Vec<CharacterRange>,
-    pub new_ranges: Vec<CharacterRange>,
+pub struct LineWords {
+    pub line: usize,
+    pub ranges: Vec<CharacterRange>,
 }
 
-/// The words seen so far for one aligned old/new line pair.
-#[derive(Default)]
-struct RowBuilder {
-    old_present: bool,
-    new_present: bool,
-    old_offset: usize,
-    new_offset: usize,
-    old_ranges: Vec<CharacterRange>,
-    new_ranges: Vec<CharacterRange>,
+/// Inline changes per side. A line is listed only when it also keeps some
+/// unchanged words: a wholly added or removed line has nothing to contrast
+/// its words with, so marking them would only repeat the line's own color.
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+pub struct WordChanges {
+    pub old: Vec<LineWords>,
+    pub new: Vec<LineWords>,
 }
 
-struct HunkCursor {
-    old_line: usize,
-    new_line: usize,
-    old_remaining: usize,
-    new_remaining: usize,
-    row: RowBuilder,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Side {
+    Old,
+    New,
 }
 
-impl HunkCursor {
-    fn start(header: HunkHeader) -> Self {
-        Self {
-            old_line: header.old_start,
-            new_line: header.new_start,
-            old_remaining: header.old_count,
-            new_remaining: header.new_count,
-            row: RowBuilder::default(),
+/// One `--word-diff=porcelain` run: words both sides share, or words only
+/// one side has.
+#[derive(Debug, Clone, Copy)]
+enum Run<'a> {
+    Common(&'a str),
+    Removed(&'a str),
+    Added(&'a str),
+}
+
+impl<'a> Run<'a> {
+    fn parse(line: &'a str) -> Option<Self> {
+        match line.split_at_checked(1)? {
+            (" ", text) => Some(Self::Common(text)),
+            ("-", text) => Some(Self::Removed(text)),
+            ("+", text) => Some(Self::Added(text)),
+            _ => None,
         }
     }
 
-    /// Ends the current line pair. A line pair with no words still occupies
-    /// whichever side has lines remaining in the hunk.
-    fn flush(self) -> (Option<CharacterDiffRow>, Self) {
-        let Self {
-            old_line,
-            new_line,
-            old_remaining,
-            new_remaining,
-            row,
-        } = self;
-        let old_present = row.old_present || (!row.new_present && old_remaining > 0);
-        let new_present = row.new_present || (!row.old_present && new_remaining > 0);
-        let flushed = (old_present || new_present).then(|| CharacterDiffRow {
-            old_line: old_present.then_some(old_line),
-            new_line: new_present.then_some(new_line),
-            old_ranges: row.old_ranges,
-            new_ranges: row.new_ranges,
-        });
+    fn text(self) -> &'a str {
+        match self {
+            Self::Common(text) | Self::Removed(text) | Self::Added(text) => text,
+        }
+    }
+
+    fn sides(self) -> &'static [Side] {
+        match self {
+            Self::Common(_) => &[Side::Old, Side::New],
+            Self::Removed(_) => &[Side::Old],
+            Self::Added(_) => &[Side::New],
+        }
+    }
+
+    /// What one segment of this run says about the line it lands on.
+    fn mark(self, segment: &str, whitespace: WhitespaceMode) -> Mark {
+        let blank = segment.trim().is_empty();
+        match (self, whitespace) {
+            (Self::Common(_), _) if blank => Mark::Neither,
+            (Self::Common(_), _) => Mark::Kept,
+            (Self::Removed(text) | Self::Added(text), WhitespaceMode::Ignore)
+                if text.trim().is_empty() =>
+            {
+                Mark::Neither
+            }
+            (Self::Removed(_) | Self::Added(_), _) => Mark::Changed,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mark {
+    Kept,
+    Changed,
+    Neither,
+}
+
+/// One located run segment, in bytes of its side's text.
+struct Piece {
+    side: Side,
+    start: usize,
+    end: usize,
+    mark: Mark,
+}
+
+/// A side's text with its line starts, to turn byte offsets into lines.
+struct SideText<'a> {
+    text: &'a str,
+    line_starts: Vec<usize>,
+}
+
+impl<'a> SideText<'a> {
+    fn new(text: &'a str) -> Self {
+        Self {
+            text,
+            line_starts: std::iter::once(0)
+                .chain(text.match_indices('\n').map(|(index, _)| index + 1))
+                .collect(),
+        }
+    }
+
+    /// Where a hunk side begins. Git names the line before an insertion
+    /// when that side's count is zero.
+    fn hunk_start(&self, start: usize, count: usize) -> usize {
+        let line = if count == 0 { start + 1 } else { start };
+        self.line_starts
+            .get(line.saturating_sub(1))
+            .copied()
+            .unwrap_or(self.text.len())
+    }
+
+    /// The 1-based line and character column of a byte offset.
+    fn position(&self, byte: usize) -> (usize, usize) {
+        let index = self
+            .line_starts
+            .partition_point(|start| *start <= byte)
+            .saturating_sub(1);
+        let line_start = self.line_starts.get(index).copied().unwrap_or(0);
         (
-            flushed,
-            Self {
-                old_line: old_line + usize::from(old_present),
-                new_line: new_line + usize::from(new_present),
-                old_remaining: old_remaining.saturating_sub(usize::from(old_present)),
-                new_remaining: new_remaining.saturating_sub(usize::from(new_present)),
-                row: RowBuilder::default(),
-            },
+            index + 1,
+            self.text
+                .get(line_start..byte)
+                .map_or(0, |prefix| prefix.chars().count()),
         )
     }
 
-    fn word(mut self, marker: char, value: &str, whitespace: WhitespaceMode) -> Self {
-        let length = value.chars().count();
-        let highlighted = !value.is_empty()
-            && match whitespace {
-                WhitespaceMode::Show => true,
-                WhitespaceMode::Ignore => !value.trim().is_empty(),
-            };
-        let row = &mut self.row;
-        if matches!(marker, ' ' | '-') {
-            row.old_present = true;
-            if marker == '-' && highlighted {
-                row.old_ranges.push(CharacterRange {
-                    start: row.old_offset,
-                    end: row.old_offset + length,
-                });
-            }
-            row.old_offset += length;
-        }
-        if matches!(marker, ' ' | '+') {
-            row.new_present = true;
-            if marker == '+' && highlighted {
-                row.new_ranges.push(CharacterRange {
-                    start: row.new_offset,
-                    end: row.new_offset + length,
-                });
-            }
-            row.new_offset += length;
-        }
-        self
+    fn characters(&self, piece: &Piece) -> usize {
+        self.text
+            .get(piece.start..piece.end)
+            .map_or(0, |segment| segment.chars().count())
     }
 }
 
-/// Parses `git diff --word-diff=porcelain` into aligned rows with changed
-/// character ranges per side.
-pub fn parse(output: &str, whitespace: WhitespaceMode) -> Vec<CharacterDiffRow> {
-    fn flush(rows: &mut Vec<CharacterDiffRow>, cursor: Option<HunkCursor>) -> Option<HunkCursor> {
-        cursor.map(|cursor| {
-            let (row, next) = cursor.flush();
-            rows.extend(row);
-            next
-        })
-    }
-    let (mut rows, cursor) = output.lines().fold(
-        (Vec::new(), None::<HunkCursor>),
-        |(mut rows, cursor), line| {
-            if let Some(header) = HunkHeader::parse(line) {
-                flush(&mut rows, cursor);
-                return (rows, Some(HunkCursor::start(header)));
-            }
-            let next = match (cursor, line.chars().next()) {
-                (None, _) => None,
-                (Some(cursor), _) if line == "~" => flush(&mut rows, Some(cursor)),
-                (Some(cursor), Some(marker @ (' ' | '+' | '-'))) => {
-                    Some(cursor.word(marker, &line[marker.len_utf8()..], whitespace))
-                }
-                (Some(cursor), _) => Some(cursor),
-            };
-            (rows, next)
-        },
+static SEGMENTS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\s+|\S+").expect("segment expression is valid"));
+
+/// Splits porcelain output into hunks of runs. Git's `~` newline markers
+/// are skipped: they describe only the side it printed, so lines are counted
+/// in each side's own text instead.
+fn hunks(output: &str) -> Vec<(HunkHeader, Vec<Run<'_>>)> {
+    output.lines().fold(Vec::new(), |mut hunks, line| {
+        match (HunkHeader::parse(line), hunks.last_mut()) {
+            (Some(header), _) => hunks.push((header, Vec::new())),
+            (None, Some((_, runs))) => runs.extend(Run::parse(line)),
+            (None, None) => {}
+        }
+        hunks
+    })
+}
+
+/// Finds `segment` at `at`. Git ignores the whitespace between words, so a
+/// word may follow any whitespace; whitespace itself matches only exactly.
+fn locate(text: &str, at: usize, segment: &str) -> Option<usize> {
+    let rest = text.get(at..)?;
+    let start = if segment.starts_with(char::is_whitespace) {
+        at
+    } else {
+        at + rest.len() - rest.trim_start().len()
+    };
+    text.get(start..)?.starts_with(segment).then_some(start)
+}
+
+/// Locates every segment of a hunk's runs in both texts, or `None` when the
+/// output cannot be aligned with them; that hunk then shows no inline marks.
+fn hunk_pieces(
+    header: &HunkHeader,
+    runs: &[Run<'_>],
+    old: &SideText<'_>,
+    new: &SideText<'_>,
+    whitespace: WhitespaceMode,
+) -> Option<Vec<Piece>> {
+    let start = (
+        old.hunk_start(header.old_start, header.old_count),
+        new.hunk_start(header.new_start, header.new_count),
     );
-    flush(&mut rows, cursor);
-    rows
+    runs.iter()
+        .flat_map(|run| {
+            SEGMENTS
+                .find_iter(run.text())
+                .map(move |segment| (*run, segment.as_str()))
+        })
+        .try_fold(
+            (start, Vec::new()),
+            |((old_at, new_at), mut pieces), (run, segment)| {
+                let mark = run.mark(segment, whitespace);
+                let cursors =
+                    run.sides()
+                        .iter()
+                        .try_fold((old_at, new_at), |(old_at, new_at), side| {
+                            let (text, at) = match side {
+                                Side::Old => (old.text, old_at),
+                                Side::New => (new.text, new_at),
+                            };
+                            match locate(text, at, segment) {
+                                Some(found) => {
+                                    let end = found + segment.len();
+                                    pieces.push(Piece {
+                                        side: *side,
+                                        start: found,
+                                        end,
+                                        mark,
+                                    });
+                                    Some(match side {
+                                        Side::Old => (end, new_at),
+                                        Side::New => (old_at, end),
+                                    })
+                                }
+                                // Whitespace that differs between the sides is
+                                // not part of Git's comparison.
+                                None if segment.trim().is_empty() => Some((old_at, new_at)),
+                                None => None,
+                            }
+                        })?;
+                Some((cursors, pieces))
+            },
+        )
+        .map(|(_, pieces)| pieces)
+}
+
+fn side_words(pieces: &[Piece], side: Side, text: &SideText<'_>) -> Vec<LineWords> {
+    let on_side = || pieces.iter().filter(move |piece| piece.side == side);
+    let kept = on_side()
+        .filter(|piece| piece.mark == Mark::Kept)
+        .map(|piece| text.position(piece.start).0)
+        .collect::<BTreeSet<_>>();
+    on_side()
+        .filter(|piece| piece.mark == Mark::Changed)
+        .fold(
+            BTreeMap::<usize, Vec<CharacterRange>>::new(),
+            |mut lines, piece| {
+                let (line, start) = text.position(piece.start);
+                let end = start + text.characters(piece);
+                let ranges = lines.entry(line).or_default();
+                match ranges.last_mut() {
+                    Some(last) if last.end == start => last.end = end,
+                    _ => ranges.push(CharacterRange { start, end }),
+                }
+                lines
+            },
+        )
+        .into_iter()
+        .filter(|(line, _)| kept.contains(line))
+        .map(|(line, ranges)| LineWords { line, ranges })
+        .collect()
+}
+
+/// Turns `git diff --word-diff=porcelain` output into changed character
+/// ranges, each located in its own side's text.
+pub fn parse(
+    output: &str,
+    old_text: &str,
+    new_text: &str,
+    whitespace: WhitespaceMode,
+) -> WordChanges {
+    let old = SideText::new(old_text);
+    let new = SideText::new(new_text);
+    let pieces = hunks(output)
+        .iter()
+        .flat_map(|(header, runs)| {
+            hunk_pieces(header, runs, &old, &new, whitespace).unwrap_or_default()
+        })
+        .collect::<Vec<_>>();
+    WordChanges {
+        old: side_words(&pieces, Side::Old, &old),
+        new: side_words(&pieces, Side::New, &new),
+    }
 }
 
 pub async fn analyze(
@@ -179,7 +320,7 @@ pub async fn analyze(
     new_text: &str,
     whitespace: WhitespaceMode,
     granularity: Granularity,
-) -> AppResult<Vec<CharacterDiffRow>> {
+) -> AppResult<WordChanges> {
     let directory = tempdir().map_err(|error| {
         AppError::internal(format!(
             "Could not create character diff directory: {error}"
@@ -230,30 +371,70 @@ pub async fn analyze(
     if !matches!(output.status.code(), Some(0 | 1)) {
         return Err(AppError::upstream(output.message("Git character diff")));
     }
-    Ok(parse(&output.stdout, whitespace))
+    Ok(parse(&output.stdout, old_text, new_text, whitespace))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn aligns_native_git_word_changes() {
-        let rows = analyze(
+    fn words(line: usize, ranges: &[(usize, usize)]) -> LineWords {
+        LineWords {
+            line,
+            ranges: ranges
+                .iter()
+                .map(|&(start, end)| CharacterRange { start, end })
+                .collect(),
+        }
+    }
+
+    async fn token_changes(old: &str, new: &str) -> WordChanges {
+        analyze(
             "value.ts",
-            "const oldName = 1;\n",
-            "const newName = 1;\n",
+            old,
+            new,
             WhitespaceMode::Show,
             Granularity::Token,
         )
         .await
-        .unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].old_line, Some(1));
-        assert_eq!(rows[0].new_line, Some(1));
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn aligns_native_git_word_changes() {
+        let changes = token_changes("const oldName = 1;\n", "const newName = 1;\n").await;
+        assert_eq!(changes.old, vec![words(1, &[(6, 13)])]);
+        assert_eq!(changes.new, vec![words(1, &[(6, 13)])]);
+    }
+
+    #[tokio::test]
+    async fn counts_lines_in_each_side_when_git_aligns_words_across_lines() {
+        // Git matches the old line's words with two new lines, so its `~`
+        // markers cannot be used to count old lines.
+        let changes = token_changes(
+            "first;\nconst value = 1;\n",
+            "first;\nconst added = true;\nconst value = 2;\n",
+        )
+        .await;
+        assert_eq!(changes.old, vec![words(2, &[(14, 15)])]);
         assert_eq!(
-            rows[0].old_ranges,
-            vec![CharacterRange { start: 6, end: 13 }]
+            changes.new.iter().map(|line| line.line).collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+    }
+
+    #[tokio::test]
+    async fn leaves_wholly_added_lines_unmarked() {
+        let changes = token_changes("a();\nb();\n", "a();\nnew_call();\nb();\n").await;
+        assert_eq!(changes, WordChanges::default());
+    }
+
+    #[test]
+    fn gives_up_on_a_hunk_it_cannot_align() {
+        let output = "@@ -1 +1 @@\n-missing\n+other\n~\n";
+        assert_eq!(
+            parse(output, "present\n", "other\n", WhitespaceMode::Show),
+            WordChanges::default()
         );
     }
 }

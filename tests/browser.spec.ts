@@ -793,7 +793,7 @@ test("posts an inline line comment through the real browser Fetch transport", as
         body: "Please keep this concise.",
         author: "reviewer",
         htmlUrl: `${reviewUrl}#discussion_r91`,
-        createdAt: "2026-08-07T12:00:00Z",
+        createdAt: Date.parse("2026-08-07T12:00:00Z"),
         anchor: { _tag: "Current", line: 1, side: "RIGHT" },
         resolved: false,
       },
@@ -868,7 +868,7 @@ async function mockRepository(page: Page) {
           parents: [],
           authorName: "Mohamed Elsharnouby",
           authorEmail: "mohamed@example.com",
-          authoredAt: "2026-08-07T12:00:00-04:00",
+          authoredAt: Date.parse("2026-08-07T12:00:00-04:00"),
           subject: "Keep repository commit rows compact",
         },
         {
@@ -876,7 +876,7 @@ async function mockRepository(page: Page) {
           parents: ["1111111111111111111111111111111111111111"],
           authorName: "Hunker Agent",
           authorEmail: "agent@example.com",
-          authoredAt: "2026-08-07T11:00:00-04:00",
+          authoredAt: Date.parse("2026-08-07T11:00:00-04:00"),
           subject: "Add repository commit view",
         },
       ],
@@ -896,7 +896,7 @@ async function mockRepository(page: Page) {
         },
         branches: [{ name: "main", presence: "both" }],
         changes: { staged: 0, unstaged: 0, untracked: 0 },
-        remote: { _tag: "RemoteCurrent", checkedAt: 1 },
+        remote: { _tag: "Current", checkedAt: 1 },
       },
     }),
   );
@@ -932,15 +932,8 @@ function fulfillReviewAnalysis(route: Route) {
       _tag: "Complete",
       value:
         path === "src/long.ts"
-          ? [
-              {
-                oldLine: 1,
-                newLine: 1,
-                oldRanges: [],
-                newRanges: [{ start: 0, end: 6 }],
-              },
-            ]
-          : [],
+          ? { old: [], new: [{ line: 1, ranges: [{ start: 0, end: 6 }] }] }
+          : { old: [], new: [] },
     },
   });
   return fulfillJson(route, {

@@ -6,6 +6,7 @@ use axum::{
 const APPLICATION_JAVASCRIPT: &str = include_str!(concat!(env!("OUT_DIR"), "/app.js"));
 const APPLICATION_CSS: &str = include_str!(concat!(env!("OUT_DIR"), "/app.css"));
 const VIEWPORT_JAVASCRIPT: &str = include_str!("../../elm/viewport.js");
+const TIME_JAVASCRIPT: &str = include_str!("../../elm/time.js");
 
 const INDEX: &str = r#"<!doctype html>
 <html lang="en">
@@ -23,6 +24,7 @@ const INDEX: &str = r#"<!doctype html>
       Elm.Main.init({ node: document.getElementById("root") });
     </script>
     <script src="/assets/viewport.js"></script>
+    <script src="/assets/time.js"></script>
   </body>
 </html>
 "#;
@@ -37,6 +39,10 @@ pub async fn javascript() -> impl IntoResponse {
 
 pub async fn viewport() -> impl IntoResponse {
     asset("text/javascript; charset=utf-8", VIEWPORT_JAVASCRIPT)
+}
+
+pub async fn time() -> impl IntoResponse {
+    asset("text/javascript; charset=utf-8", TIME_JAVASCRIPT)
 }
 
 pub async fn stylesheet() -> impl IntoResponse {
@@ -55,7 +61,9 @@ fn asset(content_type: &'static str, content: &'static str) -> impl IntoResponse
 
 #[cfg(test)]
 mod tests {
-    use super::{APPLICATION_CSS, APPLICATION_JAVASCRIPT, INDEX, VIEWPORT_JAVASCRIPT};
+    use super::{
+        APPLICATION_CSS, APPLICATION_JAVASCRIPT, INDEX, TIME_JAVASCRIPT, VIEWPORT_JAVASCRIPT,
+    };
 
     #[test]
     fn embeds_compiled_elm_application() {
@@ -65,5 +73,7 @@ mod tests {
         assert!(INDEX.contains("/assets/app.css"));
         assert!(INDEX.contains("/assets/viewport.js"));
         assert!(VIEWPORT_JAVASCRIPT.contains("--viewport-scroll-region-top"));
+        assert!(INDEX.contains("/assets/time.js"));
+        assert!(TIME_JAVASCRIPT.contains(r#"customElements.define("hunker-time""#));
     }
 }

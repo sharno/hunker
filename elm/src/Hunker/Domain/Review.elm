@@ -3,13 +3,13 @@ module Hunker.Domain.Review exposing
     , AnalysisFile
     , AnalysisSnapshot
     , CharacterRange
-    , CharacterRow
     , CommentAnchor(..)
     , CommentSide(..)
     , FileChange
     , FileStatus(..)
     , FullFile
     , HeadFreshness(..)
+    , LineWords
     , MovedBlock
     , PullCommit
     , ReviewAction(..)
@@ -21,6 +21,7 @@ module Hunker.Domain.Review exposing
     , SemanticChange(..)
     , SemanticResult(..)
     , SourceRange
+    , WordChanges
     , analysisSnapshotDecoder
     , commentDecoder
     , commentSideToString
@@ -40,6 +41,7 @@ import Hunker.Decode exposing (andMap)
 import Hunker.Domain.Git as Git exposing (Oid)
 import Hunker.Domain.Source as Source exposing (FilePresentation)
 import Json.Decode as Decode exposing (Decoder)
+import Time
 
 
 type alias FileChange =
@@ -86,7 +88,7 @@ type alias PullCommit =
     , message : String
     , author : String
     , avatarUrl : Maybe String
-    , authoredAt : Maybe String
+    , authoredAt : Maybe Time.Posix
     , htmlUrl : String
     }
 
@@ -131,11 +133,17 @@ type alias CharacterRange =
     }
 
 
-type alias CharacterRow =
-    { oldLine : Maybe Int
-    , newLine : Maybe Int
-    , oldRanges : List CharacterRange
-    , newRanges : List CharacterRange
+{-| Changed words on one line of one side.
+-}
+type alias LineWords =
+    { line : Int
+    , ranges : List CharacterRange
+    }
+
+
+type alias WordChanges =
+    { old : List LineWords
+    , new : List LineWords
     }
 
 
@@ -143,7 +151,7 @@ type alias AnalysisFile =
     { path : String
     , semantic : AnalysisFeature SemanticResult
     , syntax : AnalysisFeature FilePresentation
-    , wordDiff : AnalysisFeature (List CharacterRow)
+    , wordDiff : AnalysisFeature WordChanges
     }
 
 
@@ -173,7 +181,7 @@ type alias ReviewComment =
     , body : String
     , author : String
     , htmlUrl : String
-    , createdAt : String
+    , createdAt : Time.Posix
     , anchor : CommentAnchor
     , resolved : Bool
     }
@@ -332,7 +340,7 @@ pullCommitDecoder =
         (Decode.field "message" Decode.string)
         (Decode.field "author" Decode.string)
         (Decode.field "avatarUrl" (Decode.nullable Decode.string))
-        (Decode.field "authoredAt" (Decode.nullable Decode.string))
+        (Decode.field "authoredAt" (Decode.nullable Hunker.Decode.posix))
         (Decode.field "htmlUrl" Decode.string)
 
 
@@ -426,7 +434,7 @@ analysisFileDecoder =
         (Decode.field "path" Decode.string)
         (Decode.field "semantic" (analysisFeatureDecoder semanticDecoder))
         (Decode.field "syntax" (analysisFeatureDecoder Source.fileDecoder))
-        (Decode.field "wordDiff" (analysisFeatureDecoder (Decode.list characterRowDecoder)))
+        (Decode.field "wordDiff" (analysisFeatureDecoder wordChangesDecoder))
 
 
 analysisFeatureDecoder : Decoder value -> Decoder (AnalysisFeature value)
@@ -439,13 +447,17 @@ analysisFeatureDecoder valueDecoder =
         ]
 
 
-characterRowDecoder : Decoder CharacterRow
-characterRowDecoder =
-    Decode.map4 CharacterRow
-        (Decode.field "oldLine" (Decode.nullable Decode.int))
-        (Decode.field "newLine" (Decode.nullable Decode.int))
-        (Decode.field "oldRanges" (Decode.list characterRangeDecoder))
-        (Decode.field "newRanges" (Decode.list characterRangeDecoder))
+wordChangesDecoder : Decoder WordChanges
+wordChangesDecoder =
+    let
+        lineWords =
+            Decode.map2 LineWords
+                (Decode.field "line" Decode.int)
+                (Decode.field "ranges" (Decode.list characterRangeDecoder))
+    in
+    Decode.map2 WordChanges
+        (Decode.field "old" (Decode.list lineWords))
+        (Decode.field "new" (Decode.list lineWords))
 
 
 characterRangeDecoder : Decoder CharacterRange
@@ -477,7 +489,7 @@ commentDecoder =
         |> andMap (Decode.field "body" Decode.string)
         |> andMap (Decode.field "author" Decode.string)
         |> andMap (Decode.field "htmlUrl" Decode.string)
-        |> andMap (Decode.field "createdAt" Decode.string)
+        |> andMap (Decode.field "createdAt" Hunker.Decode.posix)
         |> andMap (Decode.field "anchor" commentAnchorDecoder)
         |> andMap (Decode.field "resolved" Decode.bool)
 

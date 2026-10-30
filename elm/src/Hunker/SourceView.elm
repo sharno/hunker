@@ -1,7 +1,7 @@
-module Hunker.SourceView exposing (FileConfig, Range, file, line)
+module Hunker.SourceView exposing (FileConfig, Range, file, line, lineAnchor)
 
 import Html exposing (Html, button, span, text)
-import Html.Attributes exposing (attribute, class, type_)
+import Html.Attributes exposing (attribute, class, id, type_)
 import Html.Events exposing (onClick)
 import Hunker.Domain.Settings exposing (Feature(..))
 import Hunker.Domain.Source as Source exposing (FoldRegion, Presentation(..))
@@ -16,10 +16,18 @@ type alias Range =
 type alias FileConfig msg =
     { syntax : Feature
     , namespace : String
+    , target : Maybe Int
     , presentation : Presentation
     , isCollapsed : String -> Bool
     , toggleFold : String -> msg
     }
+
+
+{-| The DOM id of a source line, GitHub's `L42`.
+-}
+lineAnchor : Int -> String
+lineAnchor number =
+    "L" ++ String.fromInt number
 
 
 file : FileConfig msg -> String -> List (Html msg)
@@ -41,7 +49,10 @@ sourceLineView config number sourceLine =
                 |> Maybe.map (Source.foldKey config.namespace >> config.isCollapsed)
                 |> Maybe.withDefault False
     in
-    span [ class ("source-line" ++ boolClass collapsed " is-folded") ]
+    span
+        [ id (lineAnchor number)
+        , class ("source-line" ++ boolClass collapsed " is-folded" ++ boolClass (config.target == Just number) " is-target")
+        ]
         [ span [ class "line-number" ]
             [ case fold of
                 Just region ->

@@ -1,6 +1,7 @@
 module Hunker.Route exposing
     ( FilesLocation
     , GithubInputError(..)
+    , OpenFile
     , PullRequestRef
     , PullView(..)
     , RepositoryLocation
@@ -17,6 +18,7 @@ module Hunker.Route exposing
     , pullRequestUrl
     , reviewLabel
     , sameDiff
+    , sameScreen
     , selectFile
     , selectedPath
     , toPath
@@ -52,8 +54,16 @@ type RepositoryView
 
 type alias FilesLocation =
     { ref : Maybe String
-    , path : Maybe String
+    , file : Maybe OpenFile
     , search : Search
+    }
+
+
+{-| An open repository file, optionally at one line (GitHub's `#L42`).
+-}
+type alias OpenFile =
+    { path : String
+    , line : Maybe Int
     }
 
 
@@ -96,7 +106,13 @@ type GithubInputError
 
 fromUrl : Url -> Route
 fromUrl url =
-    fromPath url.path url.query
+    case decodedSegments url.path of
+        Nothing ->
+            NotFound url.path
+
+        Just segments ->
+            parseSegments segments (queryOptions url.query url.fragment)
+                |> Maybe.withDefault (NotFound url.path)
 
 
 {-| Accepts GitHub (or Hunker) URLs for repositories and reviews only.
@@ -117,7 +133,7 @@ fromGithubString raw =
 
         Just url ->
             if List.member url.host [ "github.com", "www.github.com", "localhost", "127.0.0.1" ] then
-                case fromPath url.path url.query of
+                case fromUrl url of
                     (Repository _) as route ->
                         Ok route
 
@@ -137,17 +153,6 @@ fromGithubString raw =
                 Err ForeignHost
 
 
-fromPath : String -> Maybe String -> Route
-fromPath path maybeQuery =
-    case decodedSegments path of
-        Nothing ->
-            NotFound path
-
-        Just segments ->
-            parseSegments segments (queryOptions maybeQuery)
-                |> Maybe.withDefault (NotFound path)
-
-
 parseSegments : List String -> QueryOptions -> Maybe Route
 parseSegments segments options =
     let
@@ -158,7 +163,7 @@ parseSegments segments options =
             Just (Review { repository = Git.repositoryId owner name, subject = subject })
 
         files ref path =
-            FilesView { ref = ref, path = path, search = options.search }
+            FilesView { ref = ref, file = Maybe.map (\filePath -> { path = filePath, line = options.line }) path, search = options.search }
     in
     case segments of
         [] ->
@@ -252,17 +257,21 @@ repositoryPath location =
     in
     case location.view of
         FilesView files ->
-            (case ( files.path, files.ref ) of
-                ( Just filePath, reference ) ->
-                    prefix ++ "/blob/" ++ Url.percentEncode (Maybe.withDefault "HEAD" reference) ++ "/" ++ encodePath filePath
+            case ( files.file, files.ref ) of
+                ( Just file, reference ) ->
+                    prefix
+                        ++ "/blob/"
+                        ++ Url.percentEncode (Maybe.withDefault "HEAD" reference)
+                        ++ "/"
+                        ++ encodePath file.path
+                        ++ Url.Builder.toQuery (searchQuery files.search)
+                        ++ (file.line |> Maybe.map (\line -> "#L" ++ String.fromInt line) |> Maybe.withDefault "")
 
                 ( Nothing, Just reference ) ->
-                    prefix ++ "/tree/" ++ Url.percentEncode reference
+                    prefix ++ "/tree/" ++ Url.percentEncode reference ++ Url.Builder.toQuery (searchQuery files.search)
 
                 ( Nothing, Nothing ) ->
-                    prefix
-            )
-                ++ Url.Builder.toQuery (searchQuery files.search)
+                    prefix ++ Url.Builder.toQuery (searchQuery files.search)
 
         CommitsView Nothing ->
             prefix ++ "/commits"
@@ -359,11 +368,71 @@ sameDiff first second =
     diffUrl first == diffUrl second
 
 
+{-| Whether two routes show the same screen. Selecting another file of one
+review diff stays on its screen; any other move is a new screen, which starts
+at the top as a page load would.
+-}
+sameScreen : Route -> Route -> Bool
+sameScreen first second =
+    screen first == screen second
+
+
+screen : Route -> Route
+screen route =
+    case route of
+        Review location ->
+            Review (deselect location)
+
+        Repository _ ->
+            route
+
+        Home ->
+            route
+
+        Settings ->
+            route
+
+        NotFound _ ->
+            route
+
+
+deselect : ReviewLocation -> ReviewLocation
+deselect location =
+    { location
+        | subject =
+            case location.subject of
+                PullRequest number (PullFiles _) ->
+                    PullRequest number (PullFiles Nothing)
+
+                PullRequest number PullCommits ->
+                    PullRequest number PullCommits
+
+                PullRequest number (PullCommitFiles sha _) ->
+                    PullRequest number (PullCommitFiles sha Nothing)
+
+                Compare range _ ->
+                    Compare range Nothing
+
+                Commit sha _ ->
+                    Commit sha Nothing
+    }
+
+
+{-| The pull request whose own head this location shows. A commit selected
+inside a pull request is pinned on purpose: it has no live head, review
+threads, or composer.
+-}
 pullRequest : ReviewLocation -> Maybe PullRequestRef
 pullRequest location =
     case location.subject of
-        PullRequest number _ ->
+        PullRequest number (PullFiles _) ->
             Just { repository = location.repository, number = number }
+
+        PullRequest number PullCommits ->
+            Just { repository = location.repository, number = number }
+
+        PullRequest _ (PullCommitFiles _ _) ->
+            Nothing
 
         Compare _ _ ->
             Nothing
@@ -474,11 +543,12 @@ type alias QueryOptions =
     { search : Search
     , pullState : PullRequestState
     , file : Maybe String
+    , line : Maybe Int
     }
 
 
-queryOptions : Maybe String -> QueryOptions
-queryOptions query =
+queryOptions : Maybe String -> Maybe String -> QueryOptions
+queryOptions query fragment =
     let
         pairs =
             query
@@ -519,7 +589,22 @@ queryOptions query =
             |> Maybe.andThen Repository.pullRequestStateFromString
             |> Maybe.withDefault OpenPulls
     , file = find "file"
+    , line = Maybe.andThen lineFragment fragment
     }
+
+
+{-| GitHub's `#L42` and `#L42-L50` both name line 42.
+-}
+lineFragment : String -> Maybe Int
+lineFragment fragment =
+    if String.startsWith "L" fragment then
+        String.dropLeft 1 fragment
+            |> String.split "-"
+            |> List.head
+            |> Maybe.andThen String.toInt
+
+    else
+        Nothing
 
 
 nonEmpty : String -> Maybe String

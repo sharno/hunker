@@ -4,7 +4,7 @@ use crate::{
     error::{AppError, AppResult},
     types::{
         Contents, FileChange, Oid, PairRead, PullCommit, RelativePath, RepositorySlug,
-        ReviewRevision, Side,
+        ReviewRevision, Side, Timestamp,
     },
 };
 
@@ -204,7 +204,7 @@ struct User {
 #[derive(Deserialize)]
 struct CommitAuthor {
     name: String,
-    date: Option<String>,
+    date: Option<Timestamp>,
 }
 
 #[derive(Deserialize)]

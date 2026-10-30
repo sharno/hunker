@@ -1,6 +1,6 @@
 module Hunker.Repository.View.Files exposing (Config, ReadyConfig, State(..), view)
 
-import Html exposing (Html, aside, button, code, div, h1, h2, header, p, pre, section, small, span, strong, text)
+import Html exposing (Html, aside, button, code, div, h1, h2, header, mark, p, pre, section, small, span, strong, text)
 import Html.Attributes exposing (class, classList, style, type_)
 import Html.Events exposing (onClick)
 import Hunker.ApiError as ApiError
@@ -10,7 +10,7 @@ import Hunker.FileTree as FileTree exposing (Tree(..))
 import Hunker.Remote exposing (Remote(..))
 import Hunker.Repository.Files as Files
 import Hunker.Repository.View.Local as Local
-import Hunker.Route exposing (Search(..))
+import Hunker.Route exposing (OpenFile, Search(..))
 import Hunker.SourceView as SourceView
 
 
@@ -25,10 +25,11 @@ type State msg
 
 type alias ReadyConfig msg =
     { syntaxHighlighting : Feature
-    , selectedPath : Maybe String
+    , openFile : Maybe OpenFile
     , search : Search
     , files : Files.Model
     , selectedFile : String -> msg
+    , selectedMatch : String -> Int -> msg
     , closedFile : msg
     , toggledFolder : String -> msg
     , toggledSourceFold : String -> msg
@@ -57,9 +58,9 @@ readyView config =
             , treeView config forest
             ]
         , section [ class "repository-results" ]
-            [ case ( config.selectedPath, config.search ) of
-                ( Just path, _ ) ->
-                    fileView config path
+            [ case ( config.openFile, config.search ) of
+                ( Just file, _ ) ->
+                    fileView config file
 
                 ( Nothing, Search query mode ) ->
                     searchView config query mode
@@ -115,7 +116,7 @@ treeNode config depth tree =
         Leaf name file ->
             button
                 [ type_ "button"
-                , classList [ ( "repository-file-row", True ), ( "is-active", config.selectedPath == Just file.path ) ]
+                , classList [ ( "repository-file-row", True ), ( "is-active", Maybe.map .path config.openFile == Just file.path ) ]
                 , style "padding-left" (String.fromInt (depth * 16 + 28) ++ "px")
                 , onClick (config.selectedFile file.path)
                 ]
@@ -141,8 +142,8 @@ leafCount forest =
         )
 
 
-fileView : ReadyConfig msg -> String -> Html msg
-fileView config path =
+fileView : ReadyConfig msg -> OpenFile -> Html msg
+fileView config { path, line } =
     case Files.selectedFile config.files of
         Loading _ ->
             Local.pageState ("Opening " ++ path ++ "…") ""
@@ -175,6 +176,7 @@ fileView config path =
                         (SourceView.file
                             { syntax = config.syntaxHighlighting
                             , namespace = file.path
+                            , target = line
                             , presentation = file.presentation
                             , isCollapsed = \fold -> Files.isSourceFoldCollapsed fold config.files
                             , toggleFold = config.toggledSourceFold
@@ -213,7 +215,7 @@ searchView config query mode =
                 , section []
                     [ h2 [] [ text ("Content matches · " ++ String.fromInt (List.length results.matches)) ]
                     , div [ class "repository-content-results" ]
-                        (List.map (searchMatchView config.selectedFile) results.matches)
+                        (List.map (searchMatchView config.selectedMatch) results.matches)
                     ]
                 ]
 
@@ -221,20 +223,41 @@ searchView config query mode =
             Local.pageState ("Searching for “" ++ query ++ "”…") (searchDescription mode)
 
 
-searchMatchView : (String -> msg) -> SearchMatch -> Html msg
-searchMatchView selectedFile match =
-    button [ type_ "button", class "repository-search-match", onClick (selectedFile match.path) ]
+searchMatchView : (String -> Int -> msg) -> SearchMatch -> Html msg
+searchMatchView selectedMatch match =
+    let
+        context lineText =
+            span [ class "search-line" ] [ text lineText ]
+    in
+    button [ type_ "button", class "repository-search-match", onClick (selectedMatch match.path match.line) ]
         [ span [ class "repository-match-heading" ]
             [ strong [] [ text match.path ], code [] [ text (":" ++ String.fromInt match.line) ] ]
         , pre []
             [ code []
-                [ text
-                    (String.join "\n"
-                        (match.contextBefore ++ [ match.lineContent ] ++ match.contextAfter)
-                    )
-                ]
+                (List.map context match.contextBefore
+                    ++ span [ class "search-line is-match" ] (highlighted match.ranges match.lineContent)
+                    :: List.map context match.contextAfter
+                )
             ]
         ]
+
+
+{-| Marks each matched range of one line.
+-}
+highlighted : List ( Int, Int ) -> String -> List (Html msg)
+highlighted ranges lineText =
+    let
+        step ( start, end ) ( position, pieces ) =
+            ( end
+            , mark [] [ text (String.slice start end lineText) ]
+                :: text (String.slice position start lineText)
+                :: pieces
+            )
+
+        ( consumed, reversed ) =
+            List.foldl step ( 0, [] ) ranges
+    in
+    List.reverse (text (String.dropLeft consumed lineText) :: reversed)
 
 
 formatSize : Int -> String
@@ -256,7 +279,7 @@ searchDescription mode =
             "Ranking filenames with FFF and scanning nearby content."
 
         RegexSearch ->
-            "Matching a regular expression with ripgrep."
+            "Matching a regular expression with git grep."
 
         LiteralSearch ->
-            "Matching literal text with ripgrep."
+            "Matching literal text with git grep."

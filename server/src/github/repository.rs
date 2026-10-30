@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{error::AppResult, types::RepositorySlug};
+use crate::{
+    error::AppResult,
+    types::{RepositorySlug, Timestamp},
+};
 
 use super::GitHub;
 
@@ -92,7 +95,7 @@ struct PullListItem {
     state: PullListState,
     draft: bool,
     user: Option<PullUser>,
-    updated_at: String,
+    updated_at: Timestamp,
     merged_at: Option<String>,
     base: PullListBase,
     head: PullListHead,
@@ -140,7 +143,7 @@ pub struct RepositoryPullRequest {
     pub author: String,
     pub avatar_url: Option<String>,
     pub status: PullRequestStatus,
-    pub updated_at: String,
+    pub updated_at: Timestamp,
     pub base: String,
     pub head: String,
     pub labels: Vec<String>,

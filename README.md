@@ -11,8 +11,8 @@ Tailwind CSS, and typed API.
 
 ## Run locally
 
-Requirements: Bun, Node.js 22+, Rust 1.97+, Git, GitHub CLI, and ripgrep.
-ast-grep and FFF are native Rust dependencies.
+Requirements: Bun, Node.js 22+, Rust 1.97+, Git, and GitHub CLI. ast-grep and
+FFF are native Rust dependencies.
 
 ```bash
 bun install
@@ -71,9 +71,10 @@ URL.
 
 The home page lists repositories below the configured repositories root and
 Hunker's temporary clone root. Repository views provide a nested file browser,
-literal/regex ripgrep search, optional FFF fuzzy search with context snippets,
-commit and pull-request lists, branch selection, source-control status, and
-fast-forward-only pulls.
+literal/regex `git grep` search at the browsed commit with hits that open at
+their line, optional FFF fuzzy search, commit and pull-request lists, branch
+selection, source-control status with a background fetch, and fast-forward-only
+pulls.
 
 When a repository is not local, Hunker offers a partial shallow clone into the
 configured root or temporary cache. It expands branch refs and history only as
