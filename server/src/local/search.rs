@@ -209,70 +209,77 @@ async fn content_matches(
     Ok(search_hits(records))
 }
 
+/// One line ripgrep reported, with a UTF-8 path and text. Non-UTF-8 lines
+/// arrive as base64 `bytes` and are not searchable text, so they are dropped.
+struct TextLine {
+    path: String,
+    number: usize,
+    text: String,
+    submatches: Vec<RipgrepSubmatch>,
+}
+
+impl TextLine {
+    fn from_data(data: RipgrepLine) -> Option<Self> {
+        let path = data.path.text?;
+        let text = data.lines.text?;
+        Some(Self {
+            path: path.strip_prefix("./").unwrap_or(&path).to_owned(),
+            number: data.line_number,
+            text: trim_newline(&text).to_owned(),
+            submatches: data.submatches,
+        })
+    }
+}
+
 /// Rebuilds each match with its surrounding lines from ripgrep's own context
 /// records, so results describe exactly what ripgrep read.
 fn search_hits(records: Vec<RipgrepRecord>) -> Vec<RepositorySearchMatch> {
-    let (lines, hits) = records.into_iter().fold(
-        (BTreeMap::<(String, usize), String>::new(), Vec::new()),
-        |(mut lines, mut hits), record| {
-            match record {
-                RipgrepRecord::Match { data } => {
-                    if let Some(text) = data.lines.text.as_deref() {
-                        let path = normalize(&data.path);
-                        lines.insert(
-                            (path.clone(), data.line_number),
-                            trim_newline(text).to_owned(),
-                        );
-                        hits.push((path, data.line_number, data.submatches));
-                    }
-                }
-                RipgrepRecord::Context { data } => {
-                    if let Some(text) = data.lines.text.as_deref() {
-                        lines.insert(
-                            (normalize(&data.path), data.line_number),
-                            trim_newline(text).to_owned(),
-                        );
-                    }
-                }
-                RipgrepRecord::Other => {}
-            }
-            (lines, hits)
-        },
-    );
-    let line_at = |path: &str, number: usize| lines.get(&(path.to_owned(), number)).cloned();
-    hits.into_iter()
+    let (matches, context): (Vec<_>, Vec<_>) = records
+        .into_iter()
+        .filter_map(|record| match record {
+            RipgrepRecord::Match { data } => TextLine::from_data(data).map(|line| (true, line)),
+            RipgrepRecord::Context { data } => TextLine::from_data(data).map(|line| (false, line)),
+            RipgrepRecord::Other => None,
+        })
+        .partition(|(is_match, _)| *is_match);
+    let lines = matches
+        .iter()
+        .chain(&context)
+        .map(|(_, line)| ((line.path.as_str(), line.number), line.text.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    let around = |path: &str, numbers: std::ops::Range<usize>| {
+        numbers
+            .filter_map(|number| lines.get(&(path, number)).map(|text| (*text).to_owned()))
+            .collect::<Vec<_>>()
+    };
+    matches
+        .iter()
         .take(MAX_CONTENT_RESULTS)
-        .filter_map(|(path, line, submatches)| {
-            let line_content = line_at(&path, line)?;
-            let ranges = submatches
+        .map(|(_, hit)| {
+            let ranges = hit
+                .submatches
                 .iter()
                 .map(|part| {
                     [
-                        byte_to_character(&line_content, part.start),
-                        byte_to_character(&line_content, part.end),
+                        byte_to_character(&hit.text, part.start),
+                        byte_to_character(&hit.text, part.end),
                     ]
                 })
                 .collect::<Vec<_>>();
-            Some(RepositorySearchMatch {
+            RepositorySearchMatch {
                 column: ranges.first().map_or(1, |range| range[0] + 1),
-                context_before: (line.saturating_sub(CONTEXT_LINES).max(1)..line)
-                    .filter_map(|number| line_at(&path, number))
-                    .collect(),
-                context_after: (line + 1..=line + CONTEXT_LINES)
-                    .filter_map(|number| line_at(&path, number))
-                    .collect(),
-                path,
-                line,
-                line_content,
+                context_before: around(
+                    &hit.path,
+                    hit.number.saturating_sub(CONTEXT_LINES).max(1)..hit.number,
+                ),
+                context_after: around(&hit.path, hit.number + 1..hit.number + 1 + CONTEXT_LINES),
+                path: hit.path.clone(),
+                line: hit.number,
+                line_content: hit.text.clone(),
                 ranges,
-            })
+            }
         })
         .collect()
-}
-
-fn normalize(path: &RipgrepText) -> String {
-    let text = path.text.as_deref().unwrap_or_default();
-    text.strip_prefix("./").unwrap_or(text).to_owned()
 }
 
 fn trim_newline(text: &str) -> &str {

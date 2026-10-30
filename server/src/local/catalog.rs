@@ -70,16 +70,19 @@ impl Local {
             .buffered(CATALOG_CONCURRENCY)
             .collect::<Vec<_>>()
             .await;
-        let unique =
-            summaries
-                .into_iter()
-                .flatten()
-                .fold(BTreeMap::new(), |mut unique, summary| {
-                    unique
-                        .entry(format!("{}/{}", summary.owner, summary.name).to_lowercase())
-                        .or_insert(summary);
-                    unique
-                });
+        // Collecting keeps the last entry per key, so reverse to let the
+        // configured root win over the temporary cache.
+        let unique = summaries
+            .into_iter()
+            .flatten()
+            .rev()
+            .map(|summary| {
+                (
+                    format!("{}/{}", summary.owner, summary.name).to_lowercase(),
+                    summary,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
         Ok(LocalRepositories {
             configured_root: display(roots.path(RepositoryRoot::Configured)),
             temporary_root: display(roots.path(RepositoryRoot::Temporary)),
