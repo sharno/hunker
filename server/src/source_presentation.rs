@@ -1,9 +1,13 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    sync::LazyLock,
+};
 
 use ast_grep_core::tree_sitter::LanguageExt;
-use ast_grep_language::SupportLang;
 use serde::Serialize;
 use tree_sitter::{Query, QueryCursor, StreamingIterator, Tree};
+
+use crate::language::{LANGUAGES, Language, LanguageSpec};
 
 const HCL_HIGHLIGHTS_QUERY: &str = r#"
 (comment) @comment
@@ -156,43 +160,53 @@ pub(crate) fn unsupported() -> SourcePresentationResult {
     }
 }
 
+/// Highlight queries compile once per language; compiling per file side
+/// dominated presentation time.
+static QUERIES: LazyLock<HashMap<Language, Result<Query, String>>> = LazyLock::new(|| {
+    LANGUAGES
+        .iter()
+        .map(|spec| {
+            let query = Query::new(
+                &spec.grammar.get_ts_language(),
+                highlight_query(spec.language),
+            )
+            .map_err(|error| error.to_string());
+            (spec.language, query)
+        })
+        .collect()
+});
+
 pub(crate) fn build(
-    language: SupportLang,
-    language_name: &str,
+    language: &LanguageSpec,
     source: &str,
     tree: &Tree,
     fold_seeds: impl IntoIterator<Item = FoldSeed>,
 ) -> SourcePresentationResult {
-    let query = match Query::new(&language.get_ts_language(), highlight_query(language)) {
-        Ok(query) => query,
-        Err(error) => {
+    let query = match QUERIES.get(&language.language) {
+        Some(Ok(query)) => query,
+        Some(Err(error)) => {
             return SourcePresentationResult::Unsupported {
                 reason: format!("The bundled syntax query could not be prepared: {error}"),
             };
         }
+        None => return unsupported(),
     };
-    let highlights = highlights(&query, source, tree);
-    let folds = fold_seeds
-        .into_iter()
-        .filter_map(fold_region)
-        .collect::<Vec<_>>();
     SourcePresentationResult::Complete {
         value: SourcePresentation {
-            language: language_name.to_owned(),
-            highlights,
-            folds,
+            language: language.name.to_owned(),
+            highlights: highlights(query, source, tree),
+            folds: fold_seeds.into_iter().filter_map(fold_region).collect(),
         },
     }
 }
 
-fn highlight_query(language: SupportLang) -> &'static str {
+fn highlight_query(language: Language) -> &'static str {
     match language {
-        SupportLang::JavaScript => tree_sitter_javascript::HIGHLIGHT_QUERY,
-        SupportLang::TypeScript | SupportLang::Tsx => tree_sitter_typescript::HIGHLIGHTS_QUERY,
-        SupportLang::Python => tree_sitter_python::HIGHLIGHTS_QUERY,
-        SupportLang::Rust => tree_sitter_rust::HIGHLIGHTS_QUERY,
-        SupportLang::Hcl => HCL_HIGHLIGHTS_QUERY,
-        _ => "",
+        Language::JavaScript => tree_sitter_javascript::HIGHLIGHT_QUERY,
+        Language::TypeScript | Language::Tsx => tree_sitter_typescript::HIGHLIGHTS_QUERY,
+        Language::Python => tree_sitter_python::HIGHLIGHTS_QUERY,
+        Language::Rust => tree_sitter_rust::HIGHLIGHTS_QUERY,
+        Language::Hcl => HCL_HIGHLIGHTS_QUERY,
     }
 }
 
@@ -337,16 +351,28 @@ fn fold_region(seed: FoldSeed) -> Option<FoldRegion> {
 #[cfg(test)]
 mod tests {
     use ast_grep_core::tree_sitter::StrDoc;
+    use ast_grep_language::SupportLang;
 
     use super::*;
+
+    fn spec(language: Language) -> &'static LanguageSpec {
+        LANGUAGES
+            .iter()
+            .find(|spec| spec.language == language)
+            .unwrap()
+    }
+
+    #[test]
+    fn every_bundled_highlight_query_compiles() {
+        assert!(QUERIES.values().all(Result::is_ok));
+    }
 
     #[test]
     fn highlights_unicode_with_character_offsets_and_builds_folds() {
         let source = "fn café(value: &str) {\n    println!(\"{value}\");\n}\n";
         let document = StrDoc::new(source, SupportLang::Rust);
         let result = build(
-            SupportLang::Rust,
-            "Rust",
+            spec(Language::Rust),
             source,
             &document.tree,
             [FoldSeed {
@@ -372,8 +398,7 @@ mod tests {
         let source = "resource \"aws_s3_bucket\" \"logs\" {\n  force_destroy = true\n}\n";
         let document = StrDoc::new(source, SupportLang::Hcl);
         let result = build(
-            SupportLang::Hcl,
-            "OpenTofu/HCL",
+            spec(Language::Hcl),
             source,
             &document.tree,
             std::iter::empty(),

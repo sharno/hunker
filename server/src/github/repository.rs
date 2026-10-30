@@ -4,29 +4,65 @@ use crate::{error::AppResult, types::RepositorySlug};
 
 use super::GitHub;
 
+const PULLS_PAGE_SIZE: usize = 50;
+const MAX_PULLS_PAGE: usize = 1_000;
+
+/// A one-based pull-request list page within GitHub's practical paging limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "usize", into = "usize")]
+pub struct PullsPage(usize);
+
+impl TryFrom<usize> for PullsPage {
+    type Error = String;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        if (1..=MAX_PULLS_PAGE).contains(&value) {
+            Ok(Self(value))
+        } else {
+            Err(format!(
+                "Pull request page must be between 1 and {MAX_PULLS_PAGE}."
+            ))
+        }
+    }
+}
+
+impl From<PullsPage> for usize {
+    fn from(value: PullsPage) -> Self {
+        value.0
+    }
+}
+
+impl Default for PullsPage {
+    fn default() -> Self {
+        Self(1)
+    }
+}
+
 impl GitHub {
     pub async fn repository_pulls(
         &self,
         repository: &RepositorySlug,
         state: PullRequestState,
-        page: usize,
+        page: PullsPage,
     ) -> AppResult<RepositoryPullsPage> {
         let items: Vec<PullListItem> = self.json(&format!(
-            "https://api.github.com/repos/{}/{}/pulls?state={}&sort=updated&direction=desc&per_page=50&page={page}",
-            repository.owner, repository.name, state.as_str()
+            "https://api.github.com/repos/{repository}/pulls?state={}&sort=updated&direction=desc&per_page={PULLS_PAGE_SIZE}&page={}",
+            state.as_str(),
+            page.0
         )).await?;
         Ok(RepositoryPullsPage {
             state,
             page,
-            has_more: items.len() == 50,
+            has_more: items.len() == PULLS_PAGE_SIZE,
             pull_requests: items.into_iter().map(RepositoryPullRequest::from).collect(),
         })
     }
 }
 
-#[derive(Clone, Copy, Deserialize, Serialize)]
+#[derive(Clone, Copy, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PullRequestState {
+    #[default]
     Open,
     Closed,
     All,
@@ -43,10 +79,17 @@ impl PullRequestState {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum PullListState {
+    Open,
+    Closed,
+}
+
+#[derive(Deserialize)]
 struct PullListItem {
     number: usize,
     title: String,
-    state: String,
+    state: PullListState,
     draft: bool,
     user: Option<PullUser>,
     updated_at: String,
@@ -78,19 +121,29 @@ struct PullLabel {
     name: String,
 }
 
+/// GitHub reports `state`, `draft`, and `merged_at` separately; only these
+/// combinations are meaningful to a reviewer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PullRequestStatus {
+    Draft,
+    Open,
+    Merged,
+    Closed,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepositoryPullRequest {
-    number: usize,
-    title: String,
-    author: String,
-    avatar_url: String,
-    state: String,
-    draft: bool,
-    updated_at: String,
-    base: String,
-    head: String,
-    labels: Vec<String>,
+    pub number: usize,
+    pub title: String,
+    pub author: String,
+    pub avatar_url: Option<String>,
+    pub status: PullRequestStatus,
+    pub updated_at: String,
+    pub base: String,
+    pub head: String,
+    pub labels: Vec<String>,
 }
 
 impl From<PullListItem> for RepositoryPullRequest {
@@ -102,16 +155,13 @@ impl From<PullListItem> for RepositoryPullRequest {
                 .user
                 .as_ref()
                 .map_or_else(|| "GitHub user".to_owned(), |user| user.login.clone()),
-            avatar_url: value
-                .user
-                .and_then(|user| user.avatar_url)
-                .unwrap_or_default(),
-            state: if value.merged_at.is_some() {
-                "merged".to_owned()
-            } else {
-                value.state
+            avatar_url: value.user.and_then(|user| user.avatar_url),
+            status: match (value.state, value.merged_at, value.draft) {
+                (PullListState::Open, _, true) => PullRequestStatus::Draft,
+                (PullListState::Open, _, false) => PullRequestStatus::Open,
+                (PullListState::Closed, Some(_), _) => PullRequestStatus::Merged,
+                (PullListState::Closed, None, _) => PullRequestStatus::Closed,
             },
-            draft: value.draft,
             updated_at: value.updated_at,
             base: value.base.reference,
             head: value.head.label,
@@ -124,27 +174,7 @@ impl From<PullListItem> for RepositoryPullRequest {
 #[serde(rename_all = "camelCase")]
 pub struct RepositoryPullsPage {
     pub state: PullRequestState,
-    pub page: usize,
+    pub page: PullsPage,
     pub has_more: bool,
     pub pull_requests: Vec<RepositoryPullRequest>,
-}
-
-pub(crate) fn contract_fixture() -> RepositoryPullsPage {
-    RepositoryPullsPage {
-        state: PullRequestState::Open,
-        page: 1,
-        has_more: false,
-        pull_requests: vec![RepositoryPullRequest {
-            number: 42,
-            title: "Keep contracts typed".to_owned(),
-            author: "agent".to_owned(),
-            avatar_url: "https://avatars.example/agent".to_owned(),
-            state: "open".to_owned(),
-            draft: false,
-            updated_at: "2026-08-10T12:00:00Z".to_owned(),
-            base: "main".to_owned(),
-            head: "agent:typed-contracts".to_owned(),
-            labels: vec!["rust".to_owned(), "elm".to_owned()],
-        }],
-    }
 }

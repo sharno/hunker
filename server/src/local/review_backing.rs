@@ -1,104 +1,118 @@
-use std::path::Path;
+use futures::{StreamExt, stream};
 
 use crate::{
-    command,
+    command::Git,
     error::{AppError, AppResult},
-    github::{GitHubTarget, PullNumber, ReviewMetadata},
-    types::{FilePair, FileStatus, LocalGitRepository, PullCommit, RepositorySlug},
+    github::{PullNumber, PullTarget},
+    types::{
+        FileChange, FilePair, LocalGitRepository, Oid, PullCommit, RepositorySlug, ReviewRevision,
+        Side,
+    },
 };
 
-use super::{
-    DEEPEN_STEPS, FETCH_INTERVAL_MS, Local, PullRevision, git_result, now_ms, objects, valid_oid,
-};
+use super::{DEEPEN_STEPS, FETCH_INTERVAL_MS, Local, PullRevision, now_ms, objects};
+
+/// Whether a pull-request ref fetch may reuse a recent fetch.
+#[derive(Clone, Copy)]
+enum FetchPolicy {
+    Force,
+    Throttled,
+}
+
+/// One side of a file pair before the batched object read.
+enum Blob {
+    Absent,
+    Inline(String),
+    Object(String),
+}
+
+impl Blob {
+    fn select(file: &FileChange, side: Side, revision: &Oid) -> Self {
+        match file.path_on(side) {
+            None => Self::Absent,
+            Some(path) => objects::gitlink_text(&file.patch, side)
+                .map_or_else(|| Self::Object(format!("{revision}:{path}")), Self::Inline),
+        }
+    }
+
+    fn object(&self) -> Option<&str> {
+        match self {
+            Self::Object(spec) => Some(spec),
+            Self::Absent | Self::Inline(_) => None,
+        }
+    }
+}
 
 impl Local {
-    async fn has_object(path: &Path, oid: &str) -> AppResult<bool> {
-        if !valid_oid(oid) {
-            return Ok(false);
-        }
-        let (present, output, _) =
-            git_result(path, &["cat-file", "-e", &format!("{oid}^{{commit}}")]).await?;
-        if present {
-            Ok(true)
-        } else if output.contains("Not a valid object name") {
-            Ok(false)
-        } else {
-            Err(AppError::upstream(if output.trim().is_empty() {
-                format!("Git could not inspect object {oid}.")
-            } else {
-                output.trim().to_owned()
-            }))
-        }
-    }
-
-    async fn shallow(path: &Path) -> AppResult<bool> {
-        Ok(
-            command::git(path, &["rev-parse", "--is-shallow-repository"])
-                .await?
-                .trim()
-                == "true",
-        )
-    }
-
     async fn fetch_pull(
         &self,
         repository: &LocalGitRepository,
-        number: &PullNumber,
-        force: bool,
+        number: PullNumber,
+        policy: FetchPolicy,
     ) -> AppResult<u64> {
+        let key = (repository.path.clone(), number);
+        let last = self.fetches.lock().await.get(&key).copied();
         let now = now_ms();
-        let key = format!("{}\0{number}", repository.path.display());
-        let mut fetches = self.fetches.lock().await;
-        if !force && now.saturating_sub(fetches.get(&key).copied().unwrap_or(0)) < FETCH_INTERVAL_MS
+        if let (FetchPolicy::Throttled, Some(fetched_at)) = (policy, last)
+            && now.saturating_sub(fetched_at) < FETCH_INTERVAL_MS
         {
-            return Ok(now);
+            return Ok(fetched_at);
         }
-        let shallow = Self::shallow(&repository.path).await?;
-        let refspec = format!("+refs/pull/{number}/head:refs/hunker/pull/{number}/head");
-        let mut args = vec!["fetch", "--no-tags"];
-        if shallow {
-            args.push("--depth=1");
-        }
-        args.extend(["origin", &refspec]);
-        command::git(&repository.path, &args).await?;
-        fetches.insert(key, now);
+        // Serialize with checkout mutations instead of holding the global
+        // fetch table across a network call.
+        let lock = self.repository_lock(&repository.path).await;
+        let _guard = lock.lock().await;
+        let git = Git::at(&repository.path);
+        let refspec = pull_refspec(number);
+        let depth = if git.is_shallow().await? {
+            Some("--depth=1")
+        } else {
+            None
+        };
+        let args = ["fetch", "--no-tags"]
+            .into_iter()
+            .chain(depth)
+            .chain(["origin", refspec.as_str()])
+            .collect::<Vec<_>>();
+        git.ok(&args).await?;
+        self.fetches.lock().await.insert(key, now);
         Ok(now)
     }
 
+    /// Makes `revision` readable from the local clone, fetching missing
+    /// commits. `None` means there is no local clone; every other failure is
+    /// returned so it is not hidden behind a GitHub fallback.
     async fn prepare(
         &self,
-        repository_id: &RepositorySlug,
-        base: &str,
-        head: &str,
-        pull: Option<&PullNumber>,
+        repository: &RepositorySlug,
+        base: &Oid,
+        head: &Oid,
+        pull: Option<PullNumber>,
     ) -> AppResult<Option<LocalGitRepository>> {
-        if !valid_oid(base) || !valid_oid(head) {
-            return Ok(None);
-        }
-        let Some(repository) = self.find(repository_id).await? else {
+        let Some(found) = self.find(repository).await? else {
             return Ok(None);
         };
-        let mut base_present = Self::has_object(&repository.path, base).await?;
-        let mut head_present = Self::has_object(&repository.path, head).await?;
-        if let Some(number) = pull.filter(|_| !base_present || !head_present) {
-            self.fetch_pull(&repository, number, true).await?;
-        }
-        base_present = Self::has_object(&repository.path, base).await?;
-        head_present = Self::has_object(&repository.path, head).await?;
-        for (oid, present) in [(base, base_present), (head, head_present)] {
-            if !present {
-                let mut args = vec!["fetch", "--no-tags"];
-                if Self::shallow(&repository.path).await? {
-                    args.push("--depth=1");
-                }
-                args.extend(["origin", oid]);
-                command::git(&repository.path, &args).await?;
+        let git = Git::at(&found.path);
+        let missing = missing_commits(git, [base, head]).await?;
+        let missing = match pull {
+            Some(number) if !missing.is_empty() => {
+                self.fetch_pull(&found, number, FetchPolicy::Force).await?;
+                missing_commits(git, missing).await?
             }
+            Some(_) | None => missing,
+        };
+        let shallow = git.is_shallow().await?;
+        for oid in &missing {
+            let depth = shallow.then_some("--depth=1");
+            let args = ["fetch", "--no-tags"]
+                .into_iter()
+                .chain(depth)
+                .chain(["origin", oid.as_str()])
+                .collect::<Vec<_>>();
+            git.ok(&args).await?;
         }
-        if Self::has_object(&repository.path, base).await?
-            && Self::has_object(&repository.path, head).await?
-        {
-            Ok(Some(repository))
+        if missing_commits(git, missing).await?.is_empty() {
+            Ok(Some(found))
         } else {
             Err(AppError::upstream(
                 "Local Git could not materialize the requested immutable revision.",
@@ -108,221 +122,203 @@ impl Local {
 
     pub async fn load_diff(
         &self,
-        target: &GitHubTarget,
-        base: &str,
-        head: &str,
+        repository: &RepositorySlug,
+        base: &Oid,
+        head: &Oid,
+        pull: Option<PullNumber>,
     ) -> AppResult<Option<(LocalGitRepository, String)>> {
-        let Some(repository) = self
-            .prepare(&target.repository(), base, head, target.pull_number())
-            .await?
-        else {
+        let Some(found) = self.prepare(repository, base, head, pull).await? else {
             return Ok(None);
         };
-        let diff = command::git(
-            &repository.path,
-            &[
+        let diff = Git::at(&found.path)
+            .ok(&[
+                "-c",
+                "core.quotePath=false",
                 "diff",
                 "--find-renames",
                 "--no-ext-diff",
                 "--no-color",
                 "--full-index",
-                base,
-                head,
+                base.as_str(),
+                head.as_str(),
                 "--",
-            ],
-        )
-        .await?;
-        Ok(Some((repository, diff)))
+            ])
+            .await?;
+        Ok(Some((found, diff)))
     }
 
     pub async fn load_file_pairs_at(
         &self,
         repository: &LocalGitRepository,
-        base: &str,
-        head: &str,
-        files: &[crate::types::FileChange],
+        base: &Oid,
+        head: &Oid,
+        files: &[FileChange],
     ) -> AppResult<Vec<FilePair>> {
-        #[derive(Clone)]
-        enum ContentSource {
-            Empty,
-            Batch(usize),
-            Inline(String),
-        }
-
-        let mut objects = Vec::new();
-        let mut positions = Vec::with_capacity(files.len());
-        for file in files {
-            objects::validate_git_path(&file.path)?;
-            if let Some(previous_path) = &file.previous_path {
-                objects::validate_git_path(previous_path)?;
-            }
-            let old_path = file.previous_path.as_deref().unwrap_or(&file.path);
-            let old = if file.status == FileStatus::Added {
-                ContentSource::Empty
-            } else if let Some(text) = objects::gitlink_text(&file.patch, '-') {
-                ContentSource::Inline(text)
-            } else {
-                let position = objects.len();
-                objects.push(format!("{base}:{old_path}"));
-                ContentSource::Batch(position)
-            };
-            let new = if file.status == FileStatus::Deleted {
-                ContentSource::Empty
-            } else if let Some(text) = objects::gitlink_text(&file.patch, '+') {
-                ContentSource::Inline(text)
-            } else {
-                let position = objects.len();
-                objects.push(format!("{head}:{}", file.path));
-                ContentSource::Batch(position)
-            };
-            positions.push((old, new));
-        }
-        let contents = objects::cat_file_batch(&repository.path, &objects).await?;
-        let pairs = files
+        let blobs = files
             .iter()
-            .zip(positions)
-            .map(|(file, (old, new))| FilePair {
-                path: file.path.clone(),
-                previous_path: file.previous_path.clone(),
-                status: file.status,
-                old_text: match old {
-                    ContentSource::Empty => String::new(),
-                    ContentSource::Batch(index) => contents[index].clone(),
-                    ContentSource::Inline(text) => text,
-                },
-                new_text: match new {
-                    ContentSource::Empty => String::new(),
-                    ContentSource::Batch(index) => contents[index].clone(),
-                    ContentSource::Inline(text) => text,
-                },
+            .map(|file| {
+                (
+                    Blob::select(file, Side::Old, base),
+                    Blob::select(file, Side::New, head),
+                )
             })
+            .collect::<Vec<_>>();
+        let requests = blobs
+            .iter()
+            .flat_map(|(old, new)| [old.object(), new.object()])
+            .flatten()
+            .map(str::to_owned)
             .collect();
-        Ok(pairs)
+        let mut contents = objects::cat_file_batch(&repository.path, requests)
+            .await?
+            .into_iter();
+        let mut read = |blob: Blob| match blob {
+            Blob::Absent => Ok(String::new()),
+            Blob::Inline(text) => Ok(text),
+            Blob::Object(spec) => contents
+                .next()
+                .ok_or_else(|| AppError::upstream(format!("Git did not return {spec}."))),
+        };
+        files
+            .iter()
+            .zip(blobs)
+            .map(|(file, (old, new))| {
+                Ok(FilePair {
+                    path: file.path.clone(),
+                    status: file.status.clone(),
+                    old_text: read(old)?,
+                    new_text: read(new)?,
+                })
+            })
+            .collect()
     }
 
     pub async fn load_pull_commits(
         &self,
-        target: &GitHubTarget,
-        metadata: &ReviewMetadata,
+        target: &PullTarget,
+        revision: &ReviewRevision,
     ) -> AppResult<Option<Vec<PullCommit>>> {
-        let Some(repository) = self
+        let Some(found) = self
             .prepare(
-                &target.repository(),
-                &metadata.base_oid,
-                &metadata.head_oid,
-                target.pull_number(),
+                &target.repository,
+                &revision.base_oid,
+                &revision.head_oid,
+                Some(target.number),
             )
             .await?
         else {
             return Ok(None);
         };
-        if !git_result(
-            &repository.path,
-            &["merge-base", &metadata.base_oid, &metadata.head_oid],
-        )
-        .await?
-        .0
-        {
-            let Some(number) = target.pull_number() else {
-                return Ok(None);
-            };
-            for deepen in DEEPEN_STEPS {
-                if !Self::shallow(&repository.path).await? {
-                    return Ok(None);
-                }
-                let refspec = format!("+refs/pull/{number}/head:refs/hunker/pull/{number}/head");
-                if !git_result(
-                    &repository.path,
-                    &[
-                        "fetch",
-                        "--no-tags",
-                        &format!("--deepen={deepen}"),
-                        "origin",
-                        &refspec,
-                    ],
-                )
-                .await?
-                .0
-                {
-                    return Ok(None);
-                }
-                if git_result(
-                    &repository.path,
-                    &["merge-base", &metadata.base_oid, &metadata.head_oid],
-                )
-                .await?
-                .0
-                {
-                    break;
-                }
-            }
-        }
-        let range = format!("{}..{}", metadata.base_oid, metadata.head_oid);
-        let raw = command::git(
-            &repository.path,
-            &[
+        let git = Git::at(&found.path);
+        connect_history(git, target.number, &revision.base_oid, &revision.head_oid).await?;
+        let range = format!("{}..{}", revision.base_oid, revision.head_oid);
+        let raw = git
+            .ok(&[
                 "log",
                 "--reverse",
                 "--format=%H%x1f%B%x1f%an%x1f%aI%x1e",
                 &range,
                 "--",
-            ],
-        )
-        .await?;
-        Ok(Some(
-            raw.split('\x1e')
-                .filter_map(|record| {
-                    let record = record.trim();
-                    if record.is_empty() {
-                        return None;
-                    }
-                    let mut fields = record.split('\x1f');
-                    let sha = fields.next()?.to_owned();
-                    let message = fields.next()?.trim_end().to_owned();
-                    Some(PullCommit {
-                        html_url: format!(
-                            "https://github.com/{}/{}/commit/{sha}",
-                            target.owner(),
-                            target.repo()
-                        ),
-                        sha,
-                        message,
-                        author: fields.next().unwrap_or("Git user").to_owned(),
-                        avatar_url: String::new(),
-                        authored_at: fields.next().unwrap_or("").to_owned(),
-                    })
-                })
-                .collect(),
-        ))
+            ])
+            .await?;
+        raw.split('\x1e')
+            .map(str::trim)
+            .filter(|record| !record.is_empty())
+            .map(|record| parse_pull_commit(&target.repository, record))
+            .collect::<AppResult<Vec<_>>>()
+            .map(Some)
     }
 
-    pub async fn revision(
-        &self,
-        target: &GitHubTarget,
-        pinned: &str,
-    ) -> AppResult<Option<PullRevision>> {
-        let Some(number) = target.pull_number() else {
-            return Err(AppError::bad_request("A pull request is required."));
-        };
-        let Some(repository) = self.find(&target.repository()).await? else {
+    pub async fn revision(&self, target: &PullTarget) -> AppResult<Option<PullRevision>> {
+        let Some(repository) = self.find(&target.repository).await? else {
             return Ok(None);
         };
-        let checked_at = self.fetch_pull(&repository, number, false).await?;
-        let latest = command::git(
-            &repository.path,
-            &[
-                "rev-parse",
-                &format!("refs/hunker/pull/{number}/head^{{commit}}"),
-            ],
-        )
-        .await?
-        .trim()
-        .to_owned();
+        let checked_at = self
+            .fetch_pull(&repository, target.number, FetchPolicy::Throttled)
+            .await?;
+        let latest_head_oid = Git::at(&repository.path)
+            .oid(&format!(
+                "refs/hunker/pull/{}/head^{{commit}}",
+                target.number
+            ))
+            .await?;
         Ok(Some(PullRevision {
             repository,
-            pinned_head_oid: pinned.to_owned(),
-            latest_head_oid: latest,
+            latest_head_oid,
             checked_at,
         }))
     }
+}
+
+fn pull_refspec(number: PullNumber) -> String {
+    format!("+refs/pull/{number}/head:refs/hunker/pull/{number}/head")
+}
+
+async fn missing_commits<'a>(
+    git: Git<'_>,
+    oids: impl IntoIterator<Item = &'a Oid>,
+) -> AppResult<Vec<&'a Oid>> {
+    let checks = stream::iter(oids)
+        .then(|oid| async move { git.has_commit(oid).await.map(|present| (oid, present)) })
+        .collect::<Vec<_>>()
+        .await;
+    checks
+        .into_iter()
+        .filter_map(|check| match check {
+            Ok((_, true)) => None,
+            Ok((oid, false)) => Some(Ok(oid)),
+            Err(error) => Some(Err(error)),
+        })
+        .collect()
+}
+
+/// Shallow clones only hold the tips of a review. Listing its commits needs
+/// the history between them, so deepen the pull ref until base is reachable.
+async fn connect_history(
+    git: Git<'_>,
+    number: PullNumber,
+    base: &Oid,
+    head: &Oid,
+) -> AppResult<()> {
+    let refspec = pull_refspec(number);
+    for deepen in DEEPEN_STEPS {
+        if git.has_merge_base(base, head).await? {
+            return Ok(());
+        }
+        if !git.is_shallow().await? {
+            break;
+        }
+        git.ok(&[
+            "fetch",
+            "--no-tags",
+            &format!("--deepen={deepen}"),
+            "origin",
+            &refspec,
+        ])
+        .await?;
+    }
+    if git.has_merge_base(base, head).await? {
+        Ok(())
+    } else {
+        Err(AppError::upstream(
+            "Local history does not connect this pull request's base and head.",
+        ))
+    }
+}
+
+fn parse_pull_commit(repository: &RepositorySlug, record: &str) -> AppResult<PullCommit> {
+    let [sha, message, author, authored_at] = record.split('\x1f').collect::<Vec<_>>()[..] else {
+        return Err(AppError::upstream(
+            "Git returned a malformed commit record.",
+        ));
+    };
+    let sha = Oid::parse(sha).map_err(AppError::upstream)?;
+    Ok(PullCommit {
+        html_url: format!("https://github.com/{repository}/commit/{sha}"),
+        sha,
+        message: message.trim_end().to_owned(),
+        author: author.to_owned(),
+        avatar_url: None,
+        authored_at: Some(authored_at.to_owned()),
+    })
 }

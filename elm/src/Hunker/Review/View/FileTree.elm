@@ -1,19 +1,18 @@
 module Hunker.Review.View.FileTree exposing (Config, view)
 
 import Html exposing (Html, button, div, span, text)
-import Html.Attributes exposing (attribute, class, type_)
+import Html.Attributes exposing (class, classList, style, type_)
 import Html.Events exposing (onClick)
 import Hunker.Domain.Review as Review exposing (FileChange)
 import Hunker.FileTree exposing (Tree(..))
 
 
 type alias Config msg =
-    { selectedPath : String
+    { selectedPath : Maybe String
     , isReviewed : String -> Bool
     , isCollapsed : String -> Bool
     , toggleFolder : String -> msg
     , selectFile : String -> msg
-    , statusGlyph : Review.FileStatus -> String
     }
 
 
@@ -34,7 +33,7 @@ node config depth tree =
                 [ button
                     [ type_ "button"
                     , class "folder-row"
-                    , attribute "style" ("padding-left:" ++ String.fromInt (depth * 14 + 8) ++ "px")
+                    , style "padding-left" (String.fromInt (depth * 14 + 8) ++ "px")
                     , onClick (config.toggleFolder path)
                     ]
                     [ span [ class "folder-chevron" ]
@@ -64,8 +63,8 @@ node config depth tree =
             in
             button
                 [ type_ "button"
-                , class ("file-row" ++ activeClass (file.path == config.selectedPath))
-                , attribute "style" ("padding-left:" ++ String.fromInt (depth * 14 + 20) ++ "px")
+                , classList [ ( "file-row", True ), ( "is-active", Just file.path == config.selectedPath ) ]
+                , style "padding-left" (String.fromInt (depth * 14 + 20) ++ "px")
                 , onClick (config.selectFile file.path)
                 ]
                 [ span [ class ("file-status status-" ++ Review.fileStatusToString file.status) ]
@@ -74,7 +73,7 @@ node config depth tree =
                             "✓"
 
                          else
-                            config.statusGlyph file.status
+                            Review.fileStatusGlyph file.status
                         )
                     ]
                 , span [ class "file-copy" ] [ span [ class "file-name" ] [ text name ] ]
@@ -93,12 +92,3 @@ fileCount tree =
 
         Folder _ _ children ->
             List.sum (List.map fileCount children)
-
-
-activeClass : Bool -> String
-activeClass active =
-    if active then
-        " is-active"
-
-    else
-        ""

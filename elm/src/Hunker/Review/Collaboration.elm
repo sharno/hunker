@@ -1,14 +1,18 @@
 module Hunker.Review.Collaboration exposing
-    ( FileState
-    , InlineComposer
+    ( Anchor
+    , FileState
+    , Inline(..)
     , InlineRequest
     , InlineSubmission
     , Model
+    , ReplyDraft(..)
     , ReplyRequest
     , ReplySubmission
+    , ReviewDraft(..)
+    , ReviewOutcome(..)
     , ReviewRequest
     , ReviewSubmission
-    , ReviewSubmissionState(..)
+    , Thread
     , beginComments
     , beginReply
     , beginReview
@@ -23,38 +27,49 @@ module Hunker.Review.Collaboration exposing
     , commits
     , commitsFailed
     , commitsLoaded
-    , fileComments
+    , detachedThreads
     , fileState
     , init
-    , inlineComposer
-    , inlineError
+    , inline
     , inlineFailed
     , inlineLoaded
-    , inlineLoading
     , isThreadCollapsed
+    , noFileState
     , openInline
+    , pull
     , replyDraft
-    , replyError
     , replyFailed
     , replyLoaded
-    , replyLoading
-    , reviewBody
+    , reviewDraft
     , reviewFailed
     , reviewLoaded
-    , reviewSubmissionState
+    , reviewRequestAction
     , revision
     , revisionFailed
     , revisionLoaded
     , session
     , submitInline
+    , threadsAt
     , toggleThread
     )
 
+{-| GitHub collaboration for one pull-request review.
+
+Every draft owns its in-flight state: a reply draft per thread, one inline
+composer per file, and one review summary. A draft that is sending cannot be
+edited or resubmitted, and a response only settles the draft that sent it.
+
+Per-file state is stored, not derived, so each lazily rendered file panel
+receives a stable value.
+
+-}
+
 import Dict exposing (Dict)
 import Hunker.ApiError exposing (ApiError)
-import Hunker.Domain.Review exposing (CommentSide, PullCommit, ReviewAction, ReviewComment, Revision)
-import Hunker.Remote as Remote exposing (Remote(..))
+import Hunker.Domain.Review exposing (CommentSide(..), PullCommit, ReviewAction(..), ReviewComment, Revision)
+import Hunker.Remote exposing (Remote(..))
 import Hunker.Review.Session as Session
+import Hunker.Route exposing (PullRequestRef)
 import Set exposing (Set)
 
 
@@ -64,13 +79,12 @@ type Model
 
 type alias Details =
     { session : Session.Id
+    , pull : PullRequestRef
     , commits : Remote Session.Id ApiError (List PullCommit)
     , revision : Remote Session.Id ApiError Revision
+    , comments : Remote Session.Id ApiError ()
     , files : Dict String FileState
-    , commentPaths : Dict Int String
-    , inlinePath : Maybe String
-    , reviewBody : String
-    , reviewSubmission : Remote ReviewRequest ApiError ReviewAction
+    , review : ReviewDraft
     }
 
 
@@ -79,97 +93,120 @@ type FileState
 
 
 type alias FileDetails =
-    { comments : Remote Session.Id ApiError (List ReviewComment)
-    , collapsedThreads : Set Int
-    , replyDrafts : Dict Int String
-    , replyState : Remote ReplyRequest ApiError ReviewComment
-    , inlineComposer : Maybe InlineComposer
-    , inlineSubmission : Remote InlineRequest ApiError ReviewComment
+    { threads : FileThreads
+    , collapsed : Set Int
+    , replies : Dict Int ReplyDraft
+    , inline : Inline
     }
 
 
+{-| Threads indexed once by side and line, so rendering a line never scans
+the file's comments.
+-}
+type alias FileThreads =
+    { left : Dict Int (List Thread)
+    , right : Dict Int (List Thread)
+    , detached : List Thread
+    }
+
+
+type alias Thread =
+    { root : ReviewComment
+    , replies : List ReviewComment
+    }
+
+
+type alias Anchor =
+    { path : String
+    , line : Int
+    , side : CommentSide
+    }
+
+
+type ReplyDraft
+    = EditingReply String (Maybe ApiError)
+    | SendingReply ReplyRequest String
+
+
+type Inline
+    = InlineClosed
+    | Composing Anchor String (Maybe ApiError)
+    | SubmittingInline InlineRequest Anchor String
+
+
+type ReviewDraft
+    = DraftingReview String (Maybe ReviewOutcome)
+    | SubmittingReview ReviewRequest String
+
+
+type ReviewOutcome
+    = ReviewAccepted ReviewAction
+    | ReviewRejected ApiError
+
+
 type ReplyRequest
-    = ReplyRequest Session.Id Int
+    = ReplyRequest Session.Id String Int
+
+
+type InlineRequest
+    = InlineRequest Session.Id Anchor
 
 
 type ReviewRequest
     = ReviewRequest Session.Id ReviewAction
 
 
-type ReviewSubmissionState
-    = ReviewNotSubmitted
-    | ReviewSubmitting ReviewAction
-    | ReviewSucceeded ReviewAction
-    | ReviewSubmissionFailed ApiError
-
-
-type InlineRequest
-    = InlineRequest Session.Id String Int CommentSide
-
-
 type alias ReplySubmission =
     { request : ReplyRequest
-    , pullUrl : String
+    , pull : PullRequestRef
     , commentId : Int
-    , body : String
-    }
-
-
-type alias ReviewSubmission =
-    { request : ReviewRequest
-    , pullUrl : String
-    , event : ReviewAction
     , body : String
     }
 
 
 type alias InlineSubmission =
     { request : InlineRequest
-    , pullUrl : String
-    , commitId : String
-    , path : String
-    , line : Int
-    , side : CommentSide
+    , anchor : Anchor
     , body : String
     }
 
 
-type alias InlineComposer =
-    { path : String
-    , line : Int
-    , side : CommentSide
+type alias ReviewSubmission =
+    { request : ReviewRequest
+    , pull : PullRequestRef
+    , action : ReviewAction
     , body : String
     }
 
 
-init : Session.Id -> Bool -> List String -> Model
-init sessionId loadCommits paths =
+init : Session.Id -> PullRequestRef -> Model
+init sessionId pullRequest =
     Model
         { session = sessionId
-        , commits =
-            if loadCommits then
-                Loading sessionId
-
-            else
-                NotAsked
+        , pull = pullRequest
+        , commits = Loading sessionId
         , revision = NotAsked
-        , files = Dict.fromList (List.map (\path -> ( path, emptyFileState )) paths)
-        , commentPaths = Dict.empty
-        , inlinePath = Nothing
-        , reviewBody = ""
-        , reviewSubmission = NotAsked
+        , comments = NotAsked
+        , files = Dict.empty
+        , review = DraftingReview "" Nothing
         }
+
+
+{-| File state for files without collaboration, shared so lazy panels keep a
+stable argument.
+-}
+noFileState : FileState
+noFileState =
+    emptyFileState
 
 
 emptyFileState : FileState
 emptyFileState =
     FileState
-        { comments = NotAsked
-        , collapsedThreads = Set.empty
-        , replyDrafts = Dict.empty
-        , replyState = NotAsked
-        , inlineComposer = Nothing
-        , inlineSubmission = NotAsked
+        { threads = emptyThreads
+        , collapsed = Set.empty
+        , replies = Dict.empty
+        , inline = InlineClosed
         }
 
 
@@ -178,9 +215,62 @@ session (Model details) =
     details.session
 
 
+pull : Model -> PullRequestRef
+pull (Model details) =
+    details.pull
+
+
+fileState : String -> Model -> FileState
+fileState path (Model details) =
+    Dict.get path details.files |> Maybe.withDefault emptyFileState
+
+
+updateFile : String -> (FileDetails -> FileDetails) -> Model -> Model
+updateFile path transform ((Model details) as model) =
+    let
+        (FileState current) =
+            fileState path model
+    in
+    Model { details | files = Dict.insert path (FileState (transform current)) details.files }
+
+
+settle : Session.Id -> Remote Session.Id ApiError value -> Remote Session.Id ApiError value -> Remote Session.Id ApiError value
+settle requested result current =
+    case current of
+        Loading active ->
+            if active == requested then
+                result
+
+            else
+                current
+
+        NotAsked ->
+            current
+
+        Success _ _ ->
+            current
+
+        Failure _ _ ->
+            current
+
+
+
+-- COMMITS AND REVISION
+
+
 commits : Model -> Remote Session.Id ApiError (List PullCommit)
 commits (Model details) =
     details.commits
+
+
+commitsLoaded : Session.Id -> List PullCommit -> Model -> Model
+commitsLoaded requested value (Model details) =
+    Model { details | commits = settle requested (Success requested value) details.commits }
+
+
+commitsFailed : Session.Id -> ApiError -> Model -> Model
+commitsFailed requested error (Model details) =
+    Model { details | commits = settle requested (Failure requested error) details.commits }
 
 
 revision : Model -> Remote Session.Id ApiError Revision
@@ -188,523 +278,491 @@ revision (Model details) =
     details.revision
 
 
-fileState : String -> Model -> Maybe FileState
-fileState path (Model details) =
-    Dict.get path details.files
+beginRevision : Model -> ( Model, Session.Id )
+beginRevision (Model details) =
+    ( Model { details | revision = Loading details.session }, details.session )
 
 
-comments : Model -> Remote Session.Id ApiError (List ReviewComment)
+revisionLoaded : Session.Id -> Revision -> Model -> Model
+revisionLoaded requested value (Model details) =
+    Model { details | revision = settle requested (Success requested value) details.revision }
+
+
+revisionFailed : Session.Id -> ApiError -> Model -> Model
+revisionFailed requested error (Model details) =
+    Model { details | revision = settle requested (Failure requested error) details.revision }
+
+
+
+-- COMMENTS
+
+
+{-| Review-wide comment loading, rendered once near the review toolbar.
+-}
+comments : Model -> Remote Session.Id ApiError ()
 comments (Model details) =
-    details.files
-        |> Dict.values
-        |> List.map fileComments
-        |> combineComments details.session
-
-
-combineComments : Session.Id -> List (Remote Session.Id ApiError (List ReviewComment)) -> Remote Session.Id ApiError (List ReviewComment)
-combineComments requested states =
-    case states of
-        [] ->
-            NotAsked
-
-        _ ->
-            case List.filterMap successValue states of
-                values ->
-                    if List.length values == List.length states then
-                        Success requested (List.concat values)
-
-                    else
-                        states
-                            |> List.filterMap failureValue
-                            |> List.head
-                            |> Maybe.map (Failure requested)
-                            |> Maybe.withDefault
-                                (if List.any Remote.isLoading states then
-                                    Loading requested
-
-                                 else
-                                    NotAsked
-                                )
-
-
-successValue : Remote request error value -> Maybe value
-successValue remote =
-    case remote of
-        Success _ value ->
-            Just value
-
-        _ ->
-            Nothing
-
-
-failureValue : Remote request error value -> Maybe error
-failureValue remote =
-    case remote of
-        Failure _ error ->
-            Just error
-
-        _ ->
-            Nothing
-
-
-fileComments : FileState -> Remote Session.Id ApiError (List ReviewComment)
-fileComments (FileState details) =
     details.comments
 
 
-commitsLoaded : Session.Id -> List PullCommit -> Model -> Model
-commitsLoaded requested value =
-    mapIfCurrent requested (\details -> { details | commits = Success requested value })
-
-
-commitsFailed : Session.Id -> ApiError -> Model -> Model
-commitsFailed requested error =
-    mapIfCurrent requested (\details -> { details | commits = Failure requested error })
-
-
-beginComments : Model -> Model
+{-| Starts loading comments unless they are already loading or loaded.
+-}
+beginComments : Model -> Maybe ( Model, Session.Id )
 beginComments (Model details) =
-    Model { details | files = Dict.map (\_ -> mapFile (\file -> { file | comments = Loading details.session })) details.files }
+    let
+        start =
+            Just ( Model { details | comments = Loading details.session }, details.session )
+    in
+    case details.comments of
+        NotAsked ->
+            start
+
+        Failure _ _ ->
+            start
+
+        Loading _ ->
+            Nothing
+
+        Success _ _ ->
+            Nothing
 
 
 commentsLoaded : Session.Id -> List ReviewComment -> Model -> Model
 commentsLoaded requested values ((Model details) as model) =
-    if requested /= details.session then
-        model
+    case details.comments of
+        Loading active ->
+            if active == requested then
+                Dict.foldl
+                    (\path threads ->
+                        updateFile path
+                            (\file ->
+                                { file
+                                    | threads = threads
+                                    , collapsed = Set.union file.collapsed (resolvedRoots threads)
+                                }
+                            )
+                    )
+                    (Model { details | comments = Success requested () })
+                    (indexThreads values)
 
-    else
-        let
-            paths =
-                values |> List.map .path |> Set.fromList
+            else
+                model
 
-            ensured =
-                Set.foldl (\path -> Dict.update path (Just << Maybe.withDefault emptyFileState)) details.files paths
+        NotAsked ->
+            model
 
-            commentsByPath =
-                List.foldr (\comment -> Dict.update comment.path (Just << (::) comment << Maybe.withDefault [])) Dict.empty values
+        Success _ _ ->
+            model
 
-            update path (FileState file) =
-                let
-                    fileComments_ =
-                        Dict.get path commentsByPath |> Maybe.withDefault []
-
-                    resolved =
-                        fileComments_
-                            |> List.filter (\comment -> comment.id == comment.rootId && comment.resolved)
-                            |> List.map .rootId
-                            |> Set.fromList
-                in
-                FileState
-                    { file
-                        | comments = Success requested fileComments_
-                        , collapsedThreads = Set.union file.collapsedThreads resolved
-                    }
-        in
-        Model
-            { details
-                | files = Dict.map update ensured
-                , commentPaths = Dict.fromList (List.map (\comment -> ( comment.id, comment.path )) values)
-            }
+        Failure _ _ ->
+            model
 
 
 commentsFailed : Session.Id -> ApiError -> Model -> Model
-commentsFailed requested error =
-    mapIfCurrent requested (\details -> { details | files = Dict.map (\_ -> mapFile (\file -> { file | comments = Failure requested error })) details.files })
+commentsFailed requested error (Model details) =
+    Model { details | comments = settle requested (Failure requested error) details.comments }
 
 
-beginRevision : Model -> Model
-beginRevision (Model details) =
-    Model { details | revision = Loading details.session }
+indexThreads : List ReviewComment -> Dict String FileThreads
+indexThreads values =
+    let
+        repliesByRoot =
+            List.foldr
+                (\comment ->
+                    if comment.id == comment.rootId then
+                        identity
+
+                    else
+                        Dict.update comment.rootId (Maybe.withDefault [] >> (::) comment >> Just)
+                )
+                Dict.empty
+                values
+
+        threadsByPath =
+            values
+                |> List.filter (\comment -> comment.id == comment.rootId)
+                |> List.foldr
+                    (\root ->
+                        Dict.update root.path
+                            (Maybe.withDefault [] >> (::) { root = root, replies = Dict.get root.id repliesByRoot |> Maybe.withDefault [] } >> Just)
+                    )
+                    Dict.empty
+    in
+    Dict.map (\_ threads -> List.foldr placeThread emptyThreads threads) threadsByPath
 
 
-revisionLoaded : Session.Id -> Revision -> Model -> Model
-revisionLoaded requested value =
-    mapIfCurrent requested (\details -> { details | revision = Success requested value })
+emptyThreads : FileThreads
+emptyThreads =
+    { left = Dict.empty, right = Dict.empty, detached = [] }
 
 
-revisionFailed : Session.Id -> ApiError -> Model -> Model
-revisionFailed requested error =
-    mapIfCurrent requested (\details -> { details | revision = Failure requested error })
+placeThread : Thread -> FileThreads -> FileThreads
+placeThread thread threads =
+    case ( thread.root.line, thread.root.side ) of
+        ( Just line, LeftSide ) ->
+            { threads | left = Dict.update line (Maybe.withDefault [] >> (::) thread >> Just) threads.left }
+
+        ( Just line, RightSide ) ->
+            { threads | right = Dict.update line (Maybe.withDefault [] >> (::) thread >> Just) threads.right }
+
+        ( Nothing, _ ) ->
+            { threads | detached = thread :: threads.detached }
 
 
-toggleThread : Int -> Model -> Model
-toggleThread threadId =
-    updateCommentFile threadId (mapFile (\file -> { file | collapsedThreads = toggleSet threadId file.collapsedThreads }))
+resolvedRoots : FileThreads -> Set Int
+resolvedRoots threads =
+    allThreads threads
+        |> List.filter (.root >> .resolved)
+        |> List.map (.root >> .id)
+        |> Set.fromList
+
+
+allThreads : FileThreads -> List Thread
+allThreads threads =
+    List.concat (Dict.values threads.left) ++ List.concat (Dict.values threads.right) ++ threads.detached
+
+
+{-| Adds a newly posted comment: a root opens a thread, a reply joins its
+root's thread.
+-}
+addComment : ReviewComment -> FileThreads -> FileThreads
+addComment comment threads =
+    if comment.id == comment.rootId then
+        placeThread { root = comment, replies = [] } threads
+
+    else
+        let
+            join thread =
+                if thread.root.id == comment.rootId then
+                    { thread | replies = thread.replies ++ [ comment ] }
+
+                else
+                    thread
+        in
+        { left = Dict.map (\_ -> List.map join) threads.left
+        , right = Dict.map (\_ -> List.map join) threads.right
+        , detached = List.map join threads.detached
+        }
+
+
+threadsAt : CommentSide -> Int -> FileState -> List Thread
+threadsAt side line (FileState file) =
+    Dict.get line
+        (case side of
+            LeftSide ->
+                file.threads.left
+
+            RightSide ->
+                file.threads.right
+        )
+        |> Maybe.withDefault []
+
+
+detachedThreads : FileState -> List Thread
+detachedThreads (FileState file) =
+    file.threads.detached
+
+
+toggleThread : String -> Int -> Model -> Model
+toggleThread path threadId =
+    updateFile path
+        (\file ->
+            { file
+                | collapsed =
+                    if Set.member threadId file.collapsed then
+                        Set.remove threadId file.collapsed
+
+                    else
+                        Set.insert threadId file.collapsed
+            }
+        )
 
 
 isThreadCollapsed : Int -> FileState -> Bool
-isThreadCollapsed threadId (FileState details) =
-    Set.member threadId details.collapsedThreads
+isThreadCollapsed threadId (FileState file) =
+    Set.member threadId file.collapsed
 
 
-changeReply : Int -> String -> Model -> Model
-changeReply commentId body =
-    updateCommentFile commentId (mapFile (\file -> { file | replyDrafts = Dict.insert commentId body file.replyDrafts, replyState = NotAsked }))
+
+-- REPLIES
 
 
-replyDraft : Int -> FileState -> String
-replyDraft commentId (FileState details) =
-    Dict.get commentId details.replyDrafts |> Maybe.withDefault ""
+replyDraft : Int -> FileState -> ReplyDraft
+replyDraft threadId (FileState file) =
+    Dict.get threadId file.replies |> Maybe.withDefault (EditingReply "" Nothing)
 
 
-beginReply : Int -> Model -> ( Model, Maybe ReplySubmission )
-beginReply commentId ((Model details) as model) =
-    case Dict.get commentId details.commentPaths |> Maybe.andThen (\path -> Dict.get path details.files |> Maybe.map (Tuple.pair path)) of
-        Nothing ->
-            ( model, Nothing )
+changeReply : String -> Int -> String -> Model -> Model
+changeReply path threadId body model =
+    case replyDraft threadId (fileState path model) of
+        EditingReply _ _ ->
+            updateFile path (\file -> { file | replies = Dict.insert threadId (EditingReply body Nothing) file.replies }) model
 
-        Just ( path, fileState_ ) ->
-            let
-                body =
-                    replyDraft commentId fileState_
+        SendingReply _ _ ->
+            model
 
-                request =
-                    ReplyRequest details.session commentId
-            in
+
+beginReply : String -> Int -> Model -> Maybe ( Model, ReplySubmission )
+beginReply path threadId ((Model details) as model) =
+    case replyDraft threadId (fileState path model) of
+        EditingReply body _ ->
             if String.trim body == "" then
-                ( model, Nothing )
+                Nothing
 
             else
-                ( updateFile path (mapFile (\file -> { file | replyState = Loading request })) model
-                , Just { request = request, pullUrl = Session.pullUrl details.session, commentId = commentId, body = body }
-                )
+                let
+                    request =
+                        ReplyRequest details.session path threadId
+                in
+                Just
+                    ( updateFile path (\file -> { file | replies = Dict.insert threadId (SendingReply request body) file.replies }) model
+                    , { request = request, pull = details.pull, commentId = threadId, body = body }
+                    )
+
+        SendingReply _ _ ->
+            Nothing
 
 
 replyLoaded : ReplyRequest -> ReviewComment -> Model -> Model
-replyLoaded request comment ((Model details) as model) =
-    let
-        commentId =
-            replyCommentId request
-    in
-    if not (replyBelongsTo details.session request) then
-        model
+replyLoaded ((ReplyRequest _ path threadId) as request) comment model =
+    case replyDraft threadId (fileState path model) of
+        SendingReply active _ ->
+            if active == request then
+                updateFile path
+                    (\file -> { file | replies = Dict.remove threadId file.replies, threads = addComment comment file.threads })
+                    model
 
-    else
-        updateCommentFile commentId
-            (\state ->
-                if replyLoading commentId state then
-                    mapFile
-                        (\file ->
-                            { file
-                                | comments = Remote.map (\value -> value ++ [ comment ]) file.comments
-                                , replyDrafts = Dict.remove commentId file.replyDrafts
-                                , replyState = Success request comment
-                            }
-                        )
-                        state
+            else
+                model
 
-                else
-                    state
-            )
+        EditingReply _ _ ->
             model
 
 
 replyFailed : ReplyRequest -> ApiError -> Model -> Model
-replyFailed request error ((Model details) as model) =
-    let
-        commentId =
-            replyCommentId request
-    in
-    if replyBelongsTo details.session request then
-        updateCommentFile commentId
-            (\state ->
-                if replyLoading commentId state then
-                    mapFile (\file -> { file | replyState = Failure request error }) state
-
-                else
-                    state
-            )
-            model
-
-    else
-        model
-
-
-replyLoading : Int -> FileState -> Bool
-replyLoading commentId (FileState details) =
-    case details.replyState of
-        Loading request ->
-            replyCommentId request == commentId
-
-        _ ->
-            False
-
-
-replyError : Int -> FileState -> Maybe ApiError
-replyError commentId (FileState details) =
-    case details.replyState of
-        Failure request error ->
-            if replyCommentId request == commentId then
-                Just error
+replyFailed ((ReplyRequest _ path threadId) as request) error model =
+    case replyDraft threadId (fileState path model) of
+        SendingReply active body ->
+            if active == request then
+                updateFile path (\file -> { file | replies = Dict.insert threadId (EditingReply body (Just error)) file.replies }) model
 
             else
+                model
+
+        EditingReply _ _ ->
+            model
+
+
+
+-- INLINE COMMENTS
+
+
+inline : FileState -> Inline
+inline (FileState file) =
+    file.inline
+
+
+isSubmittingInline : Model -> Bool
+isSubmittingInline (Model details) =
+    details.files
+        |> Dict.values
+        |> List.any
+            (\(FileState file) ->
+                case file.inline of
+                    SubmittingInline _ _ _ ->
+                        True
+
+                    Composing _ _ _ ->
+                        False
+
+                    InlineClosed ->
+                        False
+            )
+
+
+{-| Opens the composer at `anchor`, closing any other open composer. Refused
+while an inline comment is being submitted.
+-}
+openInline : Anchor -> Model -> Model
+openInline anchor ((Model details) as model) =
+    if isSubmittingInline model then
+        model
+
+    else
+        Model
+            { details
+                | files =
+                    Dict.map
+                        (\_ (FileState file) ->
+                            case file.inline of
+                                Composing _ _ _ ->
+                                    FileState { file | inline = InlineClosed }
+
+                                SubmittingInline _ _ _ ->
+                                    FileState file
+
+                                InlineClosed ->
+                                    FileState file
+                        )
+                        details.files
+            }
+            |> updateFile anchor.path (\file -> { file | inline = Composing anchor "" Nothing })
+
+
+changeInlineBody : String -> String -> Model -> Model
+changeInlineBody path body model =
+    case inline (fileState path model) of
+        Composing anchor _ _ ->
+            updateFile path (\file -> { file | inline = Composing anchor body Nothing }) model
+
+        SubmittingInline _ _ _ ->
+            model
+
+        InlineClosed ->
+            model
+
+
+cancelInline : String -> Model -> Model
+cancelInline path model =
+    case inline (fileState path model) of
+        Composing _ _ _ ->
+            updateFile path (\file -> { file | inline = InlineClosed }) model
+
+        SubmittingInline _ _ _ ->
+            model
+
+        InlineClosed ->
+            model
+
+
+submitInline : String -> Model -> Maybe ( Model, InlineSubmission )
+submitInline path ((Model details) as model) =
+    case inline (fileState path model) of
+        Composing anchor body _ ->
+            if String.trim body == "" then
                 Nothing
 
-        _ ->
+            else
+                let
+                    request =
+                        InlineRequest details.session anchor
+                in
+                Just
+                    ( updateFile path (\file -> { file | inline = SubmittingInline request anchor body }) model
+                    , { request = request, anchor = anchor, body = body }
+                    )
+
+        SubmittingInline _ _ _ ->
+            Nothing
+
+        InlineClosed ->
             Nothing
 
 
+inlineLoaded : InlineRequest -> ReviewComment -> Model -> Model
+inlineLoaded ((InlineRequest _ requested) as request) comment model =
+    case inline (fileState requested.path model) of
+        SubmittingInline active _ _ ->
+            if active == request then
+                updateFile requested.path (\file -> { file | inline = InlineClosed, threads = addComment comment file.threads }) model
+
+            else
+                model
+
+        Composing _ _ _ ->
+            model
+
+        InlineClosed ->
+            model
+
+
+inlineFailed : InlineRequest -> ApiError -> Model -> Model
+inlineFailed ((InlineRequest _ requested) as request) error model =
+    case inline (fileState requested.path model) of
+        SubmittingInline active anchor body ->
+            if active == request then
+                updateFile requested.path (\file -> { file | inline = Composing anchor body (Just error) }) model
+
+            else
+                model
+
+        Composing _ _ _ ->
+            model
+
+        InlineClosed ->
+            model
+
+
+
+-- REVIEW SUMMARY
+
+
+reviewRequestAction : ReviewRequest -> ReviewAction
+reviewRequestAction (ReviewRequest _ action) =
+    action
+
+
+reviewDraft : Model -> ReviewDraft
+reviewDraft (Model details) =
+    details.review
+
+
 changeReviewBody : String -> Model -> Model
-changeReviewBody body (Model details) =
-    Model { details | reviewBody = body, reviewSubmission = NotAsked }
+changeReviewBody body ((Model details) as model) =
+    case details.review of
+        DraftingReview _ _ ->
+            Model { details | review = DraftingReview body Nothing }
+
+        SubmittingReview _ _ ->
+            model
 
 
-reviewBody : Model -> String
-reviewBody (Model details) =
-    details.reviewBody
+{-| Starts a review submission. Only approvals may omit the summary, and a
+review in flight is never submitted twice.
+-}
+beginReview : ReviewAction -> Model -> Maybe ( Model, ReviewSubmission )
+beginReview action (Model details) =
+    case details.review of
+        DraftingReview body _ ->
+            if action /= ApproveReview && String.trim body == "" then
+                Nothing
 
+            else
+                let
+                    request =
+                        ReviewRequest details.session action
+                in
+                Just
+                    ( Model { details | review = SubmittingReview request body }
+                    , { request = request, pull = details.pull, action = action, body = body }
+                    )
 
-beginReview : ReviewAction -> Model -> ( Model, ReviewSubmission )
-beginReview event (Model details) =
-    let
-        request =
-            ReviewRequest details.session event
-    in
-    ( Model { details | reviewSubmission = Loading request }
-    , { request = request, pullUrl = Session.pullUrl details.session, event = event, body = details.reviewBody }
-    )
+        SubmittingReview _ _ ->
+            Nothing
 
 
 reviewLoaded : ReviewRequest -> ReviewAction -> Model -> Model
-reviewLoaded request response ((Model details) as model) =
-    if Remote.identity details.reviewSubmission == Just request && reviewBelongsTo details.session request then
-        Model { details | reviewSubmission = Success request response, reviewBody = "" }
+reviewLoaded request accepted ((Model details) as model) =
+    case details.review of
+        SubmittingReview active _ ->
+            if active == request then
+                Model { details | review = DraftingReview "" (Just (ReviewAccepted accepted)) }
 
-    else
-        model
+            else
+                model
+
+        DraftingReview _ _ ->
+            model
 
 
 reviewFailed : ReviewRequest -> ApiError -> Model -> Model
 reviewFailed request error ((Model details) as model) =
-    if Remote.identity details.reviewSubmission == Just request && reviewBelongsTo details.session request then
-        Model { details | reviewSubmission = Failure request error }
+    case details.review of
+        SubmittingReview active body ->
+            if active == request then
+                Model { details | review = DraftingReview body (Just (ReviewRejected error)) }
 
-    else
-        model
-
-
-reviewSubmissionState : Model -> ReviewSubmissionState
-reviewSubmissionState (Model details) =
-    case details.reviewSubmission of
-        NotAsked ->
-            ReviewNotSubmitted
-
-        Loading (ReviewRequest _ action) ->
-            ReviewSubmitting action
-
-        Success _ action ->
-            ReviewSucceeded action
-
-        Failure _ error ->
-            ReviewSubmissionFailed error
-
-
-openInline : String -> Int -> CommentSide -> Model -> Model
-openInline path line side ((Model details) as model) =
-    let
-        cleared =
-            details.inlinePath
-                |> Maybe.map (\previous -> updateFile previous clearInline model)
-                |> Maybe.withDefault model
-
-        composer =
-            { path = path, line = line, side = side, body = "" }
-    in
-    cleared
-        |> updateFile path (mapFile (\file -> { file | inlineComposer = Just composer, inlineSubmission = NotAsked }))
-        |> setInlinePath (Just path)
-
-
-changeInlineBody : String -> Model -> Model
-changeInlineBody body ((Model details) as model) =
-    details.inlinePath
-        |> Maybe.map (\path -> updateFile path (mapFile (\file -> { file | inlineComposer = Maybe.map (\composer -> { composer | body = body }) file.inlineComposer })) model)
-        |> Maybe.withDefault model
-
-
-cancelInline : Model -> Model
-cancelInline ((Model details) as model) =
-    details.inlinePath
-        |> Maybe.map (\path -> updateFile path clearInline model |> setInlinePath Nothing)
-        |> Maybe.withDefault model
-
-
-clearInline : FileState -> FileState
-clearInline =
-    mapFile (\file -> { file | inlineComposer = Nothing, inlineSubmission = NotAsked })
-
-
-inlineComposer : FileState -> Maybe InlineComposer
-inlineComposer (FileState details) =
-    details.inlineComposer
-
-
-submitInline : Model -> ( Model, Maybe InlineSubmission )
-submitInline ((Model details) as model) =
-    case details.inlinePath |> Maybe.andThen (\path -> Dict.get path details.files |> Maybe.map (Tuple.pair path)) of
-        Nothing ->
-            ( model, Nothing )
-
-        Just ( path, FileState file ) ->
-            case file.inlineComposer of
-                Just composer ->
-                    if String.trim composer.body == "" then
-                        ( model, Nothing )
-
-                    else
-                        let
-                            request =
-                                InlineRequest details.session composer.path composer.line composer.side
-                        in
-                        ( updateFile path (mapFile (\current -> { current | inlineSubmission = Loading request })) model
-                        , Just
-                            { request = request
-                            , pullUrl = Session.pullUrl details.session
-                            , commitId = Session.headOid details.session
-                            , path = composer.path
-                            , line = composer.line
-                            , side = composer.side
-                            , body = composer.body
-                            }
-                        )
-
-                Nothing ->
-                    ( model, Nothing )
-
-
-inlineLoaded : InlineRequest -> ReviewComment -> Model -> Model
-inlineLoaded request comment ((Model details) as model) =
-    if not (inlineBelongsTo details.session request) then
-        model
-
-    else
-        case fileState (inlinePath request) model of
-            Just state ->
-                if inlineRequestActive request state then
-                    updateFile (inlinePath request)
-                        (mapFile
-                            (\file ->
-                                { file
-                                    | comments = Remote.map (\value -> value ++ [ comment ]) file.comments
-                                    , inlineComposer = Nothing
-                                    , inlineSubmission = Success request comment
-                                }
-                            )
-                        )
-                        model
-                        |> setInlinePath Nothing
-                        |> insertCommentPath comment
-
-                else
-                    model
-
-            Nothing ->
+            else
                 model
 
-
-inlineFailed : InlineRequest -> ApiError -> Model -> Model
-inlineFailed request error ((Model details) as model) =
-    if inlineBelongsTo details.session request then
-        updateFile (inlinePath request)
-            (\state ->
-                if inlineRequestActive request state then
-                    mapFile (\file -> { file | inlineSubmission = Failure request error }) state
-
-                else
-                    state
-            )
+        DraftingReview _ _ ->
             model
-
-    else
-        model
-
-
-inlineLoading : FileState -> Bool
-inlineLoading (FileState details) =
-    Remote.isLoading details.inlineSubmission
-
-
-inlineError : FileState -> Maybe ApiError
-inlineError (FileState details) =
-    case details.inlineSubmission of
-        Failure _ error ->
-            Just error
-
-        _ ->
-            Nothing
-
-
-inlineRequestActive : InlineRequest -> FileState -> Bool
-inlineRequestActive request (FileState details) =
-    Remote.identity details.inlineSubmission == Just request
-
-
-mapIfCurrent : Session.Id -> (Details -> Details) -> Model -> Model
-mapIfCurrent requested transform ((Model details) as model) =
-    if requested == details.session then
-        Model (transform details)
-
-    else
-        model
-
-
-updateCommentFile : Int -> (FileState -> FileState) -> Model -> Model
-updateCommentFile commentId transform ((Model details) as model) =
-    details.commentPaths
-        |> Dict.get commentId
-        |> Maybe.map (\path -> updateFile path transform model)
-        |> Maybe.withDefault model
-
-
-updateFile : String -> (FileState -> FileState) -> Model -> Model
-updateFile path transform (Model details) =
-    Model { details | files = Dict.update path (Maybe.map transform) details.files }
-
-
-mapFile : (FileDetails -> FileDetails) -> FileState -> FileState
-mapFile transform (FileState details) =
-    FileState (transform details)
-
-
-setInlinePath : Maybe String -> Model -> Model
-setInlinePath path (Model details) =
-    Model { details | inlinePath = path }
-
-
-insertCommentPath : ReviewComment -> Model -> Model
-insertCommentPath comment (Model details) =
-    Model { details | commentPaths = Dict.insert comment.id comment.path details.commentPaths }
-
-
-replyBelongsTo : Session.Id -> ReplyRequest -> Bool
-replyBelongsTo active (ReplyRequest requested _) =
-    active == requested
-
-
-replyCommentId : ReplyRequest -> Int
-replyCommentId (ReplyRequest _ commentId) =
-    commentId
-
-
-reviewBelongsTo : Session.Id -> ReviewRequest -> Bool
-reviewBelongsTo active (ReviewRequest requested _) =
-    active == requested
-
-
-inlineBelongsTo : Session.Id -> InlineRequest -> Bool
-inlineBelongsTo active (InlineRequest requested _ _ _) =
-    active == requested
-
-
-inlinePath : InlineRequest -> String
-inlinePath (InlineRequest _ path _ _) =
-    path
-
-
-toggleSet : comparable -> Set comparable -> Set comparable
-toggleSet item values =
-    if Set.member item values then
-        Set.remove item values
-
-    else
-        Set.insert item values

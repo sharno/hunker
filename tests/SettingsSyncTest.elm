@@ -2,7 +2,7 @@ module SettingsSyncTest exposing (suite)
 
 import Expect
 import Hunker.ApiError as ApiError
-import Hunker.Domain.Settings as Settings exposing (Settings, SettingsDocument)
+import Hunker.Domain.Settings exposing (Feature(..), InlineDiffMode(..), ReviewScope(..), Settings, SettingsDocument, ViewMode(..), Visibility(..), Whitespace(..))
 import Hunker.Settings.Sync as Sync
 import Test exposing (Test, describe, test)
 
@@ -13,17 +13,14 @@ suite =
         [ test "coalesces desired settings without changing the in-flight document" <|
             \() ->
                 let
-                    defaults =
-                        Settings.default
-
                     original =
                         document defaults
 
                     semanticOff =
-                        { defaults | semantic = False }
+                        { defaults | semantic = Disabled }
 
                     latest =
-                        { semanticOff | ignoreWhitespace = False }
+                        { semanticOff | whitespace = ShowWhitespace }
 
                     ( saving, firstRequest ) =
                         Sync.queue semanticOff (Sync.loaded original)
@@ -49,14 +46,11 @@ suite =
         , test "ignores a stale completion after starting the queued save" <|
             \() ->
                 let
-                    defaults =
-                        Settings.default
-
                     first =
-                        { defaults | semantic = False }
+                        { defaults | semantic = Disabled }
 
                     second =
-                        { first | ignoreWhitespace = False }
+                        { first | whitespace = ShowWhitespace }
 
                     ( savingFirst, firstRequest ) =
                         Sync.queue first (Sync.loaded (document defaults))
@@ -82,14 +76,16 @@ suite =
                     , \_ -> Expect.equal (Just second) (Maybe.map .settings secondRequest)
                     ]
                     ()
+        , test "sends nothing when the desired settings are already current" <|
+            \() ->
+                Sync.queue defaults (Sync.loaded (document defaults))
+                    |> Tuple.second
+                    |> Expect.equal Nothing
         , test "retains the desired settings and typed error after a failed save" <|
             \() ->
                 let
-                    defaults =
-                        Settings.default
-
                     desired =
-                        { defaults | syntaxHighlighting = False }
+                        { defaults | syntaxHighlighting = Disabled }
 
                     error =
                         ApiError.transport "settings disk unavailable"
@@ -114,6 +110,23 @@ suite =
                     ]
                     ()
         ]
+
+
+defaults : Settings
+defaults =
+    { repositoriesRoot = "~/src"
+    , cacheRoot = "/tmp/hunker/repositories"
+    , reviewScope = OneFile
+    , viewMode = Split
+    , whitespace = IgnoreWhitespace
+    , semantic = Enabled
+    , inlineDiffMode = Token
+    , syntaxHighlighting = Enabled
+    , diffColors = Enabled
+    , sidebar = Expanded
+    , gitHubReviews = Enabled
+    , topBar = Expanded
+    }
 
 
 document : Settings -> SettingsDocument

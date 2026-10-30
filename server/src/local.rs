@@ -11,8 +11,10 @@ use tokio::sync::Mutex;
 use fff_search::SharedFilePicker;
 
 use crate::{
-    command, error::AppResult, source_presentation::SourcePresentationResult,
-    types::LocalGitRepository,
+    github::PullNumber,
+    settings::SettingsStore,
+    source_presentation::SourcePresentationResult,
+    types::{BranchName, LocalGitRepository, Oid, RepositoryRoot},
 };
 
 const MAX_FILE_CHARACTERS: usize = 500_000;
@@ -26,22 +28,31 @@ mod review_backing;
 mod search;
 mod source_control;
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Local {
-    fetches: Arc<Mutex<HashMap<String, u64>>>,
+    settings: SettingsStore,
+    fetches: Arc<Mutex<HashMap<(PathBuf, PullNumber), u64>>>,
     repository_locks: Arc<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>>,
     fuzzy_indexes: Arc<Mutex<HashMap<PathBuf, SharedFilePicker>>>,
 }
 
-fn valid_segment(value: &str) -> bool {
-    !value.is_empty()
-        && value.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
-        })
+impl Local {
+    pub fn new(settings: SettingsStore) -> Self {
+        Self {
+            settings,
+            fetches: Arc::default(),
+            repository_locks: Arc::default(),
+            fuzzy_indexes: Arc::default(),
+        }
+    }
 }
 
-pub fn valid_oid(value: &str) -> bool {
-    (40..=64).contains(&value.len()) && value.chars().all(|character| character.is_ascii_hexdigit())
+impl Local {
+    /// One lock per checkout serializes fetches and checkout mutations.
+    async fn repository_lock(&self, path: &Path) -> Arc<Mutex<()>> {
+        let mut locks = self.repository_locks.lock().await;
+        Arc::clone(locks.entry(path.to_path_buf()).or_default())
+    }
 }
 
 fn now_ms() -> u64 {
@@ -50,17 +61,6 @@ fn now_ms() -> u64 {
         .map_or(0, |duration| {
             u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
         })
-}
-
-async fn git_result(path: &Path, args: &[&str]) -> AppResult<(bool, String, i32)> {
-    let output = command::output("git", args, Some(path)).await?;
-    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
-    text.push_str(&String::from_utf8_lossy(&output.stderr));
-    Ok((
-        output.status.success(),
-        text,
-        output.status.code().unwrap_or(-1),
-    ))
 }
 
 #[derive(Debug, Serialize)]
@@ -76,14 +76,13 @@ pub struct LocalRepositorySummary {
     pub owner: String,
     pub name: String,
     pub path: String,
-    pub source: String,
+    pub source: RepositoryRoot,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepositoryFile {
     pub path: String,
     pub size: u64,
-    pub git_status: String,
 }
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -103,7 +102,6 @@ pub struct RepositorySearchMatch {
     pub context_before: Vec<String>,
     pub context_after: Vec<String>,
     pub ranges: Vec<[usize; 2]>,
-    pub definition: bool,
 }
 #[derive(Debug, Serialize)]
 pub struct SearchResults {
@@ -113,45 +111,58 @@ pub struct SearchResults {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepositoryCommit {
-    pub sha: String,
-    pub parents: Vec<String>,
+    pub sha: Oid,
+    pub parents: Vec<Oid>,
     pub author_name: String,
     pub author_email: String,
     pub authored_at: String,
     pub subject: String,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum History {
+    Shallow,
+    Complete,
+}
 #[derive(Debug, Serialize)]
 pub struct RepositoryCommits {
     #[serde(rename = "ref")]
-    pub reference: String,
-    pub shallow: bool,
+    pub reference: Oid,
+    pub history: History,
     pub commits: Vec<RepositoryCommit>,
+}
+/// Where a branch exists. A branch is listed only when it exists somewhere.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BranchPresence {
+    Local,
+    Remote,
+    Both,
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct Branch {
-    pub name: String,
-    pub local: bool,
-    pub remote: bool,
+    pub name: BranchName,
+    pub presence: BranchPresence,
 }
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "_tag")]
 pub enum Checkout {
     TrackingBranch {
-        name: String,
-        oid: String,
+        name: BranchName,
+        oid: Oid,
         upstream: String,
         ahead: usize,
         behind: usize,
     },
     UntrackedBranch {
-        name: String,
-        oid: String,
+        name: BranchName,
+        oid: Oid,
     },
     DetachedHead {
-        oid: String,
+        oid: Oid,
     },
 }
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "_tag")]
 pub enum RemoteState {
     RemoteCurrent {
@@ -185,33 +196,6 @@ pub struct PullResult {
 }
 pub struct PullRevision {
     pub repository: LocalGitRepository,
-    pub pinned_head_oid: String,
-    pub latest_head_oid: String,
+    pub latest_head_oid: Oid,
     pub checked_at: u64,
-}
-
-pub(crate) fn source_control_contract_fixture() -> SourceControlStatus {
-    SourceControlStatus {
-        path: "/Users/example/src/hunker".to_owned(),
-        checkout: Checkout::TrackingBranch {
-            name: "main".to_owned(),
-            oid: "2222222222222222222222222222222222222222".to_owned(),
-            upstream: "origin/main".to_owned(),
-            ahead: 1,
-            behind: 2,
-        },
-        branches: vec![Branch {
-            name: "main".to_owned(),
-            local: true,
-            remote: true,
-        }],
-        changes: WorkingTreeChanges {
-            staged: 1,
-            unstaged: 2,
-            untracked: 3,
-        },
-        remote: RemoteState::RemoteCurrent {
-            checked_at: 1_786_363_200_000,
-        },
-    }
 }

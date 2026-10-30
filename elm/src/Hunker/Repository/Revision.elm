@@ -1,29 +1,26 @@
 module Hunker.Repository.Revision exposing (Revision, create, oid, repository)
 
+{-| A repository at one immutable object ID. File and search requests carry
+both together so a response can never be attributed to another revision.
+-}
+
+import Hunker.Domain.Git exposing (Oid, RepositoryId)
+
 
 type Revision
-    = Revision Details
+    = Revision RepositoryId Oid
 
 
-type alias Details =
-    { repository : String
-    , oid : String
-    }
-
-
-create : String -> String -> Revision
-create repositoryName objectId =
+create : RepositoryId -> Oid -> Revision
+create =
     Revision
-        { repository = repositoryName
-        , oid = objectId
-        }
 
 
-repository : Revision -> String
-repository (Revision details) =
-    details.repository
+repository : Revision -> RepositoryId
+repository (Revision value _) =
+    value
 
 
-oid : Revision -> String
-oid (Revision details) =
-    details.oid
+oid : Revision -> Oid
+oid (Revision _ value) =
+    value

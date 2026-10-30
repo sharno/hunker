@@ -1,15 +1,20 @@
-module Hunker.Repository.View.Toolbar exposing (Config, view)
+module Hunker.Repository.View.Toolbar exposing (Config, Tab(..), view)
 
 import Html exposing (Html, button, div, span, strong, text)
-import Html.Attributes exposing (attribute, class, type_)
+import Html.Attributes exposing (attribute, class, classList, type_)
 import Html.Events exposing (onClick)
-import Hunker.Route exposing (RepositoryTab(..))
+
+
+type Tab
+    = FilesTab
+    | PullsTab
+    | CommitsTab
 
 
 type alias Config msg =
     { repository : String
-    , activeTab : RepositoryTab
-    , selectedTab : RepositoryTab -> msg
+    , activeTab : Tab
+    , selectedTab : Tab -> msg
     }
 
 
@@ -20,26 +25,18 @@ view config =
         , strong [] [ text config.repository ]
         ]
     , div [ class "segmented repository-view-tabs", attribute "role" "group", attribute "aria-label" "Repository view" ]
-        [ tabButton config "Files" RepositoryFiles
-        , tabButton config "Pull requests" RepositoryPulls
-        , tabButton config "Commits" RepositoryCommits
+        [ tabButton config "Files" FilesTab
+        , tabButton config "Pull requests" PullsTab
+        , tabButton config "Commits" CommitsTab
         ]
     ]
 
 
-tabButton : Config msg -> String -> RepositoryTab -> Html msg
+tabButton : Config msg -> String -> Tab -> Html msg
 tabButton config label tab =
     button
         [ type_ "button"
-        , class
-            ("segmented-button"
-                ++ (if tab == config.activeTab then
-                        " is-active"
-
-                    else
-                        ""
-                   )
-            )
+        , classList [ ( "segmented-button", True ), ( "is-active", tab == config.activeTab ) ]
         , onClick (config.selectedTab tab)
         ]
         [ text label ]

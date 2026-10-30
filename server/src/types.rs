@@ -1,12 +1,188 @@
-use std::{fmt, path::PathBuf};
+use std::{fmt, num::NonZeroUsize, path::PathBuf, sync::Arc};
 
 use serde::{Deserialize, Serialize};
+
+/// Declares a `String` newtype whose only constructor is a normalizing parser,
+/// so serde, query extraction, and internal callers share one boundary check.
+macro_rules! validated_string {
+    ($(#[$meta:meta])* $name:ident, $parse:expr) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+        #[serde(try_from = "String", into = "String")]
+        pub struct $name(String);
+
+        impl $name {
+            pub fn parse(value: impl Into<String>) -> Result<Self, String> {
+                let parse: fn(String) -> Result<String, &'static str> = $parse;
+                parse(value.into()).map(Self).map_err(str::to_owned)
+            }
+
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl TryFrom<String> for $name {
+            type Error = String;
+
+            fn try_from(value: String) -> Result<Self, Self::Error> {
+                Self::parse(value)
+            }
+        }
+
+        impl From<$name> for String {
+            fn from(value: $name) -> Self {
+                value.0
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.0.fmt(formatter)
+            }
+        }
+    };
+}
+
+validated_string!(
+    /// A local branch name that is safe to pass as one Git argument.
+    BranchName,
+    |value| {
+        if value.is_empty() || value.starts_with('-') || value.contains(['\0', '\n', '\r']) {
+            Err("Choose a valid branch.")
+        } else {
+            Ok(value)
+        }
+    }
+);
+
+validated_string!(
+    /// A full SHA-1 or SHA-256 Git object ID.
+    Oid,
+    |value| {
+        if matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            Ok(value.to_ascii_lowercase())
+        } else {
+            Err("A full Git object ID is required.")
+        }
+    }
+);
+
+validated_string!(
+    /// A possibly abbreviated commit ID as it appears in GitHub commit URLs.
+    CommitId,
+    |value| {
+        if (7..=64).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            Ok(value.to_ascii_lowercase())
+        } else {
+            Err("Choose a valid commit ID.")
+        }
+    }
+);
+
+validated_string!(
+    /// A normalized path inside a repository revision.
+    RelativePath,
+    |value| {
+        let valid = !value.is_empty()
+            && !value.starts_with('/')
+            && !value.contains(['\0', '\n', '\r'])
+            && value
+                .split('/')
+                .all(|segment| !matches!(segment, "" | "." | ".."));
+        if valid {
+            Ok(value)
+        } else {
+            Err("A repository-relative file path is required.")
+        }
+    }
+);
+
+/// User-authored text with surrounding whitespace removed and at least one
+/// visible character.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct NonEmptyText(String);
+
+impl NonEmptyText {
+    pub fn parse(value: &str) -> Result<Self, String> {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            Err("Write some text before posting.".to_owned())
+        } else {
+            Ok(Self(trimmed.to_owned()))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for NonEmptyText {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::parse(&value)
+    }
+}
+
+impl From<NonEmptyText> for String {
+    fn from(value: NonEmptyText) -> Self {
+        value.0
+    }
+}
+
+/// A one-based source line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct LineNumber(NonZeroUsize);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct RepositorySlug {
-    pub owner: String,
-    pub name: String,
+    owner: String,
+    name: String,
+}
+
+impl RepositorySlug {
+    pub fn new(owner: &str, name: &str) -> Result<Self, String> {
+        if valid_segment(owner) && valid_segment(name) {
+            Ok(Self {
+                owner: owner.to_owned(),
+                name: name.to_owned(),
+            })
+        } else {
+            Err("Choose a repository in owner/name format.".to_owned())
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        let (owner, name) = value
+            .split_once('/')
+            .ok_or_else(|| "Choose a repository in owner/name format.".to_owned())?;
+        Self::new(owner, name)
+    }
+
+    pub fn owner(&self) -> &str {
+        &self.owner
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+/// GitHub owner and repository names. The first character must be
+/// alphanumeric so a name can never be read as a command-line flag.
+fn valid_segment(value: &str) -> bool {
+    value
+        .chars()
+        .next()
+        .is_some_and(|first| first.is_ascii_alphanumeric())
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
+        })
 }
 
 impl TryFrom<String> for RepositorySlug {
@@ -19,7 +195,7 @@ impl TryFrom<String> for RepositorySlug {
 
 impl From<RepositorySlug> for String {
     fn from(value: RepositorySlug) -> Self {
-        format!("{}/{}", value.owner, value.name)
+        value.to_string()
     }
 }
 
@@ -29,43 +205,13 @@ impl fmt::Display for RepositorySlug {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct BranchName(String);
-
-impl BranchName {
-    pub fn parse(value: String) -> Result<Self, String> {
-        if value.is_empty() || value.contains(['\0', '\n', '\r']) {
-            Err("Choose a valid branch.".to_owned())
-        } else {
-            Ok(Self(value))
-        }
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl TryFrom<String> for BranchName {
-    type Error = String;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::parse(value)
-    }
-}
-
-impl From<BranchName> for String {
-    fn from(value: BranchName) -> Self {
-        value.0
-    }
-}
-
+/// Which configured root owns a local repository: the user's checkout root or
+/// Hunker's disposable clone cache.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum CloneDestination {
-    Temporary,
+pub enum RepositoryRoot {
     Configured,
+    Temporary,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,177 +222,109 @@ pub enum SearchMode {
     Fuzzy,
 }
 
-impl RepositorySlug {
-    pub fn parse(value: &str) -> Result<Self, String> {
-        let Some((owner, name)) = value.split_once('/') else {
-            return Err("Choose a repository in owner/name format.".to_owned());
-        };
-        if owner.is_empty() || name.is_empty() || name.contains('/') {
-            return Err("Choose a repository in owner/name format.".to_owned());
-        }
-        Ok(Self {
-            owner: owner.to_owned(),
-            name: name.to_owned(),
-        })
-    }
+/// The pre-image or post-image of a change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    Old,
+    New,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct Oid(String);
-
-impl Oid {
-    pub fn parse(value: String) -> Result<Self, String> {
-        if value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            Ok(Self(value))
-        } else {
-            Err("A full 40-character Git object ID is required.".to_owned())
-        }
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl TryFrom<String> for Oid {
-    type Error = String;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::parse(value)
-    }
-}
-
-impl From<Oid> for String {
-    fn from(value: Oid) -> Self {
-        value.0
-    }
-}
-
-impl fmt::Display for Oid {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(formatter)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct RelativePath(String);
-
-impl RelativePath {
-    pub fn parse(value: String) -> Result<Self, String> {
-        let valid = !value.is_empty()
-            && !value.starts_with('/')
-            && !value.contains('\0')
-            && value
-                .split('/')
-                .all(|segment| !matches!(segment, "" | "." | ".."));
-        if valid {
-            Ok(Self(value))
-        } else {
-            Err("A repository-relative file path is required.".to_owned())
-        }
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl TryFrom<String> for RelativePath {
-    type Error = String;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::parse(value)
-    }
-}
-
-impl From<RelativePath> for String {
-    fn from(value: RelativePath) -> Self {
-        value.0
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "status", rename_all = "lowercase")]
 pub enum FileStatus {
     Modified,
     Added,
     Deleted,
-    Renamed,
+    Renamed {
+        #[serde(rename = "previousPath")]
+        previous_path: RelativePath,
+    },
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileChange {
-    pub path: String,
-    pub previous_path: Option<String>,
+    pub path: RelativePath,
+    #[serde(flatten)]
     pub status: FileStatus,
     pub additions: usize,
     pub deletions: usize,
     pub patch: String,
 }
 
+impl FileChange {
+    /// The path this change occupies on one side, or `None` when that side
+    /// does not exist (the old side of an addition or new side of a deletion).
+    pub fn path_on(&self, side: Side) -> Option<&RelativePath> {
+        path_on(&self.path, &self.status, side)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct FilePair {
-    pub path: String,
-    pub previous_path: Option<String>,
+    pub path: RelativePath,
     pub status: FileStatus,
     pub old_text: String,
     pub new_text: String,
 }
 
+fn path_on<'a>(
+    path: &'a RelativePath,
+    status: &'a FileStatus,
+    side: Side,
+) -> Option<&'a RelativePath> {
+    match (status, side) {
+        (FileStatus::Added, Side::Old) | (FileStatus::Deleted, Side::New) => None,
+        (FileStatus::Renamed { previous_path }, Side::Old) => Some(previous_path),
+        (FileStatus::Modified | FileStatus::Deleted, Side::Old)
+        | (FileStatus::Modified | FileStatus::Added | FileStatus::Renamed { .. }, Side::New) => {
+            Some(path)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewRevision {
+    pub base_oid: Oid,
+    pub head_oid: Oid,
+    pub head_ref: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "_tag")]
-pub enum ReviewBacking {
-    Local {
-        #[serde(rename = "baseOid")]
-        base_oid: String,
-        #[serde(rename = "headOid")]
-        head_oid: String,
-        #[serde(rename = "headRef")]
-        head_ref: String,
-        path: String,
-    },
-    GitHub {
-        #[serde(rename = "baseOid")]
-        base_oid: String,
-        #[serde(rename = "headOid")]
-        head_oid: String,
-        #[serde(rename = "headRef")]
-        head_ref: String,
-    },
+pub enum ReviewSource {
+    Local { path: String },
+    GitHub,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewDocument {
     pub title: String,
-    pub repository: String,
-    pub number: String,
     pub author: String,
     pub base: String,
     pub head: String,
-    pub url: String,
-    pub files: Vec<FileChange>,
-    pub backing: ReviewBacking,
+    pub files: Arc<Vec<FileChange>>,
+    pub revision: ReviewRevision,
+    pub source: ReviewSource,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PullCommit {
-    pub sha: String,
+    pub sha: Oid,
     pub message: String,
     pub author: String,
-    pub avatar_url: String,
-    pub authored_at: String,
+    pub avatar_url: Option<String>,
+    pub authored_at: Option<String>,
     pub html_url: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct LocalGitRepository {
     pub path: PathBuf,
-    pub kind: &'static str,
+    pub root: RepositoryRoot,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -258,6 +336,12 @@ pub struct SourceRange {
     pub end_column: usize,
 }
 
+impl SourceRange {
+    pub fn line_count(&self) -> usize {
+        self.end_line.saturating_sub(self.start_line) + 1
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,20 +351,54 @@ mod tests {
         let repository = serde_json::from_str::<RepositorySlug>(r#""acme/demo""#).unwrap();
         assert_eq!(repository.to_string(), "acme/demo");
         assert!(serde_json::from_str::<RepositorySlug>(r#""acme/demo/extra""#).is_err());
+        assert!(serde_json::from_str::<RepositorySlug>(r#""acme/..""#).is_err());
 
         let branch = serde_json::from_str::<BranchName>(r#""feature/typed-boundaries""#).unwrap();
         assert_eq!(branch.as_str(), "feature/typed-boundaries");
-        assert!(serde_json::from_str::<BranchName>(r#"""#).is_err());
+        assert!(serde_json::from_str::<BranchName>(r#""""#).is_err());
 
         assert_eq!(
-            serde_json::from_str::<CloneDestination>(r#""temporary""#).unwrap(),
-            CloneDestination::Temporary
+            serde_json::from_str::<RepositoryRoot>(r#""temporary""#).unwrap(),
+            RepositoryRoot::Temporary
         );
-        assert!(serde_json::from_str::<CloneDestination>(r#""workspace""#).is_err());
+        assert!(serde_json::from_str::<RepositoryRoot>(r#""workspace""#).is_err());
         assert_eq!(
             serde_json::from_str::<SearchMode>(r#""regex""#).unwrap(),
             SearchMode::Regex
         );
         assert!(serde_json::from_str::<SearchMode>(r#""semantic""#).is_err());
+        assert!(serde_json::from_str::<LineNumber>("0").is_err());
+        assert_eq!(
+            serde_json::from_str::<NonEmptyText>(r#""  keep this typed  ""#)
+                .unwrap()
+                .as_str(),
+            "keep this typed"
+        );
+        assert!(serde_json::from_str::<NonEmptyText>(r#""   ""#).is_err());
+    }
+
+    #[test]
+    fn renamed_files_carry_their_previous_path_on_the_wire() {
+        let change = FileChange {
+            path: RelativePath::parse("src/new.rs").unwrap(),
+            status: FileStatus::Renamed {
+                previous_path: RelativePath::parse("src/old.rs").unwrap(),
+            },
+            additions: 0,
+            deletions: 0,
+            patch: String::new(),
+        };
+        assert_eq!(
+            serde_json::to_value(&change).unwrap(),
+            serde_json::json!({
+                "path": "src/new.rs",
+                "status": "renamed",
+                "previousPath": "src/old.rs",
+                "additions": 0,
+                "deletions": 0,
+                "patch": ""
+            })
+        );
+        assert_eq!(change.path_on(Side::Old).unwrap().as_str(), "src/old.rs");
     }
 }

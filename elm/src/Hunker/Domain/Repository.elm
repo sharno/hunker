@@ -1,39 +1,58 @@
 module Hunker.Domain.Repository exposing
     ( Branch
+    , BranchPresence(..)
     , Checkout(..)
     , Commit
     , Commits
     , File
     , FileContent
+    , History(..)
     , PullRequest
+    , PullRequestState(..)
+    , PullRequestStatus(..)
     , PullRequestsPage
     , RemoteState(..)
     , Repository
     , RepositoryCatalog
+    , RepositoryRoot(..)
     , SearchMatch
+    , SearchMode(..)
     , SearchResults
     , SourceControlStatus
     , catalogDecoder
+    , checkoutBranch
+    , checkoutOid
     , cloneDecoder
     , commitsDecoder
     , fileContentDecoder
     , filesDecoder
+    , pullRequestStateFromString
+    , pullRequestStateToString
     , pullRequestsDecoder
     , pulledDecoder
+    , repositoryRootToString
     , searchDecoder
+    , searchModeFromString
+    , searchModeToString
     , sourceControlDecoder
-    , switchedDecoder
     )
 
+import Hunker.Decode exposing (andMap)
+import Hunker.Domain.Git as Git exposing (BranchName, Oid)
 import Hunker.Domain.Source as Source exposing (Presentation)
 import Json.Decode as Decode exposing (Decoder)
+
+
+type RepositoryRoot
+    = Configured
+    | Temporary
 
 
 type alias Repository =
     { owner : String
     , name : String
     , path : String
-    , source : String
+    , source : RepositoryRoot
     }
 
 
@@ -47,7 +66,6 @@ type alias RepositoryCatalog =
 type alias File =
     { path : String
     , size : Int
-    , gitStatus : String
     }
 
 
@@ -67,7 +85,6 @@ type alias SearchMatch =
     , contextBefore : List String
     , contextAfter : List String
     , ranges : List ( Int, Int )
-    , definition : Bool
     }
 
 
@@ -77,9 +94,15 @@ type alias SearchResults =
     }
 
 
+type SearchMode
+    = LiteralSearch
+    | RegexSearch
+    | FuzzySearch
+
+
 type alias Commit =
-    { sha : String
-    , parents : List String
+    { sha : Oid
+    , parents : List Oid
     , authorName : String
     , authorEmail : String
     , authoredAt : String
@@ -87,20 +110,37 @@ type alias Commit =
     }
 
 
+type History
+    = ShallowHistory
+    | CompleteHistory
+
+
 type alias Commits =
-    { ref : String
-    , shallow : Bool
+    { ref : Oid
+    , history : History
     , commits : List Commit
     }
+
+
+type PullRequestState
+    = OpenPulls
+    | ClosedPulls
+    | AllPulls
+
+
+type PullRequestStatus
+    = DraftPull
+    | OpenPull
+    | MergedPull
+    | ClosedPull
 
 
 type alias PullRequest =
     { number : Int
     , title : String
     , author : String
-    , avatarUrl : String
-    , state : String
-    , draft : Bool
+    , avatarUrl : Maybe String
+    , status : PullRequestStatus
     , updatedAt : String
     , base : String
     , head : String
@@ -109,24 +149,29 @@ type alias PullRequest =
 
 
 type alias PullRequestsPage =
-    { state : String
+    { state : PullRequestState
     , page : Int
     , hasMore : Bool
     , pullRequests : List PullRequest
     }
 
 
+type BranchPresence
+    = LocalBranch
+    | RemoteBranch
+    | LocalAndRemoteBranch
+
+
 type alias Branch =
-    { name : String
-    , local : Bool
-    , remote : Bool
+    { name : BranchName
+    , presence : BranchPresence
     }
 
 
 type Checkout
-    = TrackingBranch { name : String, oid : String, upstream : String, ahead : Int, behind : Int }
-    | UntrackedBranch { name : String, oid : String }
-    | DetachedHead { oid : String }
+    = TrackingBranch { name : BranchName, oid : Oid, upstream : String, ahead : Int, behind : Int }
+    | UntrackedBranch { name : BranchName, oid : Oid }
+    | DetachedHead { oid : Oid }
 
 
 type RemoteState
@@ -145,6 +190,101 @@ type alias SourceControlStatus =
     }
 
 
+checkoutOid : Checkout -> Oid
+checkoutOid checkout =
+    case checkout of
+        TrackingBranch branch ->
+            branch.oid
+
+        UntrackedBranch branch ->
+            branch.oid
+
+        DetachedHead head ->
+            head.oid
+
+
+checkoutBranch : Checkout -> Maybe BranchName
+checkoutBranch checkout =
+    case checkout of
+        TrackingBranch branch ->
+            Just branch.name
+
+        UntrackedBranch branch ->
+            Just branch.name
+
+        DetachedHead _ ->
+            Nothing
+
+
+repositoryRoots : List ( String, RepositoryRoot )
+repositoryRoots =
+    [ ( "configured", Configured ), ( "temporary", Temporary ) ]
+
+
+repositoryRootToString : RepositoryRoot -> String
+repositoryRootToString root =
+    case root of
+        Configured ->
+            "configured"
+
+        Temporary ->
+            "temporary"
+
+
+searchModes : List ( String, SearchMode )
+searchModes =
+    [ ( "literal", LiteralSearch ), ( "regex", RegexSearch ), ( "fuzzy", FuzzySearch ) ]
+
+
+searchModeToString : SearchMode -> String
+searchModeToString mode =
+    case mode of
+        LiteralSearch ->
+            "literal"
+
+        RegexSearch ->
+            "regex"
+
+        FuzzySearch ->
+            "fuzzy"
+
+
+searchModeFromString : String -> Maybe SearchMode
+searchModeFromString value =
+    fromTable value searchModes
+
+
+pullRequestStates : List ( String, PullRequestState )
+pullRequestStates =
+    [ ( "open", OpenPulls ), ( "closed", ClosedPulls ), ( "all", AllPulls ) ]
+
+
+pullRequestStateToString : PullRequestState -> String
+pullRequestStateToString state =
+    case state of
+        OpenPulls ->
+            "open"
+
+        ClosedPulls ->
+            "closed"
+
+        AllPulls ->
+            "all"
+
+
+pullRequestStateFromString : String -> Maybe PullRequestState
+pullRequestStateFromString value =
+    fromTable value pullRequestStates
+
+
+fromTable : String -> List ( String, a ) -> Maybe a
+fromTable key table =
+    table
+        |> List.filter (Tuple.first >> (==) key)
+        |> List.head
+        |> Maybe.map Tuple.second
+
+
 catalogDecoder : Decoder RepositoryCatalog
 catalogDecoder =
     Decode.map3 RepositoryCatalog
@@ -159,7 +299,7 @@ repositoryDecoder =
         (Decode.field "owner" Decode.string)
         (Decode.field "name" Decode.string)
         (Decode.field "path" Decode.string)
-        (Decode.field "source" Decode.string)
+        (Decode.field "source" (Hunker.Decode.enum "repository root" repositoryRoots))
 
 
 filesDecoder : Decoder (List File)
@@ -169,10 +309,9 @@ filesDecoder =
 
 fileDecoder : Decoder File
 fileDecoder =
-    Decode.map3 File
+    Decode.map2 File
         (Decode.field "path" Decode.string)
         (Decode.field "size" Decode.int)
-        (Decode.field "gitStatus" Decode.string)
 
 
 fileContentDecoder : Decoder FileContent
@@ -193,7 +332,7 @@ searchDecoder =
 
 searchMatchDecoder : Decoder SearchMatch
 searchMatchDecoder =
-    Decode.map8 SearchMatch
+    Decode.map7 SearchMatch
         (Decode.field "path" Decode.string)
         (Decode.field "line" Decode.int)
         (Decode.field "column" Decode.int)
@@ -201,7 +340,6 @@ searchMatchDecoder =
         (Decode.field "contextBefore" (Decode.list Decode.string))
         (Decode.field "contextAfter" (Decode.list Decode.string))
         (Decode.field "ranges" (Decode.list pairDecoder))
-        (Decode.field "definition" Decode.bool)
 
 
 pairDecoder : Decoder ( Int, Int )
@@ -214,16 +352,16 @@ pairDecoder =
 commitsDecoder : Decoder Commits
 commitsDecoder =
     Decode.map3 Commits
-        (Decode.field "ref" Decode.string)
-        (Decode.field "shallow" Decode.bool)
+        (Decode.field "ref" Git.oidDecoder)
+        (Decode.field "history" (Hunker.Decode.enum "history" [ ( "shallow", ShallowHistory ), ( "complete", CompleteHistory ) ]))
         (Decode.field "commits" (Decode.list commitDecoder))
 
 
 commitDecoder : Decoder Commit
 commitDecoder =
     Decode.map6 Commit
-        (Decode.field "sha" Decode.string)
-        (Decode.field "parents" (Decode.list Decode.string))
+        (Decode.field "sha" Git.oidDecoder)
+        (Decode.field "parents" (Decode.list Git.oidDecoder))
         (Decode.field "authorName" Decode.string)
         (Decode.field "authorEmail" Decode.string)
         (Decode.field "authoredAt" Decode.string)
@@ -233,7 +371,7 @@ commitDecoder =
 pullRequestsDecoder : Decoder PullRequestsPage
 pullRequestsDecoder =
     Decode.map4 PullRequestsPage
-        (Decode.field "state" Decode.string)
+        (Decode.field "state" (Hunker.Decode.enum "pull request state" pullRequestStates))
         (Decode.field "page" Decode.int)
         (Decode.field "hasMore" Decode.bool)
         (Decode.field "pullRequests" (Decode.list pullRequestDecoder))
@@ -241,45 +379,26 @@ pullRequestsDecoder =
 
 pullRequestDecoder : Decoder PullRequest
 pullRequestDecoder =
-    Decode.map8
-        (\number title author avatarUrl state draft updatedAt base ->
-            { number = number
-            , title = title
-            , author = author
-            , avatarUrl = avatarUrl
-            , state = state
-            , draft = draft
-            , updatedAt = updatedAt
-            , base = base
-            , head = ""
-            , labels = []
-            }
-        )
-        (Decode.field "number" Decode.int)
-        (Decode.field "title" Decode.string)
-        (Decode.field "author" Decode.string)
-        (Decode.field "avatarUrl" Decode.string)
-        (Decode.field "state" Decode.string)
-        (Decode.field "draft" Decode.bool)
-        (Decode.field "updatedAt" Decode.string)
-        (Decode.field "base" Decode.string)
-        |> Decode.andThen
-            (\partial ->
-                Decode.map2
-                    (\head labels -> { partial | head = head, labels = labels })
-                    (Decode.field "head" Decode.string)
-                    (Decode.field "labels" (Decode.list Decode.string))
+    Decode.succeed PullRequest
+        |> andMap (Decode.field "number" Decode.int)
+        |> andMap (Decode.field "title" Decode.string)
+        |> andMap (Decode.field "author" Decode.string)
+        |> andMap (Decode.field "avatarUrl" (Decode.nullable Decode.string))
+        |> andMap
+            (Decode.field "status"
+                (Hunker.Decode.enum "pull request status"
+                    [ ( "draft", DraftPull ), ( "open", OpenPull ), ( "merged", MergedPull ), ( "closed", ClosedPull ) ]
+                )
             )
+        |> andMap (Decode.field "updatedAt" Decode.string)
+        |> andMap (Decode.field "base" Decode.string)
+        |> andMap (Decode.field "head" Decode.string)
+        |> andMap (Decode.field "labels" (Decode.list Decode.string))
 
 
 sourceControlDecoder : Decoder SourceControlStatus
 sourceControlDecoder =
     Decode.field "status" sourceControlStatusDecoder
-
-
-switchedDecoder : Decoder SourceControlStatus
-switchedDecoder =
-    sourceControlDecoder
 
 
 pulledDecoder : Decoder Int
@@ -294,17 +413,7 @@ cloneDecoder =
 
 sourceControlStatusDecoder : Decoder SourceControlStatus
 sourceControlStatusDecoder =
-    Decode.map7
-        (\path checkout branches staged unstaged untracked remote ->
-            { path = path
-            , checkout = checkout
-            , branches = branches
-            , staged = staged
-            , unstaged = unstaged
-            , untracked = untracked
-            , remote = remote
-            }
-        )
+    Decode.map7 SourceControlStatus
         (Decode.field "path" Decode.string)
         (Decode.field "checkout" checkoutDecoder)
         (Decode.field "branches" (Decode.list branchDecoder))
@@ -316,63 +425,49 @@ sourceControlStatusDecoder =
 
 branchDecoder : Decoder Branch
 branchDecoder =
-    Decode.map3 Branch
-        (Decode.field "name" Decode.string)
-        (Decode.field "local" Decode.bool)
-        (Decode.field "remote" Decode.bool)
+    Decode.map2 Branch
+        (Decode.field "name" Git.branchDecoder)
+        (Decode.field "presence"
+            (Hunker.Decode.enum "branch presence"
+                [ ( "local", LocalBranch ), ( "remote", RemoteBranch ), ( "both", LocalAndRemoteBranch ) ]
+            )
+        )
 
 
 checkoutDecoder : Decoder Checkout
 checkoutDecoder =
-    Decode.field "_tag" Decode.string
-        |> Decode.andThen
-            (\tag ->
-                case tag of
-                    "TrackingBranch" ->
-                        Decode.map5
-                            (\name oid upstream ahead behind ->
-                                TrackingBranch
-                                    { name = name
-                                    , oid = oid
-                                    , upstream = upstream
-                                    , ahead = ahead
-                                    , behind = behind
-                                    }
-                            )
-                            (Decode.field "name" Decode.string)
-                            (Decode.field "oid" Decode.string)
-                            (Decode.field "upstream" Decode.string)
-                            (Decode.field "ahead" Decode.int)
-                            (Decode.field "behind" Decode.int)
-
-                    "UntrackedBranch" ->
-                        Decode.map2 (\name oid -> UntrackedBranch { name = name, oid = oid })
-                            (Decode.field "name" Decode.string)
-                            (Decode.field "oid" Decode.string)
-
-                    "DetachedHead" ->
-                        Decode.map (\oid -> DetachedHead { oid = oid })
-                            (Decode.field "oid" Decode.string)
-
-                    _ ->
-                        Decode.fail ("Unknown checkout state: " ++ tag)
-            )
+    Hunker.Decode.tagged "_tag"
+        "checkout state"
+        [ ( "TrackingBranch"
+          , Decode.map5
+                (\name oid upstream ahead behind ->
+                    TrackingBranch { name = name, oid = oid, upstream = upstream, ahead = ahead, behind = behind }
+                )
+                (Decode.field "name" Git.branchDecoder)
+                (Decode.field "oid" Git.oidDecoder)
+                (Decode.field "upstream" Decode.string)
+                (Decode.field "ahead" Decode.int)
+                (Decode.field "behind" Decode.int)
+          )
+        , ( "UntrackedBranch"
+          , Decode.map2 (\name oid -> UntrackedBranch { name = name, oid = oid })
+                (Decode.field "name" Git.branchDecoder)
+                (Decode.field "oid" Git.oidDecoder)
+          )
+        , ( "DetachedHead"
+          , Decode.map (\oid -> DetachedHead { oid = oid }) (Decode.field "oid" Git.oidDecoder)
+          )
+        ]
 
 
 remoteDecoder : Decoder RemoteState
 remoteDecoder =
-    Decode.field "_tag" Decode.string
-        |> Decode.andThen
-            (\tag ->
-                case tag of
-                    "RemoteCurrent" ->
-                        Decode.map RemoteCurrent (Decode.field "checkedAt" Decode.int)
-
-                    "RemoteUnavailable" ->
-                        Decode.map2 RemoteUnavailable
-                            (Decode.field "checkedAt" Decode.int)
-                            (Decode.field "error" Decode.string)
-
-                    _ ->
-                        Decode.fail ("Unknown remote state: " ++ tag)
-            )
+    Hunker.Decode.tagged "_tag"
+        "remote state"
+        [ ( "RemoteCurrent", Decode.map RemoteCurrent (Decode.field "checkedAt" Decode.int) )
+        , ( "RemoteUnavailable"
+          , Decode.map2 RemoteUnavailable
+                (Decode.field "checkedAt" Decode.int)
+                (Decode.field "error" Decode.string)
+          )
+        ]

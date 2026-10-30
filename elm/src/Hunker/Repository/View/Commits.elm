@@ -1,10 +1,11 @@
 module Hunker.Repository.View.Commits exposing (Config, State(..), view)
 
-import Html exposing (Html, button, code, div, h1, h2, header, p, section, span, strong, text)
+import Html exposing (Html, button, code, div, h2, header, p, section, span, strong, text)
 import Html.Attributes exposing (class, type_)
 import Html.Events exposing (onClick)
-import Hunker.ApiError as ApiError exposing (ApiError)
-import Hunker.Domain.Repository exposing (Commit, Commits)
+import Hunker.ApiError exposing (ApiError)
+import Hunker.Domain.Git as Git
+import Hunker.Domain.Repository exposing (Commit, Commits, History(..))
 import Hunker.Remote exposing (Remote(..))
 import Hunker.Repository.View.Local as Local
 
@@ -33,20 +34,21 @@ view config =
                     Local.pageState "Loading commits…" "Reading immutable OIDs from the local checkout."
 
                 Failure _ error ->
-                    section [ class "page-state is-error" ] [ h1 [] [ text "Could not load commits" ], p [] [ text (ApiError.message error) ] ]
+                    Local.errorState "Could not load commits" error
 
                 Success _ data ->
                     section [ class "commits-browser repository-commits-browser" ]
                         [ header [ class "commits-heading" ]
-                            [ div [] [ h2 [] [ text ("Commits on " ++ Maybe.withDefault data.ref config.reference) ], p [] [ text "Select an immutable commit to open its diff." ] ]
+                            [ div [] [ h2 [] [ text ("Commits on " ++ Maybe.withDefault (Git.oidToString data.ref) config.reference) ], p [] [ text "Select an immutable commit to open its diff." ] ]
                             , span []
                                 [ text
                                     (String.fromInt (List.length data.commits)
-                                        ++ (if data.shallow then
-                                                " · shallow"
+                                        ++ (case data.history of
+                                                ShallowHistory ->
+                                                    " · shallow"
 
-                                            else
-                                                ""
+                                                CompleteHistory ->
+                                                    ""
                                            )
                                     )
                                 ]
@@ -55,7 +57,7 @@ view config =
                         ]
 
                 NotAsked ->
-                    text ""
+                    Local.pageState "Loading commits…" "Reading immutable OIDs from the local checkout."
 
 
 rowView : (Commit -> msg) -> Commit -> Html msg
@@ -67,7 +69,7 @@ rowView selectedCommit commit =
             , span [] [ text (commit.authorName ++ " · " ++ commit.authoredAt) ]
             ]
         , span [ class "commit-action" ]
-            [ code [ class "commit-sha" ] [ text (String.left 7 commit.sha) ]
+            [ code [ class "commit-sha" ] [ text (String.left 7 (Git.oidToString commit.sha)) ]
             , span [ class "commit-open-arrow" ] [ text "→" ]
             ]
         ]

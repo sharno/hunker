@@ -1,5 +1,7 @@
 module Hunker.Repository.SourceControl exposing
     ( Activity(..)
+    , Operation(..)
+    , Outcome(..)
     , Snapshot
     , State(..)
     , busy
@@ -8,29 +10,45 @@ module Hunker.Repository.SourceControl exposing
     )
 
 import Hunker.ApiError exposing (ApiError)
+import Hunker.Domain.Git exposing (BranchName, RepositoryId)
 import Hunker.Domain.Repository exposing (Checkout(..), SourceControlStatus)
 
 
+{-| `Unavailable` is only the initial discovery failure; a failed operation
+on a known checkout keeps its snapshot.
+-}
 type State
-    = Loading String
-    | Unavailable String ApiError
+    = Unavailable RepositoryId ApiError
     | Ready Snapshot
 
 
 type alias Snapshot =
-    { repository : String
+    { repository : RepositoryId
     , status : SourceControlStatus
     , activity : Activity
     }
 
 
+type Operation
+    = RefreshOperation
+    | SwitchOperation BranchName
+    | PullOperation
+
+
+type Outcome
+    = Refreshed
+    | Switched BranchName
+    | Pulled Int
+
+
 type Activity
     = Idle
     | Refreshing
-    | BranchSwitching String
+    | BranchSwitching BranchName
     | PullInFlight
     | PullSynchronizing Int
-    | Succeeded String
+    | Succeeded Outcome
+    | Failed Operation ApiError
 
 
 busy : Activity -> Bool
@@ -52,6 +70,9 @@ busy activity =
             False
 
         Succeeded _ ->
+            False
+
+        Failed _ _ ->
             False
 
 

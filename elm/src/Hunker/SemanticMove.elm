@@ -1,4 +1,4 @@
-module Hunker.SemanticMove exposing (Endpoint(..), anchor, containsLine, tone)
+module Hunker.SemanticMove exposing (Endpoint(..), anchor, opposite, tone)
 
 import Bitwise
 import Hunker.Domain.Review exposing (MovedBlock)
@@ -28,26 +28,14 @@ tone move =
     modBy 3 (stableHash (key move))
 
 
-containsLine : String -> Int -> Endpoint -> MovedBlock -> Bool
-containsLine path line endpoint move =
+opposite : Endpoint -> Endpoint
+opposite endpoint =
     case endpoint of
         Source ->
-            path
-                == move.fromPath
-                && line
-                >= move.fromLine
-                && line
-                < move.fromLine
-                + move.fromLineCount
+            Destination
 
         Destination ->
-            path
-                == move.toPath
-                && line
-                >= move.toLine
-                && line
-                < move.toLine
-                + move.toLineCount
+            Source
 
 
 key : MovedBlock -> String

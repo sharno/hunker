@@ -1,11 +1,15 @@
 module Hunker.Effect exposing
-    ( Effect(..)
+    ( Body(..)
+    , Effect(..)
     , HttpRequest
+    , Method(..)
     , batch
     , get
     , map
+    , methodName
     , none
     , perform
+    , responseToMessage
     , send
     )
 
@@ -14,6 +18,7 @@ import Browser.Navigation as Navigation
 import Http
 import Hunker.ApiError as ApiError exposing (ApiError)
 import Json.Decode as Decode
+import Json.Encode as Encode
 import Process
 import Task
 
@@ -30,10 +35,23 @@ type Effect msg
     | After Float msg
 
 
+type Method
+    = Get
+    | Post
+    | Put
+
+
+{-| Request bodies stay inspectable so tests can assert on payloads.
+-}
+type Body
+    = EmptyBody
+    | JsonBody Encode.Value
+
+
 type alias HttpRequest msg =
-    { method : String
+    { method : Method
     , url : String
-    , body : Http.Body
+    , body : Body
     , decoder : Decode.Decoder msg
     , onError : ApiError -> msg
     }
@@ -46,49 +64,83 @@ none =
 
 batch : List (Effect msg) -> Effect msg
 batch effects =
-    effects
-        |> List.filter
-            (\effect ->
-                case effect of
-                    None ->
-                        False
+    case List.filter isSome effects of
+        [] ->
+            None
 
-                    _ ->
-                        True
-            )
-        |> (\remaining ->
-                case remaining of
-                    [] ->
-                        None
+        [ only ] ->
+            only
 
-                    [ only ] ->
-                        only
+        remaining ->
+            Batch remaining
 
-                    _ ->
-                        Batch remaining
-           )
+
+{-| Effects hold functions, so they are matched rather than compared.
+-}
+isSome : Effect msg -> Bool
+isSome effect =
+    case effect of
+        None ->
+            False
+
+        Batch _ ->
+            True
+
+        Request _ ->
+            True
+
+        PushUrl _ ->
+            True
+
+        ReplaceUrl _ ->
+            True
+
+        LoadExternal _ ->
+            True
+
+        Focus _ _ ->
+            True
+
+        ScrollIntoView _ _ ->
+            True
+
+        After _ _ ->
+            True
 
 
 get : String -> Decode.Decoder msg -> (ApiError -> msg) -> Effect msg
 get url decoder onError =
     Request
-        { method = "GET"
+        { method = Get
         , url = url
-        , body = Http.emptyBody
+        , body = EmptyBody
         , decoder = decoder
         , onError = onError
         }
 
 
-send : String -> String -> Http.Body -> Decode.Decoder msg -> (ApiError -> msg) -> Effect msg
+send : Method -> String -> Encode.Value -> Decode.Decoder msg -> (ApiError -> msg) -> Effect msg
 send method url body decoder onError =
     Request
         { method = method
         , url = url
-        , body = body
+        , body = JsonBody body
         , decoder = decoder
         , onError = onError
         }
+
+
+methodName : Method -> String
+methodName method =
+    case method of
+        Get ->
+            "GET"
+
+        Post ->
+            "POST"
+
+        Put ->
+            "PUT"
 
 
 map : (a -> b) -> Effect a -> Effect b
@@ -139,11 +191,17 @@ perform key effect =
 
         Request request ->
             Http.request
-                { method = request.method
+                { method = methodName request.method
                 , headers = []
                 , url = request.url
-                , body = request.body
-                , expect = expectJson request.decoder request.onError
+                , body =
+                    case request.body of
+                        EmptyBody ->
+                            Http.emptyBody
+
+                        JsonBody value ->
+                            Http.jsonBody value
+                , expect = Http.expectStringResponse settled (responseToMessage request >> Ok)
                 , timeout = Nothing
                 , tracker = Nothing
                 }
@@ -170,11 +228,23 @@ perform key effect =
                 |> Task.perform (always message)
 
 
+settled : Result msg msg -> msg
+settled result =
+    case result of
+        Ok message ->
+            message
+
+        Err message ->
+            message
+
+
 scrollIntoView : String -> Task.Task Browser.Dom.Error ()
 scrollIntoView id =
     let
         align element =
             let
+                -- Matches the sticky app bar plus review toolbar heights in
+                -- styles.css at the narrow and wide breakpoints.
                 stickyOffset =
                     if element.viewport.width <= 760 then
                         56
@@ -184,6 +254,8 @@ scrollIntoView id =
             in
             Browser.Dom.setViewport element.viewport.x (max 0 (element.element.y - stickyOffset))
     in
+    -- Align twice: lazily rendered chunks above the target can change height
+    -- after the first scroll brings them into view.
     Browser.Dom.getElement id
         |> Task.andThen align
         |> Task.andThen (\_ -> Process.sleep 0)
@@ -191,43 +263,32 @@ scrollIntoView id =
         |> Task.andThen align
 
 
-expectJson : Decode.Decoder msg -> (ApiError -> msg) -> Http.Expect msg
-expectJson decoder onError =
-    Http.expectStringResponse
-        (\result ->
-            case result of
+{-| Interprets an HTTP response for both the browser runtime and the
+simulated test runtime, so non-2xx JSON bodies decode into `ApiError` once.
+-}
+responseToMessage : HttpRequest msg -> Http.Response String -> msg
+responseToMessage request response =
+    case response of
+        Http.BadUrl_ url ->
+            request.onError (ApiError.transport ("Invalid API URL: " ++ url))
+
+        Http.Timeout_ ->
+            request.onError (ApiError.transport "The Hunker API timed out.")
+
+        Http.NetworkError_ ->
+            request.onError (ApiError.transport "Could not reach the local Hunker API.")
+
+        Http.BadStatus_ metadata body ->
+            request.onError
+                (Decode.decodeString ApiError.decoder body
+                    |> Result.withDefault
+                        (ApiError.unexpectedResponse ("The Hunker API returned " ++ String.fromInt metadata.statusCode ++ "."))
+                )
+
+        Http.GoodStatus_ _ body ->
+            case Decode.decodeString request.decoder body of
                 Ok message ->
                     message
 
                 Err error ->
-                    onError error
-        )
-    <|
-        \response ->
-            case response of
-                Http.BadUrl_ url ->
-                    Err (ApiError.transport ("Invalid API URL: " ++ url))
-
-                Http.Timeout_ ->
-                    Err (ApiError.transport "The Hunker API timed out.")
-
-                Http.NetworkError_ ->
-                    Err (ApiError.transport "Could not reach the local Hunker API.")
-
-                Http.BadStatus_ metadata body ->
-                    case Decode.decodeString ApiError.decoder body of
-                        Ok apiError ->
-                            Err apiError
-
-                        Err _ ->
-                            Err
-                                (ApiError.unexpectedResponse
-                                    ("The Hunker API returned " ++ String.fromInt metadata.statusCode ++ ".")
-                                )
-
-                Http.GoodStatus_ _ body ->
-                    Decode.decodeString decoder body
-                        |> Result.mapError
-                            (Decode.errorToString
-                                >> (\detail -> ApiError.unexpectedResponse ("The Hunker API returned unexpected data: " ++ detail))
-                            )
+                    request.onError (ApiError.unexpectedResponse ("The Hunker API returned unexpected data: " ++ Decode.errorToString error))

@@ -1,11 +1,11 @@
 module Hunker.Review.DiffView exposing
     ( FileState
+    , Filter(..)
     , FullFileRequest
     , Model
     , SearchMode(..)
     , changeFilter
     , closeOptions
-    , collapseFolder
     , fileFailed
     , fileFullFile
     , fileIsCollapsed
@@ -15,14 +15,14 @@ module Hunker.Review.DiffView exposing
     , fileLoaded
     , fileState
     , filter
-    , filterMode
+    , filterText
     , init
     , isFolderCollapsed
-    , isReviewed
+    , matches
     , optionsOpen
     , requestPath
-    , requestUrl
     , revealFile
+    , searchMode
     , selectSearchMode
     , toggleFile
     , toggleFolder
@@ -36,8 +36,10 @@ module Hunker.Review.DiffView exposing
 import Dict exposing (Dict)
 import Hunker.ApiError exposing (ApiError)
 import Hunker.Domain.Review exposing (FullFile)
+import Hunker.PreparedDiff exposing (PreparedFile)
 import Hunker.Remote exposing (Remote(..))
 import Hunker.Review.Session as Session
+import Regex exposing (Regex)
 import Set exposing (Set)
 
 
@@ -48,16 +50,25 @@ type Model
 type alias Details =
     { session : Session.Id
     , files : Dict String FileState
-    , filter : String
-    , filterMode : SearchMode
+    , filterText : String
+    , searchMode : SearchMode
+    , filter : Filter
     , collapsedFolders : Set String
-    , optionsOpen : Bool
+    , options : Disclosure
     }
 
 
+type Disclosure
+    = Open
+    | Closed
+
+
+{-| Per-file UI state. Files without an entry use `emptyFileState`, one
+shared value, so their lazily rendered panels keep a stable identity.
+-}
 type FileState
     = FileState
-        { fullFile : Maybe (Remote FullFileRequest ApiError FullFile)
+        { fullFile : Remote FullFileRequest ApiError FullFile
         , collapsed : Bool
         , collapsedHunks : Set String
         , reviewed : Bool
@@ -70,26 +81,36 @@ type SearchMode
     | Regex
 
 
+{-| The review search, compiled once when it changes rather than per file.
+-}
+type Filter
+    = NoFilter
+    | TextFilter String
+    | PatternFilter Regex
+    | InvalidPattern
+
+
 type FullFileRequest
     = FullFileRequest Session.Id String
 
 
-init : Session.Id -> List String -> Model
-init session paths =
+init : Session.Id -> Model
+init session =
     Model
         { session = session
-        , files = Dict.fromList (List.map (\path -> ( path, emptyFileState )) paths)
-        , filter = ""
-        , filterMode = Literal
+        , files = Dict.empty
+        , filterText = ""
+        , searchMode = Literal
+        , filter = NoFilter
         , collapsedFolders = Set.empty
-        , optionsOpen = False
+        , options = Closed
         }
 
 
 emptyFileState : FileState
 emptyFileState =
     FileState
-        { fullFile = Nothing
+        { fullFile = NotAsked
         , collapsed = False
         , collapsedHunks = Set.empty
         , reviewed = False
@@ -97,88 +118,155 @@ emptyFileState =
         }
 
 
-fileState : String -> Model -> Maybe FileState
+fileState : String -> Model -> FileState
 fileState path (Model details) =
-    Dict.get path details.files
+    Dict.get path details.files |> Maybe.withDefault emptyFileState
 
 
-filter : Model -> String
+filterText : Model -> String
+filterText (Model details) =
+    details.filterText
+
+
+searchMode : Model -> SearchMode
+searchMode (Model details) =
+    details.searchMode
+
+
+filter : Model -> Filter
 filter (Model details) =
     details.filter
 
 
-filterMode : Model -> SearchMode
-filterMode (Model details) =
-    details.filterMode
-
-
 changeFilter : String -> Model -> Model
 changeFilter value (Model details) =
-    Model { details | filter = value }
+    Model { details | filterText = value, filter = compile details.searchMode value }
 
 
 selectSearchMode : SearchMode -> Model -> Model
-selectSearchMode value (Model details) =
-    Model { details | filterMode = value }
+selectSearchMode mode (Model details) =
+    Model { details | searchMode = mode, filter = compile mode details.filterText }
+
+
+compile : SearchMode -> String -> Filter
+compile mode text =
+    if String.trim text == "" then
+        NoFilter
+
+    else
+        case mode of
+            Literal ->
+                TextFilter (String.toLower (String.trim text))
+
+            Regex ->
+                Regex.fromString text
+                    |> Maybe.map PatternFilter
+                    |> Maybe.withDefault InvalidPattern
+
+
+matches : Filter -> PreparedFile -> Bool
+matches compiled file =
+    case compiled of
+        NoFilter ->
+            True
+
+        TextFilter query ->
+            String.contains query file.searchText
+
+        PatternFilter expression ->
+            Regex.contains expression (file.change.path ++ "\n" ++ file.change.patch)
+
+        InvalidPattern ->
+            False
 
 
 optionsOpen : Model -> Bool
 optionsOpen (Model details) =
-    details.optionsOpen
+    details.options == Open
 
 
 toggleOptions : Model -> Model
 toggleOptions (Model details) =
-    Model { details | optionsOpen = not details.optionsOpen }
+    Model
+        { details
+            | options =
+                case details.options of
+                    Open ->
+                        Closed
+
+                    Closed ->
+                        Open
+        }
 
 
 closeOptions : Model -> Model
 closeOptions (Model details) =
-    Model { details | optionsOpen = False }
+    Model { details | options = Closed }
 
 
-fileFullFile : FileState -> Maybe (Remote FullFileRequest ApiError FullFile)
+fileFullFile : FileState -> Remote FullFileRequest ApiError FullFile
 fileFullFile (FileState state) =
     state.fullFile
 
 
+{-| Shows the full file, hides it again, or retries a failure. A request in
+flight is not duplicated.
+-}
 toggleFullFile : String -> Model -> ( Model, Maybe FullFileRequest )
 toggleFullFile path ((Model details) as model) =
-    case Dict.get path details.files of
-        Nothing ->
+    let
+        request =
+            FullFileRequest details.session path
+
+        setFullFile value =
+            updateFile path (\(FileState state) -> FileState { state | fullFile = value }) model
+    in
+    case fileFullFile (fileState path model) of
+        Success _ _ ->
+            ( setFullFile NotAsked, Nothing )
+
+        Loading _ ->
             ( model, Nothing )
 
-        Just file ->
-            case fileFullFile file of
-                Just (Success _ _) ->
-                    ( updateFile path (\(FileState state) -> FileState { state | fullFile = Nothing }) model, Nothing )
+        NotAsked ->
+            ( setFullFile (Loading request), Just request )
 
-                Just (Loading _) ->
-                    ( model, Nothing )
-
-                _ ->
-                    let
-                        request =
-                            FullFileRequest details.session path
-                    in
-                    ( updateFile path (\(FileState state) -> FileState { state | fullFile = Just (Loading request) }) model
-                    , Just request
-                    )
+        Failure _ _ ->
+            ( setFullFile (Loading request), Just request )
 
 
 fileLoaded : FullFileRequest -> FullFile -> Model -> Model
 fileLoaded request value =
-    mapRequest request (updateFileDetails (requestPath request) (\(FileState state) -> FileState { state | fullFile = Just (Success request value) }))
+    settleFullFile request (Success request value)
 
 
 fileFailed : FullFileRequest -> ApiError -> Model -> Model
 fileFailed request error =
-    mapRequest request (updateFileDetails (requestPath request) (\(FileState state) -> FileState { state | fullFile = Just (Failure request error) }))
+    settleFullFile request (Failure request error)
 
 
-requestUrl : FullFileRequest -> String
-requestUrl (FullFileRequest session _) =
-    Session.requestUrl session
+settleFullFile : FullFileRequest -> Remote FullFileRequest ApiError FullFile -> Model -> Model
+settleFullFile request result model =
+    let
+        path =
+            requestPath request
+    in
+    case fileFullFile (fileState path model) of
+        Loading active ->
+            if active == request then
+                updateFile path (\(FileState state) -> FileState { state | fullFile = result }) model
+
+            else
+                model
+
+        NotAsked ->
+            model
+
+        Success _ _ ->
+            model
+
+        Failure _ _ ->
+            model
 
 
 requestPath : FullFileRequest -> String
@@ -197,8 +285,8 @@ isFolderCollapsed path (Model details) =
 
 
 toggleFile : String -> Model -> Model
-toggleFile path (Model details) =
-    Model (updateFileDetails path (\(FileState state) -> FileState { state | collapsed = not state.collapsed }) details)
+toggleFile path =
+    updateFile path (\(FileState state) -> FileState { state | collapsed = not state.collapsed })
 
 
 fileIsCollapsed : FileState -> Bool
@@ -207,13 +295,13 @@ fileIsCollapsed (FileState state) =
 
 
 revealFile : String -> Model -> Model
-revealFile path (Model details) =
-    Model (updateFileDetails path (\(FileState state) -> FileState { state | collapsed = False }) details)
+revealFile path =
+    updateFile path (\(FileState state) -> FileState { state | collapsed = False })
 
 
 toggleHunk : String -> String -> Model -> Model
-toggleHunk path hunkId (Model details) =
-    Model (updateFileDetails path (\(FileState state) -> FileState { state | collapsedHunks = toggleSet hunkId state.collapsedHunks }) details)
+toggleHunk path hunkId =
+    updateFile path (\(FileState state) -> FileState { state | collapsedHunks = toggleSet hunkId state.collapsedHunks })
 
 
 fileIsHunkCollapsed : String -> FileState -> Bool
@@ -221,24 +309,18 @@ fileIsHunkCollapsed hunkId (FileState state) =
     Set.member hunkId state.collapsedHunks
 
 
+{-| Marking a file reviewed also collapses it.
+-}
 toggleReviewed : String -> Model -> Model
-toggleReviewed path (Model details) =
-    Model
-        (updateFileDetails path
-            (\(FileState state) ->
-                FileState
-                    { state
-                        | reviewed = not state.reviewed
-                        , collapsed = not state.reviewed
-                    }
-            )
-            details
+toggleReviewed path =
+    updateFile path
+        (\(FileState state) ->
+            FileState
+                { state
+                    | reviewed = not state.reviewed
+                    , collapsed = not state.reviewed
+                }
         )
-
-
-isReviewed : String -> Model -> Bool
-isReviewed path (Model details) =
-    Dict.get path details.files |> Maybe.map fileIsReviewed |> Maybe.withDefault False
 
 
 fileIsReviewed : FileState -> Bool
@@ -247,8 +329,8 @@ fileIsReviewed (FileState state) =
 
 
 toggleSourceFold : String -> String -> Model -> Model
-toggleSourceFold path fold (Model details) =
-    Model (updateFileDetails path (\(FileState state) -> FileState { state | collapsedSourceFolds = toggleSet fold state.collapsedSourceFolds }) details)
+toggleSourceFold path fold =
+    updateFile path (\(FileState state) -> FileState { state | collapsedSourceFolds = toggleSet fold state.collapsedSourceFolds })
 
 
 fileIsSourceFoldCollapsed : String -> FileState -> Bool
@@ -256,28 +338,9 @@ fileIsSourceFoldCollapsed fold (FileState state) =
     Set.member fold state.collapsedSourceFolds
 
 
-collapseFolder : String -> Model -> Model
-collapseFolder path (Model details) =
-    Model { details | collapsedFolders = Set.insert path details.collapsedFolders }
-
-
-mapRequest : FullFileRequest -> (Details -> Details) -> Model -> Model
-mapRequest (FullFileRequest requested _) transform ((Model details) as model) =
-    if requested == details.session then
-        Model (transform details)
-
-    else
-        model
-
-
 updateFile : String -> (FileState -> FileState) -> Model -> Model
-updateFile path transform (Model details) =
-    Model (updateFileDetails path transform details)
-
-
-updateFileDetails : String -> (FileState -> FileState) -> Details -> Details
-updateFileDetails path transform details =
-    { details | files = Dict.update path (Maybe.map transform) details.files }
+updateFile path transform ((Model details) as model) =
+    Model { details | files = Dict.insert path (transform (fileState path model)) details.files }
 
 
 toggleSet : comparable -> Set comparable -> Set comparable

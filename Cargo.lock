@@ -866,7 +866,6 @@ dependencies = [
  "tree-sitter-rust",
  "tree-sitter-typescript",
  "url",
- "walkdir",
 ]
 
 [[package]]

@@ -1,5 +1,7 @@
 module Hunker.Api exposing
-    ( checkRevision
+    ( FileRequest
+    , InlineComment
+    , checkRevision
     , cloneRepository
     , fetchAnalysis
     , fetchCommits
@@ -22,280 +24,245 @@ module Hunker.Api exposing
     , switchBranch
     )
 
-import Http
 import Hunker.ApiError exposing (ApiError)
-import Hunker.Domain.Repository as Repository
-import Hunker.Domain.Review as Review
-import Hunker.Domain.Settings as Settings
-import Hunker.Effect as Effect exposing (Effect)
-import Json.Decode as Decode
+import Hunker.Domain.Git as Git exposing (BranchName, Oid, RepositoryId)
+import Hunker.Domain.Repository as Repository exposing (PullRequestState, RepositoryRoot, SearchMode)
+import Hunker.Domain.Review as Review exposing (CommentSide, ReviewAction, ReviewRevision)
+import Hunker.Domain.Settings as Settings exposing (AnalysisOptions, Feature(..), Whitespace(..))
+import Hunker.Effect as Effect exposing (Effect, Method(..))
+import Hunker.Repository.Revision as Revision exposing (Revision)
+import Hunker.Route as Route exposing (PullRequestRef)
+import Json.Decode as Decode exposing (Decoder)
 import Json.Encode as Encode
-import Url
+import Url.Builder exposing (QueryParameter, string)
+
+
+get : List String -> List QueryParameter -> Decoder a -> (a -> msg) -> (ApiError -> msg) -> Effect msg
+get path query decoder succeeded failed =
+    Effect.get (Url.Builder.absolute ("api" :: path) query) (Decode.map succeeded decoder) failed
+
+
+send : Method -> List String -> List ( String, Encode.Value ) -> Decoder a -> (a -> msg) -> (ApiError -> msg) -> Effect msg
+send method path body decoder succeeded failed =
+    Effect.send method (Url.Builder.absolute ("api" :: path) []) (Encode.object body) (Decode.map succeeded decoder) failed
+
+
+repositoryParameter : RepositoryId -> QueryParameter
+repositoryParameter repository =
+    string "repository" (Git.repositoryToString repository)
+
+
+revisionParameters : Revision -> List QueryParameter
+revisionParameters revision =
+    [ repositoryParameter (Revision.repository revision)
+    , string "oid" (Git.oidToString (Revision.oid revision))
+    ]
+
+
+pullParameter : PullRequestRef -> QueryParameter
+pullParameter pull =
+    string "url" (Route.pullRequestUrl pull)
+
+
+
+-- SETTINGS
 
 
 loadSettings : (Settings.SettingsDocument -> msg) -> (ApiError -> msg) -> Effect msg
-loadSettings succeeded failed =
-    Effect.get "/api/settings"
-        (Decode.map succeeded Settings.documentDecoder)
-        failed
-
-
-listRepositories : (Repository.RepositoryCatalog -> msg) -> (ApiError -> msg) -> Effect msg
-listRepositories succeeded failed =
-    Effect.get "/api/repositories"
-        (Decode.map succeeded Repository.catalogDecoder)
-        failed
-
-
-fetchReview : String -> (Review.ReviewDocument -> msg) -> (ApiError -> msg) -> Effect msg
-fetchReview githubUrl succeeded failed =
-    Effect.get
-        ("/api/diff?url=" ++ encode githubUrl ++ "&refresh=" ++ encode githubUrl)
-        (Decode.map succeeded Review.reviewDecoder)
-        failed
-
-
-fetchCommits : String -> (List Review.PullCommit -> msg) -> (ApiError -> msg) -> Effect msg
-fetchCommits githubUrl succeeded failed =
-    Effect.get
-        ("/api/commits?url=" ++ encode githubUrl)
-        (Decode.map succeeded Review.commitsDecoder)
-        failed
-
-
-checkRevision : String -> String -> (Review.Revision -> msg) -> (ApiError -> msg) -> Effect msg
-checkRevision githubUrl headOid succeeded failed =
-    Effect.get
-        ("/api/revision?url=" ++ encode githubUrl ++ "&headOid=" ++ encode headOid)
-        (Decode.map succeeded Review.revisionDecoder)
-        failed
-
-
-fetchRepositoryFiles : String -> String -> (List Repository.File -> msg) -> (ApiError -> msg) -> Effect msg
-fetchRepositoryFiles repository oid succeeded failed =
-    Effect.get
-        ("/api/repository/files?repository=" ++ encode repository ++ "&oid=" ++ encode oid)
-        (Decode.map succeeded Repository.filesDecoder)
-        failed
-
-
-fetchRepositoryCommits : String -> String -> (Repository.Commits -> msg) -> (ApiError -> msg) -> Effect msg
-fetchRepositoryCommits repository oid succeeded failed =
-    Effect.get
-        ("/api/repository/commits?repository=" ++ encode repository ++ "&oid=" ++ encode oid)
-        (Decode.map succeeded Repository.commitsDecoder)
-        failed
-
-
-fetchRepositoryPulls : String -> String -> Int -> (Repository.PullRequestsPage -> msg) -> (ApiError -> msg) -> Effect msg
-fetchRepositoryPulls repository state page succeeded failed =
-    Effect.get
-        ("/api/repository/pulls?repository="
-            ++ encode repository
-            ++ "&state="
-            ++ encode state
-            ++ "&page="
-            ++ String.fromInt page
-        )
-        (Decode.map succeeded Repository.pullRequestsDecoder)
-        failed
-
-
-searchRepository : String -> String -> String -> String -> (Repository.SearchResults -> msg) -> (ApiError -> msg) -> Effect msg
-searchRepository repository oid search mode succeeded failed =
-    Effect.get
-        ("/api/repository/search?repository="
-            ++ encode repository
-            ++ "&oid="
-            ++ encode oid
-            ++ "&query="
-            ++ encode search
-            ++ "&mode="
-            ++ encode mode
-        )
-        (Decode.map succeeded Repository.searchDecoder)
-        failed
-
-
-fetchRepositoryFile : String -> String -> String -> (Repository.FileContent -> msg) -> (ApiError -> msg) -> Effect msg
-fetchRepositoryFile repository oid path succeeded failed =
-    Effect.get
-        ("/api/repository/file?repository=" ++ encode repository ++ "&oid=" ++ encode oid ++ "&path=" ++ encode path)
-        (Decode.map succeeded Repository.fileContentDecoder)
-        failed
-
-
-cloneRepository : String -> String -> (String -> msg) -> (ApiError -> msg) -> Effect msg
-cloneRepository repository destination succeeded failed =
-    Effect.send "POST"
-        "/api/repository/clone"
-        (Http.jsonBody
-            (Encode.object
-                [ ( "repository", Encode.string repository )
-                , ( "destination", Encode.string destination )
-                ]
-            )
-        )
-        (Decode.map succeeded Repository.cloneDecoder)
-        failed
-
-
-refreshSourceControl : String -> (Repository.SourceControlStatus -> msg) -> (ApiError -> msg) -> Effect msg
-refreshSourceControl repository succeeded failed =
-    Effect.get
-        ("/api/repository/source-control?repository=" ++ encode repository)
-        (Decode.map succeeded Repository.sourceControlDecoder)
-        failed
-
-
-switchBranch : String -> String -> (Repository.SourceControlStatus -> msg) -> (ApiError -> msg) -> Effect msg
-switchBranch repository branch succeeded failed =
-    Effect.send "POST"
-        "/api/repository/branch"
-        (Http.jsonBody
-            (Encode.object
-                [ ( "repository", Encode.string repository )
-                , ( "branch", Encode.string branch )
-                ]
-            )
-        )
-        (Decode.map succeeded Repository.switchedDecoder)
-        failed
-
-
-pullRepository : String -> (Int -> msg) -> (ApiError -> msg) -> Effect msg
-pullRepository repository succeeded failed =
-    Effect.send "POST"
-        "/api/repository/pull"
-        (Http.jsonBody (Encode.object [ ( "repository", Encode.string repository ) ]))
-        (Decode.map succeeded Repository.pulledDecoder)
-        failed
+loadSettings =
+    get [ "settings" ] [] Settings.documentDecoder
 
 
 saveSettings : Settings.Settings -> (Settings.SettingsDocument -> msg) -> (ApiError -> msg) -> Effect msg
-saveSettings settings succeeded failed =
-    Effect.send "PUT"
-        "/api/settings"
-        (Http.jsonBody (Encode.object [ ( "settings", Settings.encode settings ) ]))
-        (Decode.map succeeded Settings.documentDecoder)
-        failed
+saveSettings settings =
+    send Put [ "settings" ] [ ( "settings", Settings.encode settings ) ] Settings.documentDecoder
 
 
-fetchAnalysis : String -> Review.ReviewBacking -> Bool -> Bool -> Bool -> Settings.InlineDiffMode -> (Review.AnalysisSnapshot -> msg) -> (ApiError -> msg) -> Effect msg
-fetchAnalysis githubUrl backing ignoreWhitespace semantic syntax inlineDiff succeeded failed =
-    Effect.get
-        ("/api/analysis?url="
-            ++ encode githubUrl
-            ++ "&baseOid="
-            ++ encode (Review.backingBaseOid backing)
-            ++ "&headOid="
-            ++ encode (Review.backingHeadOid backing)
-            ++ "&whitespace="
-            ++ (if ignoreWhitespace then
-                    "ignore"
 
-                else
-                    "show"
-               )
-            ++ "&semantic="
-            ++ (if semantic then
-                    "true"
-
-                else
-                    "false"
-               )
-            ++ "&syntax="
-            ++ (if syntax then
-                    "true"
-
-                else
-                    "false"
-               )
-            ++ "&mode="
-            ++ encode (Settings.inlineDiffModeToString inlineDiff)
-        )
-        (Decode.map succeeded Review.analysisSnapshotDecoder)
-        failed
+-- REPOSITORIES
 
 
-fetchFullFile : String -> Review.FileChange -> Review.ReviewBacking -> (Review.FullFile -> msg) -> (ApiError -> msg) -> Effect msg
-fetchFullFile githubUrl file backing succeeded failed =
-    Effect.get
-        ("/api/file?" ++ fileQuery githubUrl file backing)
-        (Decode.map succeeded Review.fullFileDecoder)
-        failed
+listRepositories : (Repository.RepositoryCatalog -> msg) -> (ApiError -> msg) -> Effect msg
+listRepositories =
+    get [ "repositories" ] [] Repository.catalogDecoder
 
 
-fetchReviewComments : String -> (List Review.ReviewComment -> msg) -> (ApiError -> msg) -> Effect msg
-fetchReviewComments githubUrl succeeded failed =
-    Effect.get
-        ("/api/reviews?url=" ++ encode githubUrl)
-        (Decode.map succeeded Review.commentsDecoder)
-        failed
+fetchRepositoryFiles : Revision -> (List Repository.File -> msg) -> (ApiError -> msg) -> Effect msg
+fetchRepositoryFiles revision =
+    get [ "repository", "files" ] (revisionParameters revision) Repository.filesDecoder
 
 
-postInlineComment : { pullUrl : String, commitId : String, path : String, line : Int, side : Review.CommentSide, body : String } -> (Review.ReviewComment -> msg) -> (ApiError -> msg) -> Effect msg
-postInlineComment comment succeeded failed =
-    Effect.send "POST"
-        "/api/reviews/comment"
-        (Http.jsonBody
-            (Encode.object
-                [ ( "pullUrl", Encode.string comment.pullUrl )
-                , ( "commitId", Encode.string comment.commitId )
-                , ( "path", Encode.string comment.path )
-                , ( "line", Encode.int comment.line )
-                , ( "side", Encode.string (Review.commentSideToString comment.side) )
-                , ( "body", Encode.string comment.body )
-                ]
-            )
-        )
-        (Decode.map succeeded (Decode.field "comment" Review.commentDecoder))
-        failed
+fetchRepositoryCommits : Revision -> (Repository.Commits -> msg) -> (ApiError -> msg) -> Effect msg
+fetchRepositoryCommits revision =
+    get [ "repository", "commits" ] (revisionParameters revision) Repository.commitsDecoder
 
 
-postReply : String -> Int -> String -> (Review.ReviewComment -> msg) -> (ApiError -> msg) -> Effect msg
-postReply githubUrl commentId body succeeded failed =
-    Effect.send "POST"
-        "/api/reviews/reply"
-        (Http.jsonBody
-            (Encode.object
-                [ ( "url", Encode.string githubUrl )
-                , ( "commentId", Encode.int commentId )
-                , ( "body", Encode.string body )
-                ]
-            )
-        )
-        (Decode.map succeeded (Decode.field "comment" Review.commentDecoder))
-        failed
+fetchRepositoryPulls : RepositoryId -> PullRequestState -> Int -> (Repository.PullRequestsPage -> msg) -> (ApiError -> msg) -> Effect msg
+fetchRepositoryPulls repository state page =
+    get [ "repository", "pulls" ]
+        [ repositoryParameter repository
+        , string "state" (Repository.pullRequestStateToString state)
+        , Url.Builder.int "page" page
+        ]
+        Repository.pullRequestsDecoder
 
 
-submitReview : String -> String -> Review.ReviewAction -> (Review.ReviewAction -> msg) -> (ApiError -> msg) -> Effect msg
-submitReview githubUrl body event succeeded failed =
-    Effect.send "POST"
-        "/api/reviews/submit"
-        (Http.jsonBody
-            (Encode.object
-                [ ( "url", Encode.string githubUrl )
-                , ( "body", Encode.string body )
-                , ( "event", Encode.string (Review.reviewActionToString event) )
-                ]
-            )
-        )
-        (Decode.map succeeded (Decode.field "event" Review.reviewActionDecoder))
-        failed
+searchRepository : Revision -> String -> SearchMode -> (Repository.SearchResults -> msg) -> (ApiError -> msg) -> Effect msg
+searchRepository revision query mode =
+    get [ "repository", "search" ]
+        (revisionParameters revision ++ [ string "query" query, string "mode" (Repository.searchModeToString mode) ])
+        Repository.searchDecoder
 
 
-fileQuery : String -> Review.FileChange -> Review.ReviewBacking -> String
-fileQuery githubUrl file backing =
-    [ ( "url", githubUrl )
-    , ( "path", file.path )
-    , ( "baseOid", Review.backingBaseOid backing )
-    , ( "headOid", Review.backingHeadOid backing )
+fetchRepositoryFile : Revision -> String -> (Repository.FileContent -> msg) -> (ApiError -> msg) -> Effect msg
+fetchRepositoryFile revision path =
+    get [ "repository", "file" ] (revisionParameters revision ++ [ string "path" path ]) Repository.fileContentDecoder
+
+
+cloneRepository : RepositoryId -> RepositoryRoot -> (String -> msg) -> (ApiError -> msg) -> Effect msg
+cloneRepository repository destination =
+    send Post
+        [ "repository", "clone" ]
+        [ ( "repository", Encode.string (Git.repositoryToString repository) )
+        , ( "destination", Encode.string (Repository.repositoryRootToString destination) )
+        ]
+        Repository.cloneDecoder
+
+
+refreshSourceControl : RepositoryId -> (Repository.SourceControlStatus -> msg) -> (ApiError -> msg) -> Effect msg
+refreshSourceControl repository =
+    get [ "repository", "source-control" ] [ repositoryParameter repository ] Repository.sourceControlDecoder
+
+
+switchBranch : RepositoryId -> BranchName -> (Repository.SourceControlStatus -> msg) -> (ApiError -> msg) -> Effect msg
+switchBranch repository branch =
+    send Post
+        [ "repository", "branch" ]
+        [ ( "repository", Encode.string (Git.repositoryToString repository) )
+        , ( "branch", Encode.string (Git.branchToString branch) )
+        ]
+        Repository.sourceControlDecoder
+
+
+pullRepository : RepositoryId -> (Int -> msg) -> (ApiError -> msg) -> Effect msg
+pullRepository repository =
+    send Post [ "repository", "pull" ] [ ( "repository", Encode.string (Git.repositoryToString repository) ) ] Repository.pulledDecoder
+
+
+
+-- REVIEWS
+
+
+fetchReview : String -> (Review.ReviewDocument -> msg) -> (ApiError -> msg) -> Effect msg
+fetchReview diffUrl =
+    get [ "diff" ] [ string "url" diffUrl ] Review.reviewDecoder
+
+
+fetchCommits : PullRequestRef -> (List Review.PullCommit -> msg) -> (ApiError -> msg) -> Effect msg
+fetchCommits pull =
+    get [ "commits" ] [ pullParameter pull ] Review.commitsDecoder
+
+
+checkRevision : PullRequestRef -> Oid -> (Review.Revision -> msg) -> (ApiError -> msg) -> Effect msg
+checkRevision pull headOid =
+    get [ "revision" ] [ pullParameter pull, string "headOid" (Git.oidToString headOid) ] Review.revisionDecoder
+
+
+type alias FileRequest =
+    { diffUrl : String
+    , revision : ReviewRevision
+    , path : String
+    }
+
+
+revisionQuery : String -> ReviewRevision -> List QueryParameter
+revisionQuery diffUrl revision =
+    [ string "url" diffUrl
+    , string "baseOid" (Git.oidToString revision.baseOid)
+    , string "headOid" (Git.oidToString revision.headOid)
     ]
-        |> List.map (\( key, value ) -> key ++ "=" ++ encode value)
-        |> String.join "&"
 
 
-encode : String -> String
-encode =
-    Url.percentEncode
+fetchFullFile : FileRequest -> (Review.FullFile -> msg) -> (ApiError -> msg) -> Effect msg
+fetchFullFile request =
+    get [ "file" ] (revisionQuery request.diffUrl request.revision ++ [ string "path" request.path ]) Review.fullFileDecoder
+
+
+fetchAnalysis : String -> ReviewRevision -> AnalysisOptions -> (Review.AnalysisSnapshot -> msg) -> (ApiError -> msg) -> Effect msg
+fetchAnalysis diffUrl revision options =
+    let
+        feature value =
+            case value of
+                Enabled ->
+                    "enabled"
+
+                Disabled ->
+                    "disabled"
+    in
+    get [ "analysis" ]
+        (revisionQuery diffUrl revision
+            ++ [ string "whitespace"
+                    (case options.whitespace of
+                        IgnoreWhitespace ->
+                            "ignore"
+
+                        ShowWhitespace ->
+                            "show"
+                    )
+               , string "semantic" (feature options.semantic)
+               , string "syntax" (feature options.syntax)
+               , string "inlineDiff" (Settings.inlineDiffModeToString options.inlineDiff)
+               ]
+        )
+        Review.analysisSnapshotDecoder
+
+
+fetchReviewComments : PullRequestRef -> (List Review.ReviewComment -> msg) -> (ApiError -> msg) -> Effect msg
+fetchReviewComments pull =
+    get [ "reviews" ] [ pullParameter pull ] Review.commentsDecoder
+
+
+type alias InlineComment =
+    { pull : PullRequestRef
+    , commitId : Oid
+    , path : String
+    , line : Int
+    , side : CommentSide
+    , body : String
+    }
+
+
+postInlineComment : InlineComment -> (Review.ReviewComment -> msg) -> (ApiError -> msg) -> Effect msg
+postInlineComment comment =
+    send Post
+        [ "reviews", "comment" ]
+        [ ( "pullUrl", Encode.string (Route.pullRequestUrl comment.pull) )
+        , ( "commitId", Encode.string (Git.oidToString comment.commitId) )
+        , ( "path", Encode.string comment.path )
+        , ( "line", Encode.int comment.line )
+        , ( "side", Encode.string (Review.commentSideToString comment.side) )
+        , ( "body", Encode.string comment.body )
+        ]
+        (Decode.field "comment" Review.commentDecoder)
+
+
+postReply : PullRequestRef -> Int -> String -> (Review.ReviewComment -> msg) -> (ApiError -> msg) -> Effect msg
+postReply pull commentId body =
+    send Post
+        [ "reviews", "reply" ]
+        [ ( "url", Encode.string (Route.pullRequestUrl pull) )
+        , ( "commentId", Encode.int commentId )
+        , ( "body", Encode.string body )
+        ]
+        (Decode.field "comment" Review.commentDecoder)
+
+
+submitReview : PullRequestRef -> String -> ReviewAction -> (ReviewAction -> msg) -> (ApiError -> msg) -> Effect msg
+submitReview pull body action =
+    send Post
+        [ "reviews", "submit" ]
+        [ ( "url", Encode.string (Route.pullRequestUrl pull) )
+        , ( "body", Encode.string body )
+        , ( "event", Encode.string (Review.reviewActionToString action) )
+        ]
+        (Decode.field "event" Review.reviewActionDecoder)

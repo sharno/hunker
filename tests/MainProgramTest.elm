@@ -1,12 +1,11 @@
 module MainProgramTest exposing (suite)
 
 import Expect
-import Http
-import Hunker.ApiError as ApiError exposing (ApiError)
+import Hunker.Domain.Git as Git
+import Hunker.Domain.Settings as Settings
 import Hunker.Effect as AppEffect
 import Hunker.Page.Repository as Repository
 import Hunker.Page.Review as Review
-import Json.Decode as Decode
 import Json.Encode as Encode
 import Main
 import ProgramTest
@@ -45,7 +44,7 @@ suite =
                     |> ProgramTest.update (Main.ChangedGitHubInput "https://github.com/example/hunker/pull/42")
                     |> ProgramTest.clickButton "Open"
                     |> ProgramTest.ensureViewHas [ text "Loading the latest change…", text "example/hunker/pull/42" ]
-                    |> ProgramTest.expectHttpRequestWasMade "GET" "/api/diff?url=https%3A%2F%2Fgithub.com%2Fexample%2Fhunker%2Fpull%2F42&refresh=https%3A%2F%2Fgithub.com%2Fexample%2Fhunker%2Fpull%2F42"
+                    |> ProgramTest.expectHttpRequestWasMade "GET" reviewRequest
         , test "renders a loaded review and auto-collapses a reviewed file" <|
             \() ->
                 startedAt "/example/hunker/pull/42/files/src/greet.ts"
@@ -101,8 +100,8 @@ suite =
                 startedAt "/example/hunker/pull/42/files/src/greet.ts"
                     |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
                     |> ProgramTest.simulateHttpOk "GET" reviewRequest reviewJson
-                    |> ProgramTest.update (Main.ReviewMsg (Review.ToggledSemantic False))
-                    |> ProgramTest.update (Main.ReviewMsg (Review.ToggledWhitespace False))
+                    |> ProgramTest.update (reviewSetting (Settings.SetSemantic Settings.Disabled))
+                    |> ProgramTest.update (reviewSetting (Settings.SetWhitespace Settings.ShowWhitespace))
                     |> ProgramTest.ensureHttpRequests "PUT" "/api/settings" (List.length >> Expect.equal 1)
                     |> ProgramTest.simulateHttpOk "PUT" "/api/settings" settingsSemanticOffJson
                     |> ProgramTest.ensureHttpRequests "PUT" "/api/settings" (List.length >> Expect.equal 1)
@@ -128,13 +127,13 @@ suite =
                         , disabled True
                         ]
                     |> ProgramTest.ensureHttpRequestWasMade "GET" sourceControlRequest
-                    |> ProgramTest.simulateHttpOk "GET" sourceControlRequest (sourceControlJson 1)
+                    |> ProgramTest.simulateHttpOk "GET" sourceControlRequest (sourceControlAt "main" featureOid 1)
                     |> ProgramTest.ensureViewHas
                         [ tag "button"
                         , containing [ text "Pulled 2 commits. Refreshing status…" ]
                         , disabled True
                         ]
-                    |> ProgramTest.simulateHttpOk "GET" repositoryFilesRequest repositoryFilesJson
+                    |> ProgramTest.simulateHttpOk "GET" featureFilesRequest featureFilesJson
                     |> ProgramTest.expectViewHas
                         [ text "Pulled 2 commits."
                         , tag "button"
@@ -160,13 +159,58 @@ suite =
                         , text "Local file contents"
                         , text "Pull 2 ↓"
                         ]
+        , test "a background status poll keeps the open file and its tree" <|
+            \() ->
+                startedAt "/mohamed-rdr/hunker/blob/main/README.md"
+                    |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
+                    |> ProgramTest.simulateHttpOk "GET" sourceControlRequest (sourceControlJson 0)
+                    |> ProgramTest.simulateHttpOk "GET" repositoryFilesRequest repositoryFilesJson
+                    |> ProgramTest.simulateHttpOk "GET" repositoryFileRequest repositoryFileJson
+                    |> ProgramTest.update (Main.RepositoryMsg (Repository.PollSourceControl (Time.millisToPosix 120000)))
+                    |> ProgramTest.simulateHttpOk "GET" sourceControlRequest (sourceControlJson 0)
+                    |> ProgramTest.ensureViewHasNot [ text "Repository refreshed." ]
+                    |> ProgramTest.expectViewHas [ text "Local file contents" ]
+        , test "a refused branch switch keeps the checkout controls" <|
+            \() ->
+                startedAt "/mohamed-rdr/hunker"
+                    |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
+                    |> ProgramTest.simulateHttpOk "GET" sourceControlRequest (sourceControlJson 0)
+                    |> ProgramTest.simulateHttpOk "GET" repositoryFilesRequest repositoryFilesJson
+                    |> ProgramTest.update (Main.RepositoryMsg (Repository.SelectedBranch (Git.branchName "feature")))
+                    |> ProgramTest.simulateHttpResponse "POST"
+                        "/api/repository/branch"
+                        (TestHttp.httpResponse
+                            { statusCode = 409
+                            , headers = []
+                            , body = """{"code":"conflict","message":"Your local changes would be overwritten.","retryable":false}"""
+                            }
+                        )
+                    |> ProgramTest.expectViewHas
+                        [ text "Could not switch to feature: Your local changes would be overwritten."
+                        , text "README.md"
+                        ]
+        , test "reports a failed settings save outside the settings page" <|
+            \() ->
+                startedAt "/example/hunker/pull/42/files/src/greet.ts"
+                    |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
+                    |> ProgramTest.simulateHttpOk "GET" reviewRequest reviewJson
+                    |> ProgramTest.update (reviewSetting (Settings.SetDiffColors Settings.Disabled))
+                    |> ProgramTest.simulateHttpResponse "PUT"
+                        "/api/settings"
+                        (TestHttp.httpResponse
+                            { statusCode = 500
+                            , headers = []
+                            , body = """{"code":"internal","message":"Could not write the settings file.","retryable":false}"""
+                            }
+                        )
+                    |> ProgramTest.expectViewHas [ text "Could not save settings: Could not write the settings file." ]
         , test "reloads the immutable file snapshot after switching branches" <|
             \() ->
                 startedAt "/mohamed-rdr/hunker"
                     |> ProgramTest.simulateHttpOk "GET" "/api/settings" settingsJson
                     |> ProgramTest.simulateHttpOk "GET" sourceControlRequest (sourceControlJson 0)
                     |> ProgramTest.simulateHttpOk "GET" repositoryFilesRequest repositoryFilesJson
-                    |> ProgramTest.update (Main.RepositoryMsg (Repository.SelectedBranch "feature"))
+                    |> ProgramTest.update (Main.RepositoryMsg (Repository.SelectedBranch (Git.branchName "feature")))
                     |> ProgramTest.simulateHttpOk "POST" "/api/repository/branch" (sourceControlAt "feature" featureOid 0)
                     |> ProgramTest.ensureViewHas [ text "Reading repository files…" ]
                     |> ProgramTest.simulateHttpOk "GET" featureFilesRequest featureFilesJson
@@ -244,6 +288,24 @@ startedAt path =
         |> ProgramTest.start ()
 
 
+settled : Result msg msg -> msg
+settled result =
+    case result of
+        Ok message ->
+            message
+
+        Err message ->
+            message
+
+
+reviewSetting : Settings.Change -> Main.Msg
+reviewSetting change =
+    Main.ReviewMsg (Review.ReadyMsg (Review.ChangedSetting change))
+
+
+{-| Interprets the real `Hunker.Effect` ADT, including request bodies and the
+shared response decoding.
+-}
 simulateEffect : AppEffect.Effect msg -> ProgramTest.SimulatedEffect msg
 simulateEffect effect =
     case effect of
@@ -255,14 +317,17 @@ simulateEffect effect =
 
         AppEffect.Request request ->
             SimulatedHttp.request
-                { method = request.method
+                { method = AppEffect.methodName request.method
                 , url = request.url
-                , body = SimulatedHttp.emptyBody
+                , body =
+                    case request.body of
+                        AppEffect.EmptyBody ->
+                            SimulatedHttp.emptyBody
+
+                        AppEffect.JsonBody value ->
+                            SimulatedHttp.jsonBody value
                 , headers = []
-                , expect =
-                    SimulatedHttp.expectStringResponse
-                        (Result.withDefault (request.onError (ApiError.transport "The simulated request failed.")))
-                        (decodeResponse request.decoder request.onError >> Ok)
+                , expect = SimulatedHttp.expectStringResponse settled (AppEffect.responseToMessage request >> Ok)
                 , timeout = Nothing
                 , tracker = Nothing
                 }
@@ -284,36 +349,6 @@ simulateEffect effect =
 
         AppEffect.After milliseconds message ->
             SimulatedTask.perform (always message) (SimulatedProcess.sleep milliseconds)
-
-
-decodeResponse : Decode.Decoder msg -> (ApiError -> msg) -> Http.Response String -> msg
-decodeResponse decoder onError response =
-    case response of
-        Http.GoodStatus_ _ body ->
-            case Decode.decodeString decoder body of
-                Ok message ->
-                    message
-
-                Err error ->
-                    onError (ApiError.unexpectedResponse (Decode.errorToString error))
-
-        Http.BadUrl_ url ->
-            onError (ApiError.transport ("Invalid API URL: " ++ url))
-
-        Http.Timeout_ ->
-            onError (ApiError.transport "The Hunker API timed out.")
-
-        Http.NetworkError_ ->
-            onError (ApiError.transport "Could not reach the local Hunker API.")
-
-        Http.BadStatus_ metadata body ->
-            onError
-                (Decode.decodeString ApiError.decoder body
-                    |> Result.withDefault
-                        (ApiError.unexpectedResponse
-                            ("The Hunker API returned " ++ String.fromInt metadata.statusCode ++ ".")
-                        )
-                )
 
 
 settingsJson : String
@@ -338,7 +373,7 @@ repositoriesJson =
 
 repositoryFilesJson : String
 repositoryFilesJson =
-    """{"files":[{"path":"README.md","size":10,"gitStatus":"clean"}]}"""
+    """{"files":[{"path":"README.md","size":10}]}"""
 
 
 repositoryOid : String
@@ -363,7 +398,7 @@ featureFilesRequest =
 
 featureFilesJson : String
 featureFilesJson =
-    """{"files":[{"path":"feature.txt","size":12,"gitStatus":"clean"}]}"""
+    """{"files":[{"path":"feature.txt","size":12}]}"""
 
 
 repositoryFileRequest : String
@@ -379,7 +414,7 @@ repositoryFileJson =
 
 repositoryCommitsJson : String
 repositoryCommitsJson =
-    """{"ref":"main","shallow":false,"commits":[{"sha":"1111111111111111111111111111111111111111","parents":[],"subject":"A stale commit","authorName":"Mohamed","authorEmail":"mohamed@example.com","authoredAt":"2026-08-10T00:00:00Z"}]}"""
+    """{"ref":"2222222222222222222222222222222222222222","history":"complete","commits":[{"sha":"1111111111111111111111111111111111111111","parents":[],"subject":"A stale commit","authorName":"Mohamed","authorEmail":"mohamed@example.com","authoredAt":"2026-08-10T00:00:00Z"}]}"""
 
 
 repositoryCommitsRequest : String
@@ -389,7 +424,7 @@ repositoryCommitsRequest =
 
 repositoryPullsJson : String
 repositoryPullsJson =
-    """{"state":"open","page":1,"hasMore":false,"pullRequests":[{"number":7,"title":"Remote pull request","author":"agent","avatarUrl":"","state":"open","draft":false,"updatedAt":"2026-08-10T00:00:00Z","base":"main","head":"feature","labels":[]}]}"""
+    """{"state":"open","page":1,"hasMore":false,"pullRequests":[{"number":7,"title":"Remote pull request","author":"agent","avatarUrl":null,"status":"open","updatedAt":"2026-08-10T00:00:00Z","base":"main","head":"feature","labels":[]}]}"""
 
 
 sourceControlRequest : String
@@ -423,13 +458,11 @@ sourceControlAt branch oid behind =
                       , Encode.list identity
                             [ Encode.object
                                 [ ( "name", Encode.string "main" )
-                                , ( "local", Encode.bool True )
-                                , ( "remote", Encode.bool True )
+                                , ( "presence", Encode.string "both" )
                                 ]
                             , Encode.object
                                 [ ( "name", Encode.string "feature" )
-                                , ( "local", Encode.bool True )
-                                , ( "remote", Encode.bool True )
+                                , ( "presence", Encode.string "both" )
                                 ]
                             ]
                       )
@@ -453,7 +486,7 @@ sourceControlAt branch oid behind =
 
 reviewRequest : String
 reviewRequest =
-    "/api/diff?url=https%3A%2F%2Fgithub.com%2Fexample%2Fhunker%2Fpull%2F42&refresh=https%3A%2F%2Fgithub.com%2Fexample%2Fhunker%2Fpull%2F42"
+    "/api/diff?url=https%3A%2F%2Fgithub.com%2Fexample%2Fhunker%2Fpull%2F42"
 
 
 reviewJson : String
@@ -461,17 +494,13 @@ reviewJson =
     Encode.encode 0 <|
         Encode.object
             [ ( "title", Encode.string "Improve the greeting" )
-            , ( "repository", Encode.string "example/hunker" )
-            , ( "number", Encode.string "42" )
             , ( "author", Encode.string "agent" )
             , ( "base", Encode.string "main" )
             , ( "head", Encode.string "feature/greeting" )
-            , ( "url", Encode.string "https://github.com/example/hunker/pull/42" )
             , ( "files"
               , Encode.list identity
                     [ Encode.object
                         [ ( "path", Encode.string "src/greet.ts" )
-                        , ( "previousPath", Encode.null )
                         , ( "status", Encode.string "modified" )
                         , ( "additions", Encode.int 1 )
                         , ( "deletions", Encode.int 1 )
@@ -479,15 +508,14 @@ reviewJson =
                         ]
                     ]
               )
-            , ( "backing"
+            , ( "revision"
               , Encode.object
-                    [ ( "_tag", Encode.string "GitHub" )
-                    , ( "baseOid", Encode.string "1111111111111111111111111111111111111111" )
+                    [ ( "baseOid", Encode.string "1111111111111111111111111111111111111111" )
                     , ( "headOid", Encode.string "2222222222222222222222222222222222222222" )
                     , ( "headRef", Encode.string "feature/greeting" )
-                    , ( "path", Encode.string "" )
                     ]
               )
+            , ( "source", Encode.object [ ( "_tag", Encode.string "GitHub" ) ] )
             ]
 
 

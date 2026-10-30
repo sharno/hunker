@@ -1,4 +1,4 @@
-module Hunker.FileTree exposing (Tree(..), build, directoryPaths, reveal)
+module Hunker.FileTree exposing (Tree(..), ancestors, build, directoryPaths)
 
 
 type Tree item
@@ -79,14 +79,16 @@ sortForest forest =
         |> List.sortBy sortKey
 
 
-sortKey : Tree item -> String
+{-| Folders sort before files, then names case-insensitively.
+-}
+sortKey : Tree item -> ( Int, String )
 sortKey tree =
     case tree of
         Folder name _ _ ->
-            "0-" ++ String.toLower name
+            ( 0, String.toLower name )
 
         Leaf name _ ->
-            "1-" ++ String.toLower name
+            ( 1, String.toLower name )
 
 
 directoryPaths : List (Tree item) -> List String
@@ -103,17 +105,8 @@ directoryPaths forest =
         forest
 
 
-reveal : String -> List String -> List String
-reveal filePath collapsed =
-    ancestors filePath
-        |> List.foldl remove collapsed
-
-
-remove : String -> List String -> List String
-remove path =
-    List.filter ((/=) path)
-
-
+{-| The folder paths that contain `filePath`, outermost first.
+-}
 ancestors : String -> List String
 ancestors filePath =
     let

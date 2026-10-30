@@ -1,105 +1,68 @@
 module Hunker.Repository.Pulls exposing
-    ( Identity
+    ( Footer(..)
+    , Identity
     , Model
+    , Status(..)
     , failed
-    , hasMore
     , identityPage
     , identityRepository
     , identityState
     , init
     , loaded
     , more
-    , request
-    , rows
+    , status
     )
 
+{-| Pages of a repository's pull requests. Only one page loads at a time; a
+failed page is retried rather than skipped.
+-}
+
 import Hunker.ApiError exposing (ApiError)
-import Hunker.Domain.Repository exposing (PullRequest, PullRequestsPage)
-import Hunker.Remote as Remote exposing (Remote(..))
-import Hunker.Route exposing (PullRequestState)
+import Hunker.Domain.Git exposing (RepositoryId)
+import Hunker.Domain.Repository exposing (PullRequest, PullRequestState, PullRequestsPage)
 
 
 type Model
-    = Model Details
-
-
-type alias Details =
-    { request : Remote Identity ApiError PullRequestsPage
-    , rows : List PullRequest
-    , hasMore : Bool
-    }
-
-
-type Identity
-    = Identity String PullRequestState Int
-
-
-init : String -> PullRequestState -> Model
-init repository state =
-    Model
-        { request = Loading (Identity repository state 1)
-        , rows = []
-        , hasMore = False
+    = Model
+        { repository : RepositoryId
+        , state : PullRequestState
+        , rows : List PullRequest
+        , load : Load
         }
 
 
-request : Model -> Remote Identity ApiError PullRequestsPage
-request (Model details) =
-    details.request
+type Load
+    = Idle { page : Int, hasMore : Bool }
+    | LoadingPage Int
+    | FailedPage Int ApiError
 
 
-rows : Model -> List PullRequest
-rows (Model details) =
-    details.rows
+type Identity
+    = Identity RepositoryId PullRequestState Int
 
 
-hasMore : Model -> Bool
-hasMore (Model details) =
-    details.hasMore
+type Status
+    = FirstLoading
+    | FirstFailed ApiError
+    | Empty
+    | Rows (List PullRequest) Footer
 
 
-loaded : Identity -> PullRequestsPage -> Model -> Model
-loaded identity page ((Model details) as model) =
-    if Remote.identity details.request /= Just identity then
-        model
-
-    else
-        Model
-            { request = Success identity page
-            , rows =
-                if page.page == 1 then
-                    page.pullRequests
-
-                else
-                    details.rows ++ page.pullRequests
-            , hasMore = page.hasMore
-            }
+type Footer
+    = NoMore
+    | CanLoadMore
+    | LoadingMore
+    | LoadMoreFailed ApiError
 
 
-failed : Identity -> ApiError -> Model -> Model
-failed identity error ((Model details) as model) =
-    if Remote.identity details.request == Just identity then
-        Model { details | request = Failure identity error }
-
-    else
-        model
+init : RepositoryId -> PullRequestState -> ( Model, Identity )
+init repository state =
+    ( Model { repository = repository, state = state, rows = [], load = LoadingPage 1 }
+    , Identity repository state 1
+    )
 
 
-more : Model -> Maybe ( Model, Identity )
-more ((Model details) as model) =
-    case Remote.identity details.request of
-        Just current ->
-            let
-                next =
-                    Identity (identityRepository current) (identityState current) (identityPage current + 1)
-            in
-            Just ( Model { details | request = Loading next }, next )
-
-        Nothing ->
-            Nothing
-
-
-identityRepository : Identity -> String
+identityRepository : Identity -> RepositoryId
 identityRepository (Identity repository _ _) =
     repository
 
@@ -112,3 +75,75 @@ identityState (Identity _ state _) =
 identityPage : Identity -> Int
 identityPage (Identity _ _ page) =
     page
+
+
+isActive : Identity -> Model -> Bool
+isActive (Identity repository state page) (Model details) =
+    repository == details.repository && state == details.state && details.load == LoadingPage page
+
+
+loaded : Identity -> PullRequestsPage -> Model -> Model
+loaded identity page ((Model details) as model) =
+    if isActive identity model then
+        Model { details | rows = details.rows ++ page.pullRequests, load = Idle { page = page.page, hasMore = page.hasMore } }
+
+    else
+        model
+
+
+failed : Identity -> ApiError -> Model -> Model
+failed identity error ((Model details) as model) =
+    if isActive identity model then
+        Model { details | load = FailedPage (identityPage identity) error }
+
+    else
+        model
+
+
+more : Model -> Maybe ( Model, Identity )
+more (Model details) =
+    let
+        request page =
+            Just ( Model { details | load = LoadingPage page }, Identity details.repository details.state page )
+    in
+    case details.load of
+        Idle { page, hasMore } ->
+            if hasMore then
+                request (page + 1)
+
+            else
+                Nothing
+
+        FailedPage page _ ->
+            request page
+
+        LoadingPage _ ->
+            Nothing
+
+
+status : Model -> Status
+status (Model details) =
+    case ( details.rows, details.load ) of
+        ( [], LoadingPage _ ) ->
+            FirstLoading
+
+        ( [], FailedPage _ error ) ->
+            FirstFailed error
+
+        ( [], Idle _ ) ->
+            Empty
+
+        ( rows, Idle { hasMore } ) ->
+            Rows rows
+                (if hasMore then
+                    CanLoadMore
+
+                 else
+                    NoMore
+                )
+
+        ( rows, LoadingPage _ ) ->
+            Rows rows LoadingMore
+
+        ( rows, FailedPage _ error ) ->
+            Rows rows (LoadMoreFailed error)

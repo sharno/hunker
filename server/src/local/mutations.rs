@@ -1,55 +1,47 @@
 use std::path::{Path, PathBuf};
 
 use crate::{
-    command,
+    command::{self, Git},
     error::{AppError, AppResult},
-    settings,
-    types::{BranchName, CloneDestination, RepositorySlug},
+    types::{BranchName, Oid, RepositoryRoot, RepositorySlug},
 };
 
-use super::{Checkout, Local, PullResult, SourceControlStatus, source_control, valid_segment};
+use super::{
+    BranchPresence, Checkout, Local, PullResult, SourceControlStatus,
+    source_control::{inspect, refresh_remote},
+};
 
 impl Local {
     pub async fn clone_repository(
         &self,
         repository: &RepositorySlug,
-        destination: CloneDestination,
+        root: RepositoryRoot,
     ) -> AppResult<PathBuf> {
-        if !valid_segment(&repository.owner) || !valid_segment(&repository.name) {
-            return Err(AppError::bad_request("That repository name is not valid."));
+        let roots = self.settings.roots().await?;
+        let target = roots.clone_target(repository, root);
+        let lock = self.repository_lock(&target).await;
+        let _guard = lock.lock().await;
+        if let Some(existing) = self.find(repository).await? {
+            return Ok(existing.path);
         }
-        let settings = settings::load().await?.settings;
-        let root = match destination {
-            CloneDestination::Configured => settings::resolve_path(&settings.repositories_root),
-            CloneDestination::Temporary => settings::resolve_path(&settings.cache_root),
-        };
-        let target = match destination {
-            CloneDestination::Configured => root.join(&repository.name),
-            CloneDestination::Temporary => root.join(&repository.owner).join(&repository.name),
-        };
-        if target.exists() {
-            return Ok(target);
-        }
-        tokio::fs::create_dir_all(target.parent().unwrap_or(&root))
-            .await
-            .map_err(|error| {
-                AppError::internal(format!("Could not create clone directory: {error}"))
-            })?;
-        let target_text = target.to_string_lossy();
+        let parent = target.parent().unwrap_or_else(|| roots.path(root));
+        tokio::fs::create_dir_all(parent).await.map_err(|error| {
+            AppError::internal(format!("Could not create clone directory: {error}"))
+        })?;
         command::checked(
             "gh",
             &[
                 "repo",
                 "clone",
-                &format!("{}/{}", repository.owner, repository.name),
-                &target_text,
+                &repository.to_string(),
+                &target.to_string_lossy(),
                 "--",
                 "--depth=1",
                 "--single-branch",
                 "--filter=blob:none",
                 "--no-tags",
             ],
-            target.parent(),
+            Some(parent),
         )
         .await?;
         Ok(target)
@@ -60,82 +52,104 @@ pub(super) async fn switch_branch(
     root: &Path,
     branch: &BranchName,
 ) -> AppResult<SourceControlStatus> {
-    let branch = branch.as_str();
-    action(root, &["check-ref-format", "--branch", branch]).await?;
-    let current = source_control::inspect(root, true).await?;
-    let target = current
+    let git = Git::at(root);
+    let name = branch.as_str();
+    if !git
+        .run(&["check-ref-format", "--branch", name])
+        .await?
+        .status
+        .success()
+    {
+        return Err(AppError::bad_request(format!(
+            "{name} is not a valid branch name."
+        )));
+    }
+    let remote = refresh_remote(root).await?;
+    let current = inspect(root, remote.clone()).await?;
+    let presence = current
         .branches
         .iter()
-        .find(|candidate| candidate.name == branch)
-        .cloned()
-        .ok_or_else(|| AppError::not_found(format!("Branch {branch} was not found.")))?;
-    if target.local {
-        action(root, &["switch", "--", branch]).await?;
-    } else {
-        let refspec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
-        let configured = command::git_config(root, &["--get-all", "remote.origin.fetch"])
-            .await?
-            .unwrap_or_default();
-        if !configured.lines().any(|line| line == refspec) {
-            action(root, &["config", "--add", "remote.origin.fetch", &refspec]).await?;
+        .find(|candidate| candidate.name == *branch)
+        .map(|candidate| candidate.presence)
+        .ok_or_else(|| AppError::not_found(format!("Branch {name} was not found.")))?;
+    match presence {
+        BranchPresence::Local | BranchPresence::Both => {
+            refusable(git, &["switch", "--", name]).await?;
         }
-        let remote_ref = format!("refs/heads/{branch}:refs/remotes/origin/{branch}");
-        action(root, &["fetch", "origin", &remote_ref, "--depth=1"]).await?;
-        let origin = format!("origin/{branch}");
-        action(root, &["switch", "--track", "-c", branch, "--", &origin]).await?;
+        BranchPresence::Remote => {
+            let refspec = format!("+refs/heads/{name}:refs/remotes/origin/{name}");
+            let configured = git
+                .config(&["--get-all", "remote.origin.fetch"])
+                .await?
+                .unwrap_or_default();
+            if !configured.lines().any(|line| line == refspec) {
+                refusable(git, &["config", "--add", "remote.origin.fetch", &refspec]).await?;
+            }
+            refusable(
+                git,
+                &[
+                    "fetch",
+                    "origin",
+                    &format!("refs/heads/{name}:refs/remotes/origin/{name}"),
+                    "--depth=1",
+                ],
+            )
+            .await?;
+            refusable(
+                git,
+                &[
+                    "switch",
+                    "--track",
+                    "-c",
+                    name,
+                    "--",
+                    &format!("origin/{name}"),
+                ],
+            )
+            .await?;
+        }
     }
-    source_control::inspect(root, false).await
+    inspect(root, remote).await
 }
 
 pub(super) async fn pull(root: &Path) -> AppResult<PullResult> {
-    let current = source_control::inspect(root, true).await?;
-    let (behind, before) = match &current.checkout {
-        Checkout::DetachedHead { .. } => {
-            return Err(AppError::conflict(
-                "Cannot pull while HEAD is detached. Switch to a branch first.",
-            ));
-        }
-        Checkout::UntrackedBranch { name, .. } => {
-            return Err(AppError::conflict(format!(
-                "Branch {name} does not track a remote branch."
-            )));
-        }
-        Checkout::TrackingBranch { behind, oid, .. } => (*behind, oid.clone()),
-    };
+    let git = Git::at(root);
+    let current = inspect(root, refresh_remote(root).await?).await?;
+    let (behind, before) = tracking(current.checkout)?;
     if behind == 0 {
         return Ok(PullResult { pulled_commits: 0 });
     }
-    action(root, &["pull", "--ff-only"]).await?;
-    let after = command::git(root, &["rev-parse", "HEAD"])
+    refusable(git, &["pull", "--ff-only"]).await?;
+    let after = git.head().await?;
+    let pulled_commits = git
+        .ok(&["rev-list", "--count", &format!("{before}..{after}")])
         .await?
         .trim()
-        .to_owned();
-    let pulled_commits = command::git(
-        root,
-        &["rev-list", "--count", &format!("{before}..{after}")],
-    )
-    .await?
-    .trim()
-    .parse()
-    .map_err(|_| AppError::upstream("Git returned an invalid pulled commit count."))?;
+        .parse()
+        .map_err(|_| AppError::upstream("Git returned an invalid pulled commit count."))?;
     Ok(PullResult { pulled_commits })
 }
 
-async fn action(path: &Path, args: &[&str]) -> AppResult<String> {
-    let output = command::output("git", args, Some(path)).await?;
-    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
-    text.push_str(&String::from_utf8_lossy(&output.stderr));
-    if output.status.success() {
-        Ok(text)
+/// Only a branch with an upstream can be fast-forwarded.
+fn tracking(checkout: Checkout) -> AppResult<(usize, Oid)> {
+    match checkout {
+        Checkout::TrackingBranch { behind, oid, .. } => Ok((behind, oid)),
+        Checkout::DetachedHead { .. } => Err(AppError::conflict(
+            "Cannot pull while HEAD is detached. Switch to a branch first.",
+        )),
+        Checkout::UntrackedBranch { name, .. } => Err(AppError::conflict(format!(
+            "Branch {name} does not track a remote branch."
+        ))),
+    }
+}
+
+/// Runs a checkout mutation. Git is the authority on whether it is safe, so
+/// its refusal is surfaced verbatim as a conflict.
+async fn refusable(git: Git<'_>, args: &[&str]) -> AppResult<String> {
+    let result = git.run(args).await?;
+    if result.status.success() {
+        Ok(result.stdout)
     } else {
-        let exit_code = output.status.code().unwrap_or(-1);
-        Err(AppError::conflict(if text.trim().is_empty() {
-            format!(
-                "Git {} refused the operation with status {exit_code}.",
-                args.first().copied().unwrap_or("command")
-            )
-        } else {
-            text.trim().to_owned()
-        }))
+        Err(AppError::conflict(result.message("git")))
     }
 }

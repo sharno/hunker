@@ -1,162 +1,88 @@
-module Hunker.Page.Settings exposing (Model, Msg(..), SaveStatus(..), init, submission, update, view)
+module Hunker.Page.Settings exposing (Model, Msg(..), init, update, view)
 
-import Html exposing (Html, button, div, form, h1, header, input, label, main_, option, p, section, select, span, text)
-import Html.Attributes exposing (checked, class, disabled, selected, type_, value)
+{-| Edits to the shared settings. Pending edits are applied over the live
+settings at view and submit time, so a change made elsewhere (such as hiding
+the top bar) is never overwritten by a stale copy.
+-}
+
+import Html exposing (Html, button, div, form, h1, header, input, label, main_, p, section, select, span, text)
+import Html.Attributes exposing (attribute, checked, class, disabled, type_, value)
 import Html.Events exposing (onCheck, onInput, onSubmit)
-import Hunker.Domain.Settings as Settings exposing (ReviewScope(..), Settings, ViewMode(..))
-import Hunker.Effect as Effect exposing (Effect)
+import Hunker.ApiError as ApiError
+import Hunker.Domain.Settings as Settings exposing (Change, Select, Settings, Toggle(..))
+import Hunker.Settings.Sync as SettingsSync
+import Hunker.View.Settings as SettingsView
 
 
 type alias Model =
-    { draft : Settings }
-
-
-type SaveStatus
-    = SaveInProgress
-    | SaveSucceeded String
-    | SaveError String
+    { pending : List Change }
 
 
 type Msg
-    = ChangedRepositoriesRoot String
-    | ChangedCacheRoot String
-    | ChangedScope String
-    | ChangedViewMode String
-    | ChangedInlineMode String
-    | ChangedIgnoreWhitespace Bool
-    | ChangedSemantic Bool
-    | ChangedSyntax Bool
-    | ChangedDiffColors Bool
-    | ChangedSidebar Bool
-    | ChangedReviews Bool
-    | ChangedTopBar Bool
+    = Changed Change
     | Submitted
 
 
-init : Settings -> ( Model, Effect Msg )
-init defaults =
-    ( { draft = defaults }, Effect.none )
+init : Model
+init =
+    { pending = [] }
 
 
-update : Msg -> Model -> ( Model, Effect Msg )
+{-| Returns the edits to persist when the form is submitted.
+-}
+update : Msg -> Model -> ( Model, List Change )
 update msg model =
     case msg of
-        ChangedRepositoriesRoot value ->
-            draft (\settings -> { settings | repositoriesRoot = value }) model
-
-        ChangedCacheRoot value ->
-            draft (\settings -> { settings | cacheRoot = value }) model
-
-        ChangedScope value ->
-            draft
-                (\settings ->
-                    { settings
-                        | reviewScope =
-                            if value == "full" then
-                                FullDiff
-
-                            else
-                                OneFile
-                    }
-                )
-                model
-
-        ChangedViewMode value ->
-            draft
-                (\settings ->
-                    { settings
-                        | viewMode =
-                            if value == "unified" then
-                                Unified
-
-                            else
-                                Split
-                    }
-                )
-                model
-
-        ChangedInlineMode value ->
-            draft (\settings -> { settings | inlineDiffMode = Settings.inlineDiffModeFromString value }) model
-
-        ChangedIgnoreWhitespace value ->
-            draft (\settings -> { settings | ignoreWhitespace = value }) model
-
-        ChangedSemantic value ->
-            draft (\settings -> { settings | semantic = value }) model
-
-        ChangedSyntax value ->
-            draft (\settings -> { settings | syntaxHighlighting = value }) model
-
-        ChangedDiffColors value ->
-            draft (\settings -> { settings | diffColors = value }) model
-
-        ChangedSidebar value ->
-            draft (\settings -> { settings | sidebarCollapsed = value }) model
-
-        ChangedReviews value ->
-            draft (\settings -> { settings | showGitHubReviews = value }) model
-
-        ChangedTopBar value ->
-            draft (\settings -> { settings | topBarCollapsed = value }) model
+        Changed change ->
+            ( { model | pending = model.pending ++ [ change ] }, [] )
 
         Submitted ->
-            ( model, Effect.none )
+            ( { model | pending = [] }, model.pending )
 
 
-draft : (Settings -> Settings) -> Model -> ( Model, Effect Msg )
-draft transform model =
-    ( { model | draft = transform model.draft }, Effect.none )
+draft : Settings -> Model -> Settings
+draft current model =
+    List.foldl Settings.apply current model.pending
 
 
-submission : Msg -> Model -> Maybe Settings
-submission msg model =
-    case msg of
-        Submitted ->
-            Just model.draft
-
-        _ ->
-            Nothing
-
-
-view : SaveStatus -> Model -> Html Msg
-view saveStatus model =
+view : SettingsSync.Status -> Settings -> Model -> Html Msg
+view status current model =
     main_ [ class "settings-page" ]
         [ header [ class "settings-heading" ]
             [ span [ class "eyebrow" ] [ text "Local configuration" ]
             , h1 [] [ text "Hunker settings" ]
             , p [] [ text "These defaults live with the Rust server, so every browser and tab shares them." ]
             ]
-        , settingsForm saveStatus model
+        , settingsForm status (draft current model)
         ]
 
 
-settingsForm : SaveStatus -> Model -> Html Msg
-settingsForm saveStatus model =
+settingsForm : SettingsSync.Status -> Settings -> Html Msg
+settingsForm status settings =
+    let
+        saving =
+            status == SettingsSync.SaveInProgress
+    in
     form [ class "settings-form", onSubmit Submitted ]
         [ section [ class "settings-section" ]
             [ h1 [] [ text "Repository storage" ]
             , p [] [ text "Hunker discovers normal checkouts in the repos root and keeps disposable shallow clones in the cache root." ]
-            , textField "Repositories root" model.draft.repositoriesRoot ChangedRepositoriesRoot
-            , textField "Temporary clone root" model.draft.cacheRoot ChangedCacheRoot
+            , textField saving "Repositories root" settings.repositoriesRoot Settings.SetRepositoriesRoot
+            , textField saving "Temporary clone root" settings.cacheRoot Settings.SetCacheRoot
             ]
         , section [ class "settings-section" ]
-            [ h1 [] [ text "Review defaults" ]
-            , selectField "Scope" (Settings.reviewScopeToString model.draft.reviewScope) ChangedScope [ ( "file", "One file" ), ( "full", "Full diff" ) ]
-            , selectField "Layout" (Settings.viewModeToString model.draft.viewMode) ChangedViewMode [ ( "split", "Side by side" ), ( "unified", "Unified" ) ]
-            , selectField "Inline diff" (Settings.inlineDiffModeToString model.draft.inlineDiffMode) ChangedInlineMode [ ( "token", "Word / token" ), ( "character", "Character" ), ( "off", "Off" ) ]
-            , toggle "Ignore whitespace" "Hide whitespace-only replacements." model.draft.ignoreWhitespace ChangedIgnoreWhitespace
-            , toggle "Semantic analysis" "Parse syntax trees and detect moved declarations." model.draft.semantic ChangedSemantic
-            , toggle "Syntax highlighting" "Color supported source languages in repository and diff views." model.draft.syntaxHighlighting ChangedSyntax
-            , toggle "Diff colors" "Use addition, deletion, and inline-change backgrounds in diff views." model.draft.diffColors ChangedDiffColors
-            , toggle "Collapse review sidebar" "Start reviews with maximum horizontal space." model.draft.sidebarCollapsed ChangedSidebar
-            , toggle "Show GitHub reviews" "Load and render inline review conversations." model.draft.showGitHubReviews ChangedReviews
-            , toggle "Hide top bar" "Start with the main navigation hidden; use the floating control to restore it." model.draft.topBarCollapsed ChangedTopBar
-            ]
+            (h1 [] [ text "Review defaults" ]
+                :: selectField saving Settings.scopeSelect settings
+                :: selectField saving Settings.layoutSelect settings
+                :: selectField saving Settings.inlineSelect settings
+                :: List.map (toggle saving settings)
+                    [ WhitespaceToggle, SemanticToggle, SyntaxToggle, DiffColorsToggle, SidebarToggle, ReviewsToggle, TopBarToggle ]
+            )
         , div [ class "settings-actions" ]
-            [ saveFeedback saveStatus
-            , button [ type_ "submit", disabled (saveStatus == SaveInProgress) ]
+            [ saveFeedback status
+            , button [ type_ "submit", disabled saving ]
                 [ text
-                    (if saveStatus == SaveInProgress then
+                    (if saving then
                         "Saving…"
 
                      else
@@ -167,49 +93,42 @@ settingsForm saveStatus model =
         ]
 
 
-textField : String -> String -> (String -> Msg) -> Html Msg
-textField title current toMsg =
+textField : Bool -> String -> String -> (String -> Change) -> Html Msg
+textField saving title current toChange =
     label [ class "settings-field" ]
         [ span [] [ text title ]
-        , input [ type_ "text", value current, onInput toMsg ] []
+        , input [ type_ "text", value current, disabled saving, onInput (toChange >> Changed) ] []
         ]
 
 
-selectField : String -> String -> (String -> Msg) -> List ( String, String ) -> Html Msg
-selectField title current toMsg choices =
+selectField : Bool -> Select a -> Settings -> Html Msg
+selectField saving control settings =
     label [ class "settings-field" ]
-        [ span [] [ text title ]
-        , select [ onInput toMsg ]
-            (List.map
-                (\( encoded, description ) ->
-                    option [ value encoded, selected (current == encoded) ] [ text description ]
-                )
-                choices
-            )
+        [ span [] [ text control.title ]
+        , select [ disabled saving, SettingsView.onSelect control Changed ] (SettingsView.options control .label settings)
         ]
 
 
-toggle : String -> String -> Bool -> (Bool -> Msg) -> Html Msg
-toggle title description current toMsg =
+toggle : Bool -> Settings -> Toggle -> Html Msg
+toggle saving settings control =
+    let
+        copy =
+            Settings.toggleLabel control
+    in
     label [ class "settings-toggle" ]
-        [ input [ type_ "checkbox", checked current, onCheck toMsg ] []
-        , span [] [ Html.strong [] [ text title ], Html.small [] [ text description ] ]
+        [ input [ type_ "checkbox", checked (Settings.toggleIsOn control settings), disabled saving, onCheck (Settings.toggleChange control >> Changed) ] []
+        , span [] [ Html.strong [] [ text copy.title ], Html.small [] [ text copy.hint ] ]
         ]
 
 
-saveFeedback : SaveStatus -> Html Msg
-saveFeedback saveStatus =
-    case saveStatus of
-        SaveSucceeded path ->
+saveFeedback : SettingsSync.Status -> Html Msg
+saveFeedback status =
+    case status of
+        SettingsSync.Saved path ->
             span [ class "save-feedback is-success" ] [ text ("Saved to " ++ path) ]
 
-        SaveError error ->
-            span [ class "save-feedback is-error" ] [ text error ]
+        SettingsSync.SaveFailed error ->
+            span [ class "save-feedback is-error", attribute "role" "alert" ] [ text (ApiError.message error) ]
 
-        SaveInProgress ->
+        SettingsSync.SaveInProgress ->
             text ""
-
-
-state : String -> String -> Html Msg
-state title detail =
-    section [ class "page-state" ] [ span [ class "loading-spinner" ] [], h1 [] [ text title ], p [] [ text detail ] ]

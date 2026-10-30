@@ -10,9 +10,13 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AppState, analysis,
     error::{AppError, AppResult},
-    github::{GitHubTarget, InlineCommentInput, ReviewAction, ReviewComment, parse_url},
-    revision,
-    types::{Oid, RelativePath, ReviewBacking, ReviewDocument},
+    github::{
+        GitHubTarget, InlineComment, PullTarget, ReviewComment, ReviewSubmission,
+        reviews::{CommentId, ReviewAction},
+    },
+    revision::{RevisionKey, RevisionSnapshot},
+    source_presentation::FilePresentation,
+    types::{NonEmptyText, Oid, PullCommit, RelativePath, ReviewDocument, ReviewSource},
 };
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -28,9 +32,43 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/reviews/submit", post(post_review))
 }
 
+impl AppState {
+    async fn revision(
+        &self,
+        target: &GitHubTarget,
+        base_oid: Oid,
+        head_oid: Oid,
+    ) -> AppResult<Arc<RevisionSnapshot>> {
+        let key = RevisionKey {
+            repository: target.repository.clone(),
+            base_oid,
+            head_oid,
+        };
+        let pull = target.pull().map(|pull| pull.number);
+        self.revisions
+            .get_or_build(key, |key| {
+                crate::revision::load(&self.local, &self.github, key, pull)
+            })
+            .await
+    }
+}
+
 #[derive(Deserialize)]
 struct UrlQuery {
-    url: String,
+    url: GitHubTarget,
+}
+
+#[derive(Deserialize)]
+struct PullQuery {
+    url: PullTarget,
+}
+
+/// Whether the pinned review head is still the pull request's latest head.
+#[derive(Serialize)]
+#[serde(tag = "_tag", rename_all_fields = "camelCase")]
+pub(crate) enum HeadFreshness {
+    Current,
+    Behind { latest_head_oid: Oid },
 }
 
 #[derive(Serialize)]
@@ -39,20 +77,18 @@ struct UrlQuery {
     rename_all = "lowercase",
     rename_all_fields = "camelCase"
 )]
-enum RevisionResponse {
+pub(crate) enum RevisionResponse {
     GitHub,
     Local {
         path: String,
-        pinned_head_oid: String,
-        latest_head_oid: String,
         checked_at: u64,
-        current: bool,
+        head: HeadFreshness,
     },
 }
 
 #[derive(Serialize)]
-struct CommitsResponse {
-    commits: Vec<crate::types::PullCommit>,
+pub(crate) struct CommitsResponse {
+    pub(crate) commits: Vec<PullCommit>,
 }
 
 #[derive(Serialize)]
@@ -60,7 +96,7 @@ struct CommitsResponse {
 struct FullFileResponse {
     old_text: String,
     new_text: String,
-    presentation: crate::source_presentation::FilePresentation,
+    presentation: FilePresentation,
 }
 
 #[derive(Serialize)]
@@ -82,55 +118,38 @@ async fn get_diff(
     State(state): State<Arc<AppState>>,
     Query(query): Query<UrlQuery>,
 ) -> AppResult<Json<ReviewDocument>> {
-    let target = parse_url(&query.url)?;
+    let target = query.url;
     let metadata = state.github.metadata(&target).await?;
-    let revision_key = revision::RevisionKey::new(
-        target.repository(),
-        Oid::parse(metadata.base_oid.clone()).map_err(AppError::bad_request)?,
-        Oid::parse(metadata.head_oid.clone()).map_err(AppError::bad_request)?,
-    );
-    let build_key = revision_key.clone();
-    let build_target = target.clone();
-    let local = state.local.clone();
-    let github = state.github.clone();
     let snapshot = state
-        .revisions
-        .get_or_build(revision_key, || async move {
-            revision::load(&local, &github, build_target, build_key).await
-        })
+        .revision(
+            &target,
+            metadata.revision.base_oid.clone(),
+            metadata.revision.head_oid.clone(),
+        )
         .await?;
-    let backing = if let Some(repository) = snapshot.local_repository() {
-        tracing::debug!(kind = repository.kind, path = %repository.path.display(), "reading review from local Git");
-        ReviewBacking::Local {
-            base_oid: metadata.base_oid.clone(),
-            head_oid: metadata.head_oid.clone(),
-            head_ref: metadata.head_ref.clone(),
-            path: repository.path.to_string_lossy().into_owned(),
-        }
-    } else {
-        ReviewBacking::GitHub {
-            base_oid: metadata.base_oid.clone(),
-            head_oid: metadata.head_oid.clone(),
-            head_ref: metadata.head_ref.clone(),
-        }
-    };
+    let source = snapshot
+        .local_repository()
+        .map_or(ReviewSource::GitHub, |repository| {
+            tracing::debug!(root = ?repository.root, path = %repository.path.display(), "reading review from local Git");
+            ReviewSource::Local {
+                path: repository.path.to_string_lossy().into_owned(),
+            }
+        });
     Ok(Json(ReviewDocument {
         title: metadata.title,
-        repository: metadata.repository,
-        number: metadata.number,
         author: metadata.author,
         base: metadata.base,
         head: metadata.head,
-        url: metadata.url,
-        files: snapshot.files.as_ref().clone(),
-        backing,
+        files: Arc::clone(&snapshot.files),
+        revision: metadata.revision,
+        source,
     }))
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RevisionQuery {
-    url: String,
+    url: PullTarget,
     head_oid: Oid,
 }
 
@@ -138,36 +157,36 @@ async fn get_revision(
     State(state): State<Arc<AppState>>,
     Query(query): Query<RevisionQuery>,
 ) -> AppResult<Json<RevisionResponse>> {
-    let target = parse_url(&query.url)?;
-    let Some(value) = state
-        .local
-        .revision(&target, query.head_oid.as_str())
-        .await?
-    else {
+    let Some(revision) = state.local.revision(&query.url).await? else {
         return Ok(Json(RevisionResponse::GitHub));
     };
-    let current = value.pinned_head_oid == value.latest_head_oid;
     Ok(Json(RevisionResponse::Local {
-        path: value.repository.path.to_string_lossy().into_owned(),
-        pinned_head_oid: value.pinned_head_oid,
-        latest_head_oid: value.latest_head_oid,
-        checked_at: value.checked_at,
-        current,
+        path: revision.repository.path.to_string_lossy().into_owned(),
+        checked_at: revision.checked_at,
+        head: if revision.latest_head_oid == query.head_oid {
+            HeadFreshness::Current
+        } else {
+            HeadFreshness::Behind {
+                latest_head_oid: revision.latest_head_oid,
+            }
+        },
     }))
 }
 
 async fn get_commits(
     State(state): State<Arc<AppState>>,
-    Query(query): Query<UrlQuery>,
+    Query(query): Query<PullQuery>,
 ) -> AppResult<Json<CommitsResponse>> {
-    let target = parse_url(&query.url)?;
-    if !matches!(target, GitHubTarget::Pull { .. }) {
-        return Err(AppError::bad_request(
-            "GitHub reviews are available for pull requests, not compare URLs.",
-        ));
-    }
-    let metadata = state.github.metadata(&target).await?;
-    let commits = match state.local.load_pull_commits(&target, &metadata).await? {
+    let target = query.url;
+    let metadata = state
+        .github
+        .metadata(&GitHubTarget::from(target.clone()))
+        .await?;
+    let commits = match state
+        .local
+        .load_pull_commits(&target, &metadata.revision)
+        .await?
+    {
         Some(commits) => commits,
         None => state.github.pull_commits(&target).await?,
     };
@@ -177,7 +196,7 @@ async fn get_commits(
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct FileQuery {
-    url: String,
+    url: GitHubTarget,
     path: RelativePath,
     base_oid: Oid,
     head_oid: Oid,
@@ -187,43 +206,28 @@ async fn get_file(
     State(state): State<Arc<AppState>>,
     Query(query): Query<FileQuery>,
 ) -> AppResult<Json<FullFileResponse>> {
-    let target = parse_url(&query.url)?;
-    let revision_key =
-        revision::RevisionKey::new(target.repository(), query.base_oid, query.head_oid);
-    let build_key = revision_key.clone();
-    let build_target = target.clone();
-    let local = state.local.clone();
-    let github = state.github.clone();
     let snapshot = state
-        .revisions
-        .get_or_build(revision_key, || async move {
-            revision::load(&local, &github, build_target, build_key).await
-        })
+        .revision(&query.url, query.base_oid, query.head_oid)
         .await?;
+    let missing = || {
+        AppError::not_found(format!(
+            "{} was not found in this immutable review.",
+            query.path
+        ))
+    };
     let pairs = snapshot.file_pairs(&state.local, &state.github).await?;
     let pair = pairs
         .iter()
-        .find(|pair| pair.path == query.path.as_str())
-        .cloned()
-        .ok_or_else(|| {
-            AppError::not_found(format!(
-                "{} was not found in this immutable review.",
-                query.path.as_str()
-            ))
-        })?;
+        .find(|pair| pair.path == query.path)
+        .ok_or_else(missing)?;
     let presentation = snapshot
-        .parsed_forest(pairs)
+        .prepared(&state.local, &state.github)
         .await?
-        .file_presentation(query.path.as_str())
-        .ok_or_else(|| {
-            AppError::not_found(format!(
-                "{} has no source presentation in this immutable review.",
-                query.path.as_str()
-            ))
-        })?;
+        .file_presentation(&query.path)
+        .ok_or_else(missing)?;
     Ok(Json(FullFileResponse {
-        old_text: pair.old_text,
-        new_text: pair.new_text,
+        old_text: pair.old_text.clone(),
+        new_text: pair.new_text.clone(),
         presentation,
     }))
 }
@@ -231,109 +235,81 @@ async fn get_file(
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AnalysisQuery {
-    url: String,
+    url: GitHubTarget,
     base_oid: Oid,
     head_oid: Oid,
     whitespace: analysis::WhitespaceMode,
-    semantic: bool,
-    syntax: bool,
-    mode: analysis::InlineDiff,
+    semantic: analysis::Toggle,
+    syntax: analysis::Toggle,
+    inline_diff: analysis::InlineDiff,
 }
 
 async fn get_analysis(
     State(state): State<Arc<AppState>>,
     Query(query): Query<AnalysisQuery>,
-) -> AppResult<Json<analysis::AnalysisSnapshot>> {
-    let target = parse_url(&query.url)?;
-    let key = analysis::AnalysisSnapshotKey::new(
-        &target.repository(),
-        query.base_oid.as_str().to_owned(),
-        query.head_oid.as_str().to_owned(),
-        analysis::AnalysisOptions {
-            ignore_whitespace: query.whitespace.ignore(),
+) -> AppResult<Json<Arc<analysis::AnalysisSnapshot>>> {
+    let snapshot = state
+        .revision(&query.url, query.base_oid, query.head_oid)
+        .await?;
+    let key = analysis::AnalysisSnapshotKey {
+        revision: snapshot.key.clone(),
+        options: analysis::AnalysisOptions {
+            whitespace: query.whitespace,
             semantic: query.semantic,
             syntax: query.syntax,
-            inline_diff: query.mode,
+            inline_diff: query.inline_diff,
         },
-    );
-    let build_key = key.clone();
-    let revision_key =
-        revision::RevisionKey::new(target.repository(), query.base_oid, query.head_oid);
-    let revision_build_key = revision_key.clone();
-    let revision_target = target.clone();
-    let local = state.local.clone();
-    let github = state.github.clone();
-    let snapshot = state
-        .revisions
-        .get_or_build(revision_key, || {
-            let local = local.clone();
-            let github = github.clone();
-            async move {
-                revision::load(&local, &github, revision_target, revision_build_key).await
-            }
-        })
-        .await?;
+    };
     let analysis = state
         .analysis
-        .get_or_build(key, || async move {
-            analysis::build(&local, &github, snapshot, build_key).await
+        .get_or_build(key, |key| {
+            analysis::build(&state.local, &state.github, snapshot, key.options)
         })
         .await?;
-    Ok(Json(analysis.as_ref().clone()))
+    Ok(Json(analysis))
 }
 
 async fn get_reviews(
     State(state): State<Arc<AppState>>,
-    Query(query): Query<UrlQuery>,
+    Query(query): Query<PullQuery>,
 ) -> AppResult<Json<CommentsResponse>> {
-    let target = parse_url(&query.url)?;
     Ok(Json(CommentsResponse {
-        comments: state.github.review_comments(&target).await?,
+        comments: state.github.review_comments(&query.url).await?,
     }))
 }
 
 async fn post_comment(
     State(state): State<Arc<AppState>>,
-    Json(mut body): Json<InlineCommentInput>,
+    Json(comment): Json<InlineComment>,
 ) -> AppResult<Json<CommentResponse>> {
-    body.body = body.body.trim().to_owned();
-    if body.body.is_empty() {
-        return Err(AppError::bad_request("Write a comment before posting."));
-    }
-    if body.line == 0 {
-        return Err(AppError::bad_request("The review request body is invalid."));
-    }
-    let target = parse_url(&body.pull_url)?;
     Ok(Json(CommentResponse {
-        comment: state.github.create_comment(&target, &body).await?,
+        comment: state.github.create_comment(&comment).await?,
     }))
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ReplyBody {
-    url: String,
-    comment_id: u64,
-    body: String,
+    url: PullTarget,
+    comment_id: CommentId,
+    body: NonEmptyText,
 }
 
 async fn post_reply(
     State(state): State<Arc<AppState>>,
     Json(body): Json<ReplyBody>,
 ) -> AppResult<Json<CommentResponse>> {
-    let text = body.body.trim();
-    if text.is_empty() {
-        return Err(AppError::bad_request("Write a reply before posting."));
-    }
-    let target = parse_url(&body.url)?;
     Ok(Json(CommentResponse {
-        comment: state.github.reply(&target, body.comment_id, text).await?,
+        comment: state
+            .github
+            .reply(&body.url, body.comment_id, &body.body)
+            .await?,
     }))
 }
 
 #[derive(Deserialize)]
 struct SubmitBody {
-    url: String,
+    url: PullTarget,
     body: String,
     event: ReviewAction,
 }
@@ -342,16 +318,11 @@ async fn post_review(
     State(state): State<Arc<AppState>>,
     Json(body): Json<SubmitBody>,
 ) -> AppResult<Json<SubmitReviewResponse>> {
-    let event = body.event;
-    let text = body.body.trim();
-    if event != ReviewAction::Approve && text.is_empty() {
-        return Err(AppError::bad_request(
-            "Comment and request-changes reviews require a summary.",
-        ));
-    }
-    let target = parse_url(&body.url)?;
-    state.github.submit_review(&target, text, event).await?;
-    Ok(Json(SubmitReviewResponse { event }))
+    let submission = ReviewSubmission::new(body.event, &body.body)?;
+    state.github.submit_review(&body.url, &submission).await?;
+    Ok(Json(SubmitReviewResponse {
+        event: submission.action(),
+    }))
 }
 
 #[cfg(test)]
@@ -362,20 +333,18 @@ mod tests {
     fn revision_response_keeps_the_elm_contract_typed() {
         let response = RevisionResponse::Local {
             path: "/tmp/acme/demo".to_owned(),
-            pinned_head_oid: "111".to_owned(),
-            latest_head_oid: "222".to_owned(),
             checked_at: 42,
-            current: false,
+            head: HeadFreshness::Behind {
+                latest_head_oid: Oid::parse("2".repeat(40)).unwrap(),
+            },
         };
         assert_eq!(
             serde_json::to_value(response).unwrap(),
             serde_json::json!({
                 "source": "local",
                 "path": "/tmp/acme/demo",
-                "pinnedHeadOid": "111",
-                "latestHeadOid": "222",
                 "checkedAt": 42,
-                "current": false
+                "head": { "_tag": "Behind", "latestHeadOid": "2".repeat(40) }
             })
         );
     }

@@ -75,6 +75,8 @@ insertFileRange endpoint start count move (FileMoves indexed) =
                             Just move
                 )
 
+        -- A move of a zero-length range still owns its start line, so the
+        -- block stays navigable.
         lines =
             List.range start (start + max 1 count - 1)
     in

@@ -7,23 +7,144 @@ use std::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use crate::error::{AppError, AppResult};
+use crate::{
+    error::{AppError, AppResult},
+    types::{RepositoryRoot, RepositorySlug},
+};
 
-#[derive(Clone, Default)]
+/// Owns the one settings file. Environment and home-directory lookups happen
+/// once in [`SettingsStore::from_environment`]; everything else is driven by
+/// the values captured here.
+#[derive(Clone)]
 pub struct SettingsStore {
+    path: PathBuf,
+    home: PathBuf,
+    defaults: Arc<HunkerSettings>,
     writes: Arc<Mutex<()>>,
 }
 
 impl SettingsStore {
+    pub fn from_environment() -> Self {
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        let path = env::var("HUNKER_CONFIG_FILE").map_or_else(
+            |_| home.join(".config/hunker/settings.json"),
+            |value| resolve_path(&home, &value),
+        );
+        let defaults = defaults(
+            env::var("HUNKER_REPOS_ROOT")
+                .unwrap_or_else(|_| home.join("src").to_string_lossy().into_owned()),
+            env::var("HUNKER_CACHE_ROOT").unwrap_or_else(|_| "/tmp/hunker/repositories".to_owned()),
+        );
+        Self {
+            path,
+            home,
+            defaults: Arc::new(defaults),
+            writes: Arc::new(Mutex::new(())),
+        }
+    }
+
     pub async fn load(&self) -> AppResult<SettingsDocument> {
-        load().await
+        let settings = match tokio::fs::read_to_string(&self.path).await {
+            Ok(content) => serde_json::from_str(&content).map_err(|error| {
+                AppError::internal(format!("Hunker’s settings file is invalid: {error}"))
+            })?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.defaults.as_ref().clone()
+            }
+            Err(_) => {
+                return Err(AppError::internal(format!(
+                    "Could not read {}.",
+                    self.path.display()
+                )));
+            }
+        };
+        Ok(self.document(settings))
+    }
+
+    pub async fn roots(&self) -> AppResult<RepositoryRoots> {
+        let settings = self.load().await?.settings;
+        Ok(RepositoryRoots {
+            configured: resolve_path(&self.home, &settings.repositories_root),
+            temporary: resolve_path(&self.home, &settings.cache_root),
+        })
     }
 
     pub async fn save(&self, settings: HunkerSettings) -> AppResult<SettingsDocument> {
         // All browser tabs share one settings file. Serializing the atomic
         // replace prevents two requests from writing the same temporary path.
         let _guard = self.writes.lock().await;
-        save(settings).await
+        let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|_| AppError::internal(format!("Could not create {}.", parent.display())))?;
+        let temporary = self.path.with_extension("json.tmp");
+        let content = serde_json::to_string_pretty(&settings)
+            .map_err(|error| AppError::internal(format!("Could not encode settings: {error}")))?;
+        tokio::fs::write(&temporary, format!("{content}\n"))
+            .await
+            .map_err(|_| AppError::internal(format!("Could not write {}.", temporary.display())))?;
+        tokio::fs::rename(&temporary, &self.path)
+            .await
+            .map_err(|_| {
+                AppError::internal(format!("Could not replace {}.", self.path.display()))
+            })?;
+        Ok(self.document(settings))
+    }
+
+    fn document(&self, settings: HunkerSettings) -> SettingsDocument {
+        SettingsDocument {
+            settings,
+            config_path: self.path.to_string_lossy().into_owned(),
+        }
+    }
+}
+
+/// The two directories Hunker discovers repositories in, resolved from the
+/// current settings.
+#[derive(Debug, Clone)]
+pub struct RepositoryRoots {
+    configured: PathBuf,
+    temporary: PathBuf,
+}
+
+impl RepositoryRoots {
+    pub fn path(&self, root: RepositoryRoot) -> &Path {
+        match root {
+            RepositoryRoot::Configured => &self.configured,
+            RepositoryRoot::Temporary => &self.temporary,
+        }
+    }
+
+    /// Where a clone of `repository` is created under `root`. Configured
+    /// checkouts are flat (`~/src/name`); the cache is namespaced by owner.
+    pub fn clone_target(&self, repository: &RepositorySlug, root: RepositoryRoot) -> PathBuf {
+        match root {
+            RepositoryRoot::Configured => self.configured.join(repository.name()),
+            RepositoryRoot::Temporary => self
+                .temporary
+                .join(repository.owner())
+                .join(repository.name()),
+        }
+    }
+
+    /// Every location a local copy of `repository` may occupy, in lookup order.
+    pub fn candidates(&self, repository: &RepositorySlug) -> [(PathBuf, RepositoryRoot); 3] {
+        [
+            (
+                self.clone_target(repository, RepositoryRoot::Configured),
+                RepositoryRoot::Configured,
+            ),
+            (
+                self.configured
+                    .join(repository.owner())
+                    .join(repository.name()),
+                RepositoryRoot::Configured,
+            ),
+            (
+                self.clone_target(repository, RepositoryRoot::Temporary),
+                RepositoryRoot::Temporary,
+            ),
+        ]
     }
 }
 
@@ -99,31 +220,16 @@ pub struct SettingsDocument {
     pub config_path: String,
 }
 
-fn home() -> PathBuf {
-    dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
+fn resolve_path(home: &Path, value: &str) -> PathBuf {
+    value
+        .strip_prefix("~/")
+        .map_or_else(|| PathBuf::from(value), |relative| home.join(relative))
 }
 
-pub fn resolve_path(value: &str) -> PathBuf {
-    if let Some(relative) = value.strip_prefix("~/") {
-        home().join(relative)
-    } else {
-        PathBuf::from(value)
-    }
-}
-
-pub fn config_path() -> PathBuf {
-    env::var("HUNKER_CONFIG_FILE").map_or_else(
-        |_| home().join(".config/hunker/settings.json"),
-        |value| resolve_path(&value),
-    )
-}
-
-fn defaults() -> HunkerSettings {
+fn defaults(repositories_root: String, cache_root: String) -> HunkerSettings {
     HunkerSettings {
-        repositories_root: env::var("HUNKER_REPOS_ROOT")
-            .unwrap_or_else(|_| home().join("src").to_string_lossy().into_owned()),
-        cache_root: env::var("HUNKER_CACHE_ROOT")
-            .unwrap_or_else(|_| "/tmp/hunker/repositories".to_owned()),
+        repositories_root,
+        cache_root,
         review_scope: ReviewScope::File,
         view_mode: ViewMode::Split,
         inline_diff_mode: InlineDiffMode::Token,
@@ -141,46 +247,6 @@ fn defaults() -> HunkerSettings {
     }
 }
 
-pub async fn load() -> AppResult<SettingsDocument> {
-    let path = config_path();
-    let settings = if path.exists() {
-        let content = tokio::fs::read_to_string(&path)
-            .await
-            .map_err(|_| AppError::internal(format!("Could not read {}.", path.display())))?;
-        serde_json::from_str(&content).map_err(|error| {
-            AppError::internal(format!("Hunker’s settings file is invalid: {error}"))
-        })?
-    } else {
-        defaults()
-    };
-    Ok(SettingsDocument {
-        settings,
-        config_path: path.to_string_lossy().into_owned(),
-    })
-}
-
-pub async fn save(settings: HunkerSettings) -> AppResult<SettingsDocument> {
-    let path = config_path();
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    tokio::fs::create_dir_all(parent)
-        .await
-        .map_err(|_| AppError::internal(format!("Could not create {}.", parent.display())))?;
-    let temporary = path.with_extension("json.tmp");
-    let mut content = serde_json::to_string_pretty(&settings)
-        .map_err(|error| AppError::internal(format!("Could not encode settings: {error}")))?;
-    content.push('\n');
-    tokio::fs::write(&temporary, content)
-        .await
-        .map_err(|_| AppError::internal(format!("Could not write {}.", temporary.display())))?;
-    tokio::fs::rename(&temporary, &path)
-        .await
-        .map_err(|_| AppError::internal(format!("Could not replace {}.", path.display())))?;
-    Ok(SettingsDocument {
-        settings,
-        config_path: path.to_string_lossy().into_owned(),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -189,7 +255,7 @@ mod tests {
 
     #[test]
     fn settings_remain_a_flat_frontend_contract() {
-        let settings = defaults();
+        let settings = defaults("/tmp/src".to_owned(), "/tmp/cache".to_owned());
         let repositories_root = settings.repositories_root.clone();
         let cache_root = settings.cache_root.clone();
         let encoded = serde_json::to_value(settings).unwrap();

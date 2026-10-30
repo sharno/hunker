@@ -1,4 +1,4 @@
-module Hunker.Repository.View.Local exposing (CloneOffer, Unavailable(..), pageState, viewUnavailable)
+module Hunker.Repository.View.Local exposing (Clone(..), CloneOffer, Unavailable(..), errorState, pageState, viewUnavailable)
 
 import Html exposing (Html, button, div, h1, p, section, small, span, text)
 import Html.Attributes exposing (class, disabled, type_)
@@ -14,11 +14,16 @@ type Unavailable msg
 
 type alias CloneOffer msg =
     { error : ApiError
-    , loading : Bool
-    , feedback : Maybe (Result ApiError String)
+    , clone : Clone
     , cloneTemporary : msg
     , cloneConfigured : msg
     }
+
+
+type Clone
+    = NotCloning
+    | Cloning
+    | CloneFailed ApiError
 
 
 viewUnavailable : Unavailable msg -> Html msg
@@ -35,26 +40,31 @@ viewUnavailable unavailable =
                 [ span [ class "repository-clone-mark" ] [ text "git" ]
                 , h1 [] [ text "Clone this repository for local browsing" ]
                 , p [] [ text (ApiError.message offer.error) ]
-                , cloneFeedback offer.feedback
+                , cloneFeedback offer.clone
                 , div [ class "repository-clone-actions" ]
-                    [ button [ type_ "button", disabled offer.loading, onClick offer.cloneTemporary ] [ text "Clone to /tmp" ]
-                    , button [ type_ "button", disabled offer.loading, onClick offer.cloneConfigured ] [ text "Clone to repos root" ]
+                    [ button [ type_ "button", disabled (offer.clone == Cloning), onClick offer.cloneTemporary ] [ text "Clone to /tmp" ]
+                    , button [ type_ "button", disabled (offer.clone == Cloning), onClick offer.cloneConfigured ] [ text "Clone to repos root" ]
                     ]
                 , small [] [ text "Clones start shallow and use your local GitHub authentication for private repositories." ]
                 ]
 
 
-cloneFeedback : Maybe (Result ApiError String) -> Html msg
-cloneFeedback feedback =
-    case feedback of
-        Just (Ok message) ->
-            p [ class "repository-clone-feedback" ] [ text message ]
+cloneFeedback : Clone -> Html msg
+cloneFeedback clone =
+    case clone of
+        Cloning ->
+            p [ class "repository-clone-feedback", Html.Attributes.attribute "role" "status" ] [ text "Cloning…" ]
 
-        Just (Err error) ->
-            p [ class "repository-clone-error" ] [ text (ApiError.message error) ]
+        CloneFailed error ->
+            p [ class "repository-clone-error", Html.Attributes.attribute "role" "alert" ] [ text (ApiError.message error) ]
 
-        Nothing ->
+        NotCloning ->
             text ""
+
+
+errorState : String -> ApiError -> Html msg
+errorState heading error =
+    section [ class "page-state is-error" ] [ h1 [] [ text heading ], p [] [ text (ApiError.message error) ] ]
 
 
 pageState : String -> String -> Html msg

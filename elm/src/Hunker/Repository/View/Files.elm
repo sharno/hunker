@@ -1,15 +1,16 @@
 module Hunker.Repository.View.Files exposing (Config, ReadyConfig, State(..), view)
 
 import Html exposing (Html, aside, button, code, div, h1, h2, header, p, pre, section, small, span, strong, text)
-import Html.Attributes exposing (attribute, class, type_)
+import Html.Attributes exposing (class, classList, style, type_)
 import Html.Events exposing (onClick)
 import Hunker.ApiError as ApiError
-import Hunker.Domain.Repository as Repository exposing (File, SearchMatch)
+import Hunker.Domain.Repository exposing (File, SearchMatch, SearchMode(..))
+import Hunker.Domain.Settings exposing (Feature)
 import Hunker.FileTree as FileTree exposing (Tree(..))
 import Hunker.Remote exposing (Remote(..))
 import Hunker.Repository.Files as Files
 import Hunker.Repository.View.Local as Local
-import Hunker.Route exposing (SearchMode(..))
+import Hunker.Route exposing (Search(..))
 import Hunker.SourceView as SourceView
 
 
@@ -23,10 +24,9 @@ type State msg
 
 
 type alias ReadyConfig msg =
-    { syntaxHighlighting : Bool
+    { syntaxHighlighting : Feature
     , selectedPath : Maybe String
-    , query : String
-    , searchMode : SearchMode
+    , search : Search
     , files : Files.Model
     , selectedFile : String -> msg
     , closedFile : msg
@@ -48,28 +48,27 @@ view config =
 readyView : ReadyConfig msg -> Html msg
 readyView config =
     let
-        catalog =
-            Files.catalog config.files
+        forest =
+            Files.tree config.files
     in
     div [ class "repository-workspace" ]
         [ aside [ class "repository-file-sidebar" ]
-            [ header [] [ strong [] [ text "Files" ], span [ class "count-badge" ] [ text (String.fromInt (List.length catalog)) ] ]
-            , treeView config (FileTree.build .path catalog)
+            [ header [] [ strong [] [ text "Files" ], span [ class "count-badge" ] [ text (String.fromInt (leafCount forest)) ] ]
+            , treeView config forest
             ]
         , section [ class "repository-results" ]
-            [ case config.selectedPath of
-                Just _ ->
-                    fileView config
+            [ case ( config.selectedPath, config.search ) of
+                ( Just path, _ ) ->
+                    fileView config path
 
-                Nothing ->
-                    if config.query /= "" then
-                        searchView config
+                ( Nothing, Search query mode ) ->
+                    searchView config query mode
 
-                    else
-                        div [ class "repository-empty-selection" ]
-                            [ h1 [] [ text "Choose a file" ]
-                            , p [] [ text "Browse the collapsed tree or search literal text, regular expressions, or FFF fuzzy matches." ]
-                            ]
+                ( Nothing, NoSearch ) ->
+                    div [ class "repository-empty-selection" ]
+                        [ h1 [] [ text "Choose a file" ]
+                        , p [] [ text "Browse the collapsed tree or search literal text, regular expressions, or FFF fuzzy matches." ]
+                        ]
             ]
         ]
 
@@ -91,7 +90,7 @@ treeNode config depth tree =
                 [ button
                     [ type_ "button"
                     , class "folder-row"
-                    , attribute "style" ("padding-left:" ++ String.fromInt (depth * 16 + 10) ++ "px")
+                    , style "padding-left" (String.fromInt (depth * 16 + 10) ++ "px")
                     , onClick (config.toggledFolder path)
                     ]
                     [ span []
@@ -116,19 +115,11 @@ treeNode config depth tree =
         Leaf name file ->
             button
                 [ type_ "button"
-                , class
-                    ("repository-file-row"
-                        ++ (if config.selectedPath == Just file.path then
-                                " is-active"
-
-                            else
-                                ""
-                           )
-                    )
-                , attribute "style" ("padding-left:" ++ String.fromInt (depth * 16 + 28) ++ "px")
+                , classList [ ( "repository-file-row", True ), ( "is-active", config.selectedPath == Just file.path ) ]
+                , style "padding-left" (String.fromInt (depth * 16 + 28) ++ "px")
                 , onClick (config.selectedFile file.path)
                 ]
-                [ span [ class ("file-status is-" ++ file.gitStatus) ] [ text (statusMark file.gitStatus) ]
+                [ span [ class "file-status is-clean" ] [ text "·" ]
                 , strong [] [ text name ]
                 , small [] [ text (formatSize file.size) ]
                 ]
@@ -150,25 +141,26 @@ leafCount forest =
         )
 
 
-fileView : ReadyConfig msg -> Html msg
-fileView config =
+fileView : ReadyConfig msg -> String -> Html msg
+fileView config path =
     case Files.selectedFile config.files of
         Loading _ ->
-            Local.pageState ("Opening " ++ Maybe.withDefault "file" config.selectedPath ++ "…") ""
+            Local.pageState ("Opening " ++ path ++ "…") ""
 
         Failure _ error ->
-            section [ class "page-state is-error" ] [ h1 [] [ text "Could not open file" ], p [] [ text (ApiError.message error) ] ]
+            Local.errorState "Could not open file" error
 
         Success _ file ->
             section [ class "repository-file-view" ]
                 [ div [ class "repository-file-heading" ]
                     [ button [ type_ "button", class "commit-back", onClick config.closedFile ]
                         [ text
-                            (if config.query == "" then
-                                "← File list"
+                            (case config.search of
+                                NoSearch ->
+                                    "← File list"
 
-                             else
-                                "← Search results"
+                                Search _ _ ->
+                                    "← Search results"
                             )
                         ]
                     , strong [] [ text file.path ]
@@ -183,7 +175,6 @@ fileView config =
                         (SourceView.file
                             { syntax = config.syntaxHighlighting
                             , namespace = file.path
-                            , path = file.path
                             , presentation = file.presentation
                             , isCollapsed = \fold -> Files.isSourceFoldCollapsed fold config.files
                             , toggleFold = config.toggledSourceFold
@@ -194,17 +185,17 @@ fileView config =
                 ]
 
         NotAsked ->
-            text ""
+            Local.pageState ("Opening " ++ path ++ "…") ""
 
 
-searchView : ReadyConfig msg -> Html msg
-searchView config =
+searchView : ReadyConfig msg -> String -> SearchMode -> Html msg
+searchView config query mode =
     case Files.search config.files of
         Loading _ ->
-            Local.pageState ("Searching for “" ++ config.query ++ "”…") (searchDescription config.searchMode)
+            Local.pageState ("Searching for “" ++ query ++ "”…") (searchDescription mode)
 
         Failure _ error ->
-            section [ class "page-state is-error" ] [ h1 [] [ text "Search failed" ], p [] [ text (ApiError.message error) ] ]
+            Local.errorState "Search failed" error
 
         Success _ results ->
             div [ class "repository-search-results" ]
@@ -227,7 +218,7 @@ searchView config =
                 ]
 
         NotAsked ->
-            text ""
+            Local.pageState ("Searching for “" ++ query ++ "”…") (searchDescription mode)
 
 
 searchMatchView : (String -> msg) -> SearchMatch -> Html msg
@@ -244,15 +235,6 @@ searchMatchView selectedFile match =
                 ]
             ]
         ]
-
-
-statusMark : String -> String
-statusMark status =
-    if status == "clean" || status == "" then
-        "·"
-
-    else
-        String.left 1 status
 
 
 formatSize : Int -> String

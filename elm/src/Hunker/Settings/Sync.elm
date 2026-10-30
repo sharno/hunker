@@ -11,14 +11,29 @@ module Hunker.Settings.Sync exposing
     , value
     )
 
+{-| Serialized, coalesced persistence of the one shared settings document.
+
+At most one save is in flight. Changes made while it runs are coalesced into
+the next save, and a response only settles the save it answers.
+
+-}
+
 import Hunker.ApiError exposing (ApiError)
 import Hunker.Domain.Settings exposing (Settings, SettingsDocument)
 
 
 type Sync
-    = Clean CleanState
-    | Saving SavingState
-    | Failed FailedState
+    = Sync
+        { configPath : String
+        , revision : Revision
+        , phase : Phase
+        }
+
+
+type Phase
+    = Clean Settings
+    | Saving { sent : Settings, desired : Settings }
+    | Failed { desired : Settings, error : ApiError }
 
 
 type Revision
@@ -37,41 +52,16 @@ type Status
     | SaveFailed ApiError
 
 
-type alias CleanState =
-    { revision : Revision
-    , document : SettingsDocument
-    }
-
-
-type alias SavingState =
-    { revision : Revision
-    , sent : Settings
-    , desired : Settings
-    , configPath : String
-    }
-
-
-type alias FailedState =
-    { revision : Revision
-    , desired : Settings
-    , configPath : String
-    , error : ApiError
-    }
-
-
 loaded : SettingsDocument -> Sync
 loaded document =
-    Clean
-        { revision = Revision 0
-        , document = document
-        }
+    Sync { configPath = document.configPath, revision = Revision 0, phase = Clean document.settings }
 
 
 value : Sync -> Settings
-value sync =
-    case sync of
-        Clean clean ->
-            clean.document.settings
+value (Sync sync) =
+    case sync.phase of
+        Clean settings ->
+            settings
 
         Saving saving ->
             saving.desired
@@ -81,10 +71,10 @@ value sync =
 
 
 status : Sync -> Status
-status sync =
-    case sync of
-        Clean clean ->
-            Saved clean.document.configPath
+status (Sync sync) =
+    case sync.phase of
+        Clean _ ->
+            Saved sync.configPath
 
         Saving _ ->
             SaveInProgress
@@ -93,79 +83,74 @@ status sync =
             SaveFailed failure.error
 
 
+{-| Requests `desired`. Nothing is sent when it is already the current value,
+and a request made during a save waits for that save to finish.
+-}
 queue : Settings -> Sync -> ( Sync, Maybe SaveRequest )
-queue desired sync =
-    case sync of
-        Clean clean ->
-            startSave clean.revision clean.document.configPath desired
+queue desired ((Sync sync) as current) =
+    case sync.phase of
+        Clean settings ->
+            if settings == desired then
+                ( current, Nothing )
+
+            else
+                startSave desired current
 
         Saving saving ->
-            ( Saving { saving | desired = desired }, Nothing )
+            ( Sync { sync | phase = Saving { saving | desired = desired } }, Nothing )
 
-        Failed failure ->
-            startSave failure.revision failure.configPath desired
+        Failed _ ->
+            startSave desired current
 
 
 saved : Revision -> SettingsDocument -> Sync -> ( Sync, Maybe SaveRequest )
-saved revision document sync =
-    case sync of
+saved revision document ((Sync sync) as current) =
+    case sync.phase of
         Saving saving ->
-            if revision /= saving.revision then
-                ( sync, Nothing )
+            if revision /= sync.revision then
+                ( current, Nothing )
 
             else if saving.desired == saving.sent then
-                ( Clean
-                    { revision = saving.revision
-                    , document = document
-                    }
-                , Nothing
-                )
+                ( Sync { sync | configPath = document.configPath, phase = Clean document.settings }, Nothing )
 
             else
-                startSave saving.revision document.configPath saving.desired
+                startSave saving.desired (Sync { sync | configPath = document.configPath })
 
-        _ ->
-            ( sync, Nothing )
+        -- Only an in-flight save can complete.
+        Clean _ ->
+            ( current, Nothing )
+
+        Failed _ ->
+            ( current, Nothing )
 
 
 failed : Revision -> ApiError -> Sync -> Sync
-failed revision error sync =
-    case sync of
+failed revision error ((Sync sync) as current) =
+    case sync.phase of
         Saving saving ->
-            if revision == saving.revision then
-                Failed
-                    { revision = saving.revision
-                    , desired = saving.desired
-                    , configPath = saving.configPath
-                    , error = error
-                    }
+            if revision == sync.revision then
+                Sync { sync | phase = Failed { desired = saving.desired, error = error } }
 
             else
-                sync
+                current
 
-        _ ->
-            sync
+        -- Only an in-flight save can fail.
+        Clean _ ->
+            current
+
+        Failed _ ->
+            current
 
 
-startSave : Revision -> String -> Settings -> ( Sync, Maybe SaveRequest )
-startSave previous configPath desired =
+startSave : Settings -> Sync -> ( Sync, Maybe SaveRequest )
+startSave desired (Sync sync) =
     let
+        (Revision previous) =
+            sync.revision
+
         revision =
-            nextRevision previous
+            Revision (previous + 1)
     in
-    ( Saving
-        { revision = revision
-        , sent = desired
-        , desired = desired
-        , configPath = configPath
-        }
-    , Just
-        { revision = revision
-        , settings = desired
-        }
+    ( Sync { sync | revision = revision, phase = Saving { sent = desired, desired = desired } }
+    , Just { revision = revision, settings = desired }
     )
-
-
-nextRevision : Revision -> Revision
-nextRevision (Revision current) =
-    Revision (current + 1)

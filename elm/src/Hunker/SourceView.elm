@@ -3,8 +3,8 @@ module Hunker.SourceView exposing (FileConfig, Range, file, line)
 import Html exposing (Html, button, span, text)
 import Html.Attributes exposing (attribute, class, type_)
 import Html.Events exposing (onClick)
+import Hunker.Domain.Settings exposing (Feature(..))
 import Hunker.Domain.Source as Source exposing (FoldRegion, Presentation(..))
-import Hunker.Syntax as FallbackSyntax
 
 
 type alias Range =
@@ -14,9 +14,8 @@ type alias Range =
 
 
 type alias FileConfig msg =
-    { syntax : Bool
+    { syntax : Feature
     , namespace : String
-    , path : String
     , presentation : Presentation
     , isCollapsed : String -> Bool
     , toggleFold : String -> msg
@@ -25,22 +24,10 @@ type alias FileConfig msg =
 
 file : FileConfig msg -> String -> List (Html msg)
 file config source =
-    renderLines config 1 (String.lines source)
-
-
-renderLines : FileConfig msg -> Int -> List String -> List (Html msg)
-renderLines config number remaining =
-    case remaining of
-        [] ->
-            []
-
-        sourceLine :: rest ->
-            if hiddenLine config number then
-                renderLines config (number + 1) rest
-
-            else
-                sourceLineView config number sourceLine
-                    :: renderLines config (number + 1) rest
+    String.lines source
+        |> List.indexedMap (\index sourceLine -> ( index + 1, sourceLine ))
+        |> List.filter (\( number, _ ) -> not (hiddenLine config number))
+        |> List.map (\( number, sourceLine ) -> sourceLineView config number sourceLine)
 
 
 sourceLineView : FileConfig msg -> Int -> String -> Html msg
@@ -78,7 +65,7 @@ sourceLineView config number sourceLine =
             , text (String.fromInt number)
             ]
         , span [ class "line-code" ]
-            (line config.syntax config.path config.presentation number sourceLine []
+            (line config.syntax config.presentation number sourceLine []
                 ++ (if collapsed then
                         [ span [ class "source-fold-summary" ]
                             [ text
@@ -101,29 +88,19 @@ sourceLineView config number sourceLine =
         ]
 
 
-line : Bool -> String -> Presentation -> Int -> String -> List Range -> List (Html msg)
-line syntax path presentation lineNumber source overlays =
-    case presentation of
-        Unsupported _ ->
-            if List.isEmpty overlays then
-                FallbackSyntax.line syntax path source
-
-            else
-                segmentedLine False presentation lineNumber source overlays
-
-        Complete _ ->
-            segmentedLine syntax presentation lineNumber source overlays
-
-
-segmentedLine : Bool -> Presentation -> Int -> String -> List Range -> List (Html msg)
-segmentedLine syntax presentation lineNumber source overlays =
+{-| One source line with Rust-provided syntax spans and inline-change
+overlays composed as independent layers.
+-}
+line : Feature -> Presentation -> Int -> String -> List Range -> List (Html msg)
+line syntax presentation lineNumber source overlays =
     let
         highlights =
-            if syntax then
-                Source.highlightsAt lineNumber presentation
+            case syntax of
+                Enabled ->
+                    Source.highlightsAt lineNumber presentation
 
-            else
-                []
+                Disabled ->
+                    []
 
         sourceLength =
             String.length source
@@ -209,23 +186,23 @@ boolClass enabled value =
 
 unique : List comparable -> List comparable
 unique values =
-    case values of
-        first :: second :: rest ->
-            if first == second then
-                unique (second :: rest)
+    List.foldr
+        (\value kept ->
+            case kept of
+                first :: _ ->
+                    if first == value then
+                        kept
 
-            else
-                first :: unique (second :: rest)
+                    else
+                        value :: kept
 
-        _ ->
-            values
+                [] ->
+                    [ value ]
+        )
+        []
+        values
 
 
 pairs : List value -> List ( value, value )
 pairs values =
-    case values of
-        first :: second :: rest ->
-            ( first, second ) :: pairs (second :: rest)
-
-        _ ->
-            []
+    List.map2 Tuple.pair values (List.drop 1 values)

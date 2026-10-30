@@ -3,11 +3,12 @@ module Main exposing (Model, Msg(..), init, main, update, view)
 import Browser
 import Browser.Navigation as Navigation
 import Html exposing (Html, a, button, div, form, header, input, main_, p, span, strong, text)
-import Html.Attributes exposing (attribute, class, href, placeholder, type_, value)
+import Html.Attributes exposing (attribute, class, classList, href, placeholder, type_, value)
 import Html.Events exposing (onClick, onInput, onSubmit)
 import Hunker.Api as Api
 import Hunker.ApiError as ApiError exposing (ApiError)
-import Hunker.Domain.Settings as Settings exposing (Settings, SettingsDocument)
+import Hunker.Domain.Git as Git
+import Hunker.Domain.Settings as Settings exposing (SettingsDocument, Visibility(..))
 import Hunker.Effect as Effect exposing (Effect)
 import Hunker.Page.Home as Home
 import Hunker.Page.Repository as Repository
@@ -32,10 +33,16 @@ type Page
     | NotFoundPage String
 
 
+{-| The pasted-URL field: a draft, or a draft the router rejected.
+-}
+type GithubInput
+    = Editing String
+    | Rejected String Route.GithubInputError
+
+
 type alias Model =
     { state : AppState
-    , githubInput : String
-    , githubInputError : String
+    , githubInput : GithubInput
     }
 
 
@@ -53,9 +60,10 @@ type Msg
     | SettingsSaved SettingsSync.Revision SettingsDocument
     | SettingsSaveFailed SettingsSync.Revision ApiError
     | RetriedBootstrap
+    | RetriedSettingsSave
     | ChangedGitHubInput String
     | SubmittedGitHubInput
-    | ChangedTopBarCollapsed Bool
+    | ChangedTopBar Visibility
     | TopBarFocusSettled
     | HomeMsg Home.Msg
     | SettingsMsg SettingsPage.Msg
@@ -77,14 +85,7 @@ main =
 
 init : () -> Url -> ignoredKey -> ( Model, Effect Msg )
 init _ url _ =
-    let
-        route =
-            Route.fromUrl url
-    in
-    ( { state = Booting route
-      , githubInput = ""
-      , githubInputError = ""
-      }
+    ( { state = Booting (Route.fromUrl url), githubInput = Editing "" }
     , Api.loadSettings SettingsLoaded SettingsLoadFailed
     )
 
@@ -110,356 +111,196 @@ runtimeUpdate msg runtime =
 subscriptions : Model -> Sub Msg
 subscriptions model =
     case model.state of
-        Ready _ page ->
-            case page of
-                RepositoryPage repository ->
-                    Sub.map RepositoryMsg (Repository.subscriptions repository)
+        Ready _ (RepositoryPage repository) ->
+            Sub.map RepositoryMsg (Repository.subscriptions repository)
 
-                ReviewPage review ->
-                    Sub.map ReviewMsg (Review.subscriptions review)
+        Ready _ (ReviewPage review) ->
+            Sub.map ReviewMsg (Review.subscriptions review)
 
-                _ ->
-                    Sub.none
+        Ready _ (HomePage _) ->
+            Sub.none
 
-        _ ->
+        Ready _ (SettingsPage _) ->
+            Sub.none
+
+        Ready _ (NotFoundPage _) ->
+            Sub.none
+
+        Booting _ ->
+            Sub.none
+
+        BootFailed _ _ ->
             Sub.none
 
 
 update : Msg -> Model -> ( Model, Effect Msg )
 update msg model =
-    case msg of
-        LinkClicked request ->
-            case request of
-                Browser.Internal url ->
-                    ( model, Effect.PushUrl (Url.toString url) )
+    case ( msg, model.state ) of
+        ( LinkClicked (Browser.Internal url), _ ) ->
+            ( model, Effect.PushUrl (Url.toString url) )
 
-                Browser.External url ->
-                    ( model, Effect.LoadExternal url )
+        ( LinkClicked (Browser.External url), _ ) ->
+            ( model, Effect.LoadExternal url )
 
-        UrlChanged url ->
+        ( UrlChanged url, Ready sync page ) ->
+            enterRoute sync (Route.fromUrl url) (Just page) model
+
+        ( UrlChanged url, BootFailed _ error ) ->
+            ( { model | state = BootFailed (Route.fromUrl url) error }, Effect.none )
+
+        ( UrlChanged url, Booting _ ) ->
+            ( { model | state = Booting (Route.fromUrl url) }, Effect.none )
+
+        ( SettingsLoaded document, Booting route ) ->
+            enterRoute (SettingsSync.loaded document) route Nothing model
+
+        ( SettingsLoaded document, BootFailed route _ ) ->
+            enterRoute (SettingsSync.loaded document) route Nothing model
+
+        ( SettingsLoadFailed error, Booting route ) ->
+            ( { model | state = BootFailed route error }, Effect.none )
+
+        ( SettingsSaved revision document, Ready sync page ) ->
+            applySettingsTransition page model (SettingsSync.saved revision document sync)
+
+        ( SettingsSaveFailed revision error, Ready sync page ) ->
+            ( { model | state = Ready (SettingsSync.failed revision error sync) page }, Effect.none )
+
+        ( RetriedBootstrap, BootFailed route _ ) ->
+            ( { model | state = Booting route }, Api.loadSettings SettingsLoaded SettingsLoadFailed )
+
+        ( RetriedSettingsSave, Ready sync page ) ->
+            applySettingsTransition page model (SettingsSync.queue (SettingsSync.value sync) sync)
+
+        ( ChangedGitHubInput draft, _ ) ->
+            ( { model | githubInput = Editing draft }, Effect.none )
+
+        ( SubmittedGitHubInput, _ ) ->
             let
-                route =
-                    Route.fromUrl url
+                draft =
+                    githubDraft model.githubInput
             in
-            case model.state of
-                Ready settingsState (ReviewPage review) ->
-                    case route of
-                        Route.Review reviewLocation ->
-                            let
-                                ( updated, effect ) =
-                                    Review.navigate reviewLocation review
-                            in
-                            ( { model | state = Ready settingsState (ReviewPage updated) }
-                            , Effect.map ReviewMsg effect
-                            )
-
-                        _ ->
-                            startRoute settingsState route model
-
-                Ready settingsState (RepositoryPage repository) ->
-                    case route of
-                        Route.Repository repositoryLocation ->
-                            let
-                                ( updated, effect ) =
-                                    Repository.navigate repositoryLocation repository
-                            in
-                            ( { model | state = Ready settingsState (RepositoryPage updated) }
-                            , Effect.map RepositoryMsg effect
-                            )
-
-                        _ ->
-                            startRoute settingsState route model
-
-                Ready settingsState _ ->
-                    startRoute settingsState route model
-
-                BootFailed _ error ->
-                    ( { model | state = BootFailed route error }, Effect.none )
-
-                Booting _ ->
-                    ( { model | state = Booting route }, Effect.none )
-
-        SettingsLoaded document ->
-            case bootRoute model.state of
-                Just route ->
-                    startRoute (SettingsSync.loaded document) route model
-
-                Nothing ->
-                    unchanged model
-
-        SettingsLoadFailed error ->
-            case bootRoute model.state of
-                Just route ->
-                    ( { model | state = BootFailed route error }, Effect.none )
-
-                Nothing ->
-                    unchanged model
-
-        SettingsSaved revision document ->
-            finishSettingsSave revision document model
-
-        SettingsSaveFailed revision error ->
-            failSettingsSave revision error model
-
-        RetriedBootstrap ->
-            case model.state of
-                BootFailed route _ ->
-                    ( { model | state = Booting route }, Api.loadSettings SettingsLoaded SettingsLoadFailed )
-
-                _ ->
-                    unchanged model
-
-        ChangedGitHubInput githubInput ->
-            ( { model | githubInput = githubInput, githubInputError = "" }, Effect.none )
-
-        SubmittedGitHubInput ->
-            case Route.fromGithubString (String.trim model.githubInput) of
+            case Route.fromGithubString (String.trim draft) of
                 Ok route ->
-                    ( { model | githubInputError = "" }, Effect.PushUrl (Route.toPath route) )
+                    ( { model | githubInput = Editing draft }, Effect.PushUrl (Route.toPath route) )
 
                 Err error ->
-                    ( { model | githubInputError = error }, Effect.none )
+                    ( { model | githubInput = Rejected draft error }, Effect.none )
 
-        ChangedTopBarCollapsed collapsed ->
-            case model.state of
-                Ready sync _ ->
-                    let
-                        settings =
-                            SettingsSync.value sync
-                    in
-                    queueSettings { settings | topBarCollapsed = collapsed } model
-                        |> addEffect
-                            (Effect.Focus
-                                (if collapsed then
-                                    "show-top-bar"
+        ( ChangedTopBar visibility, Ready _ _ ) ->
+            queueChanges [ Settings.SetTopBar visibility ] model
+                |> addEffect
+                    (Effect.Focus
+                        (case visibility of
+                            Collapsed ->
+                                "show-top-bar"
 
-                                 else
-                                    "hide-top-bar"
-                                )
-                                TopBarFocusSettled
-                            )
+                            Expanded ->
+                                "hide-top-bar"
+                        )
+                        TopBarFocusSettled
+                    )
 
-                _ ->
-                    unchanged model
-
-        TopBarFocusSettled ->
+        ( TopBarFocusSettled, _ ) ->
             unchanged model
 
-        HomeMsg message ->
-            updatePage model
-                (\settings page ->
-                    case page of
-                        HomePage home ->
-                            Home.update message home
-                                |> mapPage HomePage HomeMsg settings model
+        ( HomeMsg message, Ready sync (HomePage home) ) ->
+            Home.update message home |> mapPage HomePage HomeMsg sync model
 
-                        _ ->
-                            unchanged model
-                )
+        ( SettingsMsg message, Ready sync (SettingsPage settingsPage) ) ->
+            let
+                ( updated, changes ) =
+                    SettingsPage.update message settingsPage
+            in
+            queueChanges changes { model | state = Ready sync (SettingsPage updated) }
 
-        SettingsMsg message ->
-            updatePage model
-                (\settingsState page ->
-                    case page of
-                        SettingsPage settingsModel ->
-                            let
-                                ( updated, effect ) =
-                                    SettingsPage.update message settingsModel
+        ( RepositoryMsg message, Ready sync (RepositoryPage repository) ) ->
+            Repository.update message repository |> mapPage RepositoryPage RepositoryMsg sync model
 
-                                updatedModel =
-                                    { model | state = Ready settingsState (SettingsPage updated) }
-                            in
-                            case SettingsPage.submission message updated of
-                                Just desired ->
-                                    queueSettings desired updatedModel
-                                        |> addEffect (Effect.map SettingsMsg effect)
+        ( ReviewMsg message, Ready sync (ReviewPage review) ) ->
+            let
+                ( updated, effect, changes ) =
+                    Review.update (SettingsSync.value sync) message review
+            in
+            queueChanges changes { model | state = Ready sync (ReviewPage updated) }
+                |> addEffect (Effect.map ReviewMsg effect)
 
-                                Nothing ->
-                                    ( updatedModel, Effect.map SettingsMsg effect )
-
-                        _ ->
-                            unchanged model
-                )
-
-        RepositoryMsg message ->
-            updatePage model
-                (\settings page ->
-                    case page of
-                        RepositoryPage repository ->
-                            Repository.update message repository
-                                |> mapPage RepositoryPage RepositoryMsg settings model
-
-                        _ ->
-                            unchanged model
-                )
-
-        ReviewMsg message ->
-            updatePage model
-                (\settingsState page ->
-                    case page of
-                        ReviewPage review ->
-                            let
-                                settings =
-                                    SettingsSync.value settingsState
-
-                                intent =
-                                    Review.settingsIntent settings message
-
-                                desired =
-                                    intent
-                                        |> Maybe.withDefault settings
-
-                                ( updated, effect ) =
-                                    Review.update desired message review
-
-                                updatedModel =
-                                    { model | state = Ready settingsState (ReviewPage updated) }
-                            in
-                            case intent of
-                                Just changed ->
-                                    queueSettings changed updatedModel
-                                        |> addEffect (Effect.map ReviewMsg effect)
-
-                                Nothing ->
-                                    ( updatedModel, Effect.map ReviewMsg effect )
-
-                        _ ->
-                            unchanged model
-                )
-
-
-updatePage : Model -> (SettingsSync.Sync -> Page -> ( Model, Effect Msg )) -> ( Model, Effect Msg )
-updatePage model apply =
-    case model.state of
-        Ready settingsState page ->
-            apply settingsState page
-
+        -- Everything else is a response or message for a state that has since
+        -- been replaced: a page message after navigating away, or a settings
+        -- or boot response that arrives outside its state.
         _ ->
             unchanged model
+
+
+githubDraft : GithubInput -> String
+githubDraft input =
+    case input of
+        Editing draft ->
+            draft
+
+        Rejected draft _ ->
+            draft
 
 
 mapPage : (childModel -> Page) -> (childMsg -> Msg) -> SettingsSync.Sync -> Model -> ( childModel, Effect childMsg ) -> ( Model, Effect Msg )
-mapPage toPage toMsg settingsState model ( childModel, childEffect ) =
-    ( { model | state = Ready settingsState (toPage childModel) }
-    , Effect.map toMsg childEffect
-    )
+mapPage toPage toMsg sync model ( childModel, childEffect ) =
+    ( { model | state = Ready sync (toPage childModel) }, Effect.map toMsg childEffect )
 
 
-startRoute : SettingsSync.Sync -> Route -> Model -> ( Model, Effect Msg )
-startRoute settingsState route model =
-    let
-        settings =
-            SettingsSync.value settingsState
-    in
-    case route of
-        Route.Home ->
-            let
-                ( home, effect ) =
-                    Home.init
-            in
-            ( { model | state = Ready settingsState (HomePage home) }
-            , Effect.map HomeMsg effect
-            )
+{-| The single route transition for cold loads, history moves, and pasted
+URLs. A route for the page already shown navigates within it.
+-}
+enterRoute : SettingsSync.Sync -> Route -> Maybe Page -> Model -> ( Model, Effect Msg )
+enterRoute sync route current model =
+    case ( route, current ) of
+        ( Route.Review location, Just (ReviewPage review) ) ->
+            Review.navigate location review |> mapPage ReviewPage ReviewMsg sync model
 
-        Route.Settings ->
-            let
-                ( settingsModel, effect ) =
-                    SettingsPage.init settings
-            in
-            ( { model | state = Ready settingsState (SettingsPage settingsModel) }
-            , Effect.map SettingsMsg effect
-            )
+        ( Route.Repository location, Just (RepositoryPage repository) ) ->
+            Repository.navigate location repository |> mapPage RepositoryPage RepositoryMsg sync model
 
-        Route.Repository repositoryLocation ->
-            let
-                ( repository, effect ) =
-                    Repository.init repositoryLocation
-            in
-            ( { model | state = Ready settingsState (RepositoryPage repository) }
-            , Effect.map RepositoryMsg effect
-            )
+        ( Route.Review location, _ ) ->
+            Review.init location |> mapPage ReviewPage ReviewMsg sync model
 
-        Route.Review reviewLocation ->
-            let
-                ( review, effect ) =
-                    Review.init reviewLocation
-            in
-            ( { model | state = Ready settingsState (ReviewPage review) }
-            , Effect.map ReviewMsg effect
-            )
+        ( Route.Repository location, _ ) ->
+            Repository.init location |> mapPage RepositoryPage RepositoryMsg sync model
 
-        Route.NotFound path ->
-            ( { model | state = Ready settingsState (NotFoundPage path) }, Effect.none )
+        ( Route.Home, _ ) ->
+            Home.init |> mapPage HomePage HomeMsg sync model
+
+        ( Route.Settings, _ ) ->
+            ( { model | state = Ready sync (SettingsPage SettingsPage.init) }, Effect.none )
+
+        ( Route.NotFound path, _ ) ->
+            ( { model | state = Ready sync (NotFoundPage path) }, Effect.none )
 
 
-bootRoute : AppState -> Maybe Route
-bootRoute state =
-    case state of
-        Booting route ->
-            Just route
-
-        BootFailed route _ ->
-            Just route
-
-        Ready _ _ ->
-            Nothing
-
-
-queueSettings : Settings -> Model -> ( Model, Effect Msg )
-queueSettings desired model =
-    case model.state of
-        Ready sync page ->
-            applySettingsTransition page model (SettingsSync.queue desired sync)
-
-        _ ->
+queueChanges : List Settings.Change -> Model -> ( Model, Effect Msg )
+queueChanges changes model =
+    case ( changes, model.state ) of
+        ( [], _ ) ->
             unchanged model
 
+        ( _, Ready sync page ) ->
+            applySettingsTransition page model (SettingsSync.queue (List.foldl Settings.apply (SettingsSync.value sync) changes) sync)
 
-finishSettingsSave : SettingsSync.Revision -> SettingsDocument -> Model -> ( Model, Effect Msg )
-finishSettingsSave revision document model =
-    case model.state of
-        Ready sync page ->
-            applySettingsTransition page model (SettingsSync.saved revision document sync)
-
-        _ ->
+        ( _, Booting _ ) ->
             unchanged model
 
-
-failSettingsSave : SettingsSync.Revision -> ApiError -> Model -> ( Model, Effect Msg )
-failSettingsSave revision error model =
-    case model.state of
-        Ready sync page ->
-            ( { model | state = Ready (SettingsSync.failed revision error sync) page }, Effect.none )
-
-        _ ->
+        ( _, BootFailed _ _ ) ->
             unchanged model
 
 
 applySettingsTransition : Page -> Model -> ( SettingsSync.Sync, Maybe SettingsSync.SaveRequest ) -> ( Model, Effect Msg )
 applySettingsTransition page model ( sync, request ) =
     ( { model | state = Ready sync page }
-    , request
-        |> Maybe.map
-            (\save ->
-                Api.saveSettings save.settings
-                    (SettingsSaved save.revision)
-                    (SettingsSaveFailed save.revision)
-            )
-        |> Maybe.withDefault Effect.none
+    , case request of
+        Just save ->
+            Api.saveSettings save.settings (SettingsSaved save.revision) (SettingsSaveFailed save.revision)
+
+        Nothing ->
+            Effect.none
     )
-
-
-settingsSaveStatus : SettingsSync.Sync -> SettingsPage.SaveStatus
-settingsSaveStatus sync =
-    case SettingsSync.status sync of
-        SettingsSync.Saved configPath ->
-            SettingsPage.SaveSucceeded configPath
-
-        SettingsSync.SaveInProgress ->
-            SettingsPage.SaveInProgress
-
-        SettingsSync.SaveFailed error ->
-            SettingsPage.SaveError (ApiError.message error)
 
 
 addEffect : Effect Msg -> ( Model, Effect Msg ) -> ( Model, Effect Msg )
@@ -471,12 +312,26 @@ view : Model -> Browser.Document Msg
 view model =
     { title = documentTitle model
     , body =
-        [ div [ class ("hunker-app" ++ topBarClass model) ]
-            [ topBar model
+        [ div [ classList [ ( "hunker-app", True ), ( "top-bar-hidden", topBar model == Just Collapsed ) ] ]
+            [ topBarView model
+            , saveFailureBanner model
             , pageView model
             ]
         ]
     }
+
+
+topBar : Model -> Maybe Visibility
+topBar model =
+    case model.state of
+        Ready sync _ ->
+            Just (SettingsSync.value sync).topBar
+
+        Booting _ ->
+            Nothing
+
+        BootFailed _ _ ->
+            Nothing
 
 
 documentTitle : Model -> String
@@ -504,50 +359,25 @@ documentTitle model =
             "Loading · Hunker"
 
 
-topBar : Model -> Html Msg
-topBar model =
-    if topBarIsCollapsed model then
-        button
-            [ type_ "button"
-            , attribute "id" "show-top-bar"
-            , class "top-bar-reveal"
-            , attribute "aria-label" "Show top bar"
-            , attribute "title" "Show top bar"
-            , onClick (ChangedTopBarCollapsed False)
-            ]
-            [ text "↓" ]
-
-    else
-        header [ class "app-bar" ]
-            [ a [ class "brand", href "/" ]
-                [ span [ class "brand-mark" ] [ text "H" ]
-                , span [ class "brand-name" ] [ text "hunker" ]
+{-| Settings controls only appear once settings are loaded; before that the
+bar offers only navigation.
+-}
+topBarView : Model -> Html Msg
+topBarView model =
+    case topBar model of
+        Just Collapsed ->
+            button
+                [ type_ "button"
+                , attribute "id" "show-top-bar"
+                , class "top-bar-reveal"
+                , attribute "aria-label" "Show top bar"
+                , attribute "title" "Show top bar"
+                , onClick (ChangedTopBar Expanded)
                 ]
-            , pageToolbar model
-            , form [ class "github-location-form", onSubmit SubmittedGitHubInput ]
-                [ input
-                    [ type_ "text"
-                    , attribute "aria-label" "GitHub URL"
-                    , placeholder "Paste any GitHub URL"
-                    , value model.githubInput
-                    , onInput ChangedGitHubInput
-                    , attribute "aria-invalid"
-                        (if model.githubInputError == "" then
-                            "false"
+                [ text "↓" ]
 
-                         else
-                            "true"
-                        )
-                    ]
-                    []
-                , button [ type_ "submit" ] [ text "Open" ]
-                , if model.githubInputError == "" then
-                    text ""
-
-                  else
-                    span [ class "github-location-error", attribute "role" "alert" ] [ text model.githubInputError ]
-                ]
-            , div [ class "app-bar-actions" ]
+        Just Expanded ->
+            appBar model
                 [ a [ class "app-bar-button", href "/settings", attribute "aria-label" "Settings", attribute "title" "Settings" ]
                     [ span [ class "app-bar-settings-label" ] [ text "Settings" ]
                     , span [ class "app-bar-settings-icon", attribute "aria-hidden" "true" ] [ text "⚙" ]
@@ -558,30 +388,102 @@ topBar model =
                     , class "top-bar-toggle"
                     , attribute "aria-label" "Hide top bar"
                     , attribute "title" "Hide top bar"
-                    , onClick (ChangedTopBarCollapsed True)
+                    , onClick (ChangedTopBar Collapsed)
                     ]
                     [ text "↑" ]
                 ]
+
+        Nothing ->
+            appBar model []
+
+
+appBar : Model -> List (Html Msg) -> Html Msg
+appBar model actions =
+    let
+        rejection =
+            case model.githubInput of
+                Editing _ ->
+                    Nothing
+
+                Rejected _ error ->
+                    Just error
+    in
+    header [ class "app-bar" ]
+        [ a [ class "brand", href "/" ]
+            [ span [ class "brand-mark" ] [ text "H" ]
+            , span [ class "brand-name" ] [ text "hunker" ]
             ]
+        , pageToolbar model
+        , form [ class "github-location-form", onSubmit SubmittedGitHubInput ]
+            [ input
+                [ type_ "text"
+                , attribute "aria-label" "GitHub URL"
+                , placeholder "Paste any GitHub URL"
+                , value (githubDraft model.githubInput)
+                , onInput ChangedGitHubInput
+                , attribute "aria-invalid"
+                    (case rejection of
+                        Just _ ->
+                            "true"
+
+                        Nothing ->
+                            "false"
+                    )
+                ]
+                []
+            , button [ type_ "submit" ] [ text "Open" ]
+            , case rejection of
+                Just error ->
+                    span [ class "github-location-error", attribute "role" "alert" ] [ text (githubInputErrorMessage error) ]
+
+                Nothing ->
+                    text ""
+            ]
+        , div [ class "app-bar-actions" ] actions
+        ]
 
 
-topBarIsCollapsed : Model -> Bool
-topBarIsCollapsed model =
+githubInputErrorMessage : Route.GithubInputError -> String
+githubInputErrorMessage error =
+    case error of
+        Route.UnparseableUrl ->
+            "Paste a complete GitHub repository, pull request, compare, commit, or file URL."
+
+        Route.ForeignHost ->
+            "Hunker currently accepts github.com or Hunker URLs."
+
+        Route.UnsupportedLocation ->
+            "Hunker does not have a focused view for that GitHub URL."
+
+
+{-| A failed save from any page is reported once in the app chrome; the
+settings page shows its own status beside the form.
+-}
+saveFailureBanner : Model -> Html Msg
+saveFailureBanner model =
     case model.state of
+        Ready _ (SettingsPage _) ->
+            text ""
+
         Ready sync _ ->
-            (SettingsSync.value sync).topBarCollapsed
+            case SettingsSync.status sync of
+                SettingsSync.SaveFailed error ->
+                    div [ class "settings-save-banner", attribute "role" "alert" ]
+                        [ span [] [ text ("Could not save settings: " ++ ApiError.message error) ]
+                        , button [ type_ "button", onClick RetriedSettingsSave ] [ text "Retry" ]
+                        ]
 
-        _ ->
-            False
+                SettingsSync.Saved _ ->
+                    text ""
 
+                SettingsSync.SaveInProgress ->
+                    text ""
 
-topBarClass : Model -> String
-topBarClass model =
-    if topBarIsCollapsed model then
-        " top-bar-hidden"
+        Booting _ ->
+            text ""
 
-    else
-        ""
+        BootFailed _ _ ->
+            text ""
 
 
 pageToolbar : Model -> Html Msg
@@ -594,7 +496,7 @@ pageToolbar model =
         Ready _ (ReviewPage review) ->
             div [ class "review-app-location" ]
                 [ span [] [ text "Review" ]
-                , strong [] [ text (Route.repositoryName (Review.location review).target) ]
+                , strong [] [ text (Git.repositoryToString (Review.location review).repository) ]
                 ]
 
         _ ->
@@ -611,20 +513,20 @@ pageView model =
             main_ [ class "page-state is-error", attribute "role" "alert" ]
                 [ strong [] [ text "Could not load Hunker settings" ]
                 , p [] [ text (ApiError.message error) ]
-                , button [ type_ "button", Html.Events.onClick RetriedBootstrap ] [ text "Try again" ]
+                , button [ type_ "button", onClick RetriedBootstrap ] [ text "Try again" ]
                 ]
 
-        Ready settingsState page ->
+        Ready sync page ->
             let
                 settings =
-                    SettingsSync.value settingsState
+                    SettingsSync.value sync
             in
             case page of
                 HomePage home ->
                     Html.map HomeMsg (Home.view home)
 
-                SettingsPage settingsModel ->
-                    Html.map SettingsMsg (SettingsPage.view (settingsSaveStatus settingsState) settingsModel)
+                SettingsPage settingsPage ->
+                    Html.map SettingsMsg (SettingsPage.view (SettingsSync.status sync) settings settingsPage)
 
                 RepositoryPage repository ->
                     Html.map RepositoryMsg (Repository.view settings.syntaxHighlighting repository)

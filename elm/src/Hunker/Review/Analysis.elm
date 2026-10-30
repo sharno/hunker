@@ -2,22 +2,23 @@ module Hunker.Review.Analysis exposing
     ( Identity
     , State
     , Status(..)
+    , begin
     , complete
-    , disable
     , fail
     , files
-    , identity
-    , inFlight
     , init
-    , inlineDiff
-    , matches
     , status
     )
 
+{-| Review analysis owns the prepared `FileIndex` it decorates, so a snapshot
+and its word ranges cannot update independently.
+-}
+
 import Hunker.ApiError exposing (ApiError)
 import Hunker.Domain.Review exposing (AnalysisSnapshot)
-import Hunker.Domain.Settings exposing (InlineDiffMode)
+import Hunker.Domain.Settings as Settings exposing (AnalysisOptions)
 import Hunker.Review.FileIndex as FileIndex exposing (FileIndex)
+import Hunker.Review.Session as Session
 
 
 type State
@@ -35,82 +36,72 @@ type Status
 
 
 type Identity
-    = Identity
-        { requestUrl : String
-        , baseOid : String
-        , headOid : String
-        , ignoreWhitespace : Bool
-        , semantic : Bool
-        , syntax : Bool
-        , inlineDiff : InlineDiffMode
-        }
-
-
-identity : String -> String -> String -> Bool -> Bool -> Bool -> InlineDiffMode -> Identity
-identity requestUrl baseOid headOid ignoreWhitespace semantic syntax inlineMode =
-    Identity
-        { requestUrl = requestUrl
-        , baseOid = baseOid
-        , headOid = headOid
-        , ignoreWhitespace = ignoreWhitespace
-        , semantic = semantic
-        , syntax = syntax
-        , inlineDiff = inlineMode
-        }
+    = Identity Session.Id AnalysisOptions
 
 
 init : FileIndex -> State
-init files_ =
-    Disabled files_
+init =
+    Disabled
 
 
-disable : State -> State
-disable state =
-    Disabled (FileIndex.clearWordRanges (files state))
+{-| Starts the analysis `options` select, or disables analysis when they
+request nothing. Returns the request identity to fetch, if any.
+-}
+begin : Session.Id -> AnalysisOptions -> State -> ( State, Maybe Identity )
+begin session options state =
+    let
+        cleared =
+            FileIndex.clearAnalysis (files state)
+    in
+    if Settings.requestsAnalysis options then
+        let
+            requested =
+                Identity session options
+        in
+        ( InFlight requested cleared, Just requested )
 
-
-inFlight : Identity -> State -> State
-inFlight requested state =
-    InFlight requested (FileIndex.clearWordRanges (files state))
+    else
+        ( Disabled cleared, Nothing )
 
 
 complete : Identity -> AnalysisSnapshot -> State -> State
 complete requested value state =
-    if matches requested state then
-        Complete requested (FileIndex.withAnalysis value (files state))
+    case state of
+        InFlight current index ->
+            if current == requested then
+                Complete requested (FileIndex.withAnalysis value index)
 
-    else
-        state
+            else
+                state
+
+        Disabled _ ->
+            state
+
+        Failure _ _ _ ->
+            state
+
+        Complete _ _ ->
+            state
 
 
 fail : Identity -> ApiError -> State -> State
 fail requested error state =
-    if matches requested state then
-        Failure requested error (files state)
-
-    else
-        state
-
-
-matches : Identity -> State -> Bool
-matches requested state =
     case state of
-        InFlight current _ ->
-            current == requested
+        InFlight current index ->
+            if current == requested then
+                Failure requested error index
 
-        Failure current _ _ ->
-            current == requested
-
-        Complete current _ ->
-            current == requested
+            else
+                state
 
         Disabled _ ->
-            False
+            state
 
+        Failure _ _ _ ->
+            state
 
-inlineDiff : Identity -> InlineDiffMode
-inlineDiff (Identity details) =
-    details.inlineDiff
+        Complete _ _ ->
+            state
 
 
 files : State -> FileIndex

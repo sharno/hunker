@@ -1,159 +1,166 @@
 use std::collections::HashMap;
 
+use futures::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
 
-use crate::error::{AppError, AppResult};
+use crate::{
+    error::{AppError, AppResult},
+    types::{LineNumber, NonEmptyText, Oid, RelativePath},
+};
 
-use super::{GitHub, GitHubTarget, PullNumber};
+use super::{GitHub, PullTarget};
+
+const COMMENT_PAGE_SIZE: usize = 100;
+const MAX_COMMENT_PAGES: usize = 30;
 
 const REVIEW_THREADS_QUERY: &str = "query HunkerReviewThreads($owner: String!, $repo: String!, $number: Int!, $cursor: String) { repository(owner: $owner, name: $repo) { pullRequest(number: $number) { reviewThreads(first: 100, after: $cursor) { nodes { isResolved comments(first: 1) { nodes { fullDatabaseId } } } pageInfo { hasNextPage endCursor } } } } }";
 
 impl GitHub {
-    pub async fn review_comments(&self, target: &GitHubTarget) -> AppResult<Vec<ReviewComment>> {
-        let number = require_pull(target)?;
-        let values: Vec<ReviewCommentResponse> = self
-            .json(&format!(
-                "https://api.github.com/repos/{}/{}/pulls/{number}/comments?per_page=100",
-                target.owner(),
-                target.repo()
-            ))
-            .await?;
-        let resolutions = self.resolutions(target, number).await?;
+    pub async fn review_comments(&self, target: &PullTarget) -> AppResult<Vec<ReviewComment>> {
+        let (values, resolutions) = futures::try_join!(
+            self.paged::<ReviewCommentResponse>(
+                |page| {
+                    format!(
+                        "https://api.github.com/repos/{}/pulls/{}/comments?per_page={COMMENT_PAGE_SIZE}&page={page}",
+                        target.repository, target.number
+                    )
+                },
+                COMMENT_PAGE_SIZE,
+                MAX_COMMENT_PAGES,
+            ),
+            self.resolutions(target),
+        )?;
         Ok(values
             .into_iter()
-            .map(|value| {
-                let mut comment = ReviewComment::from(value);
-                comment.resolved = resolutions.get(&comment.root_id).copied().unwrap_or(false);
-                comment
+            .map(|value| ReviewComment::new(value, &resolutions))
+            .collect())
+    }
+
+    async fn resolutions(&self, target: &PullTarget) -> AppResult<HashMap<CommentId, bool>> {
+        let pages = stream::unfold(Some(None::<String>), |cursor| async move {
+            let cursor = cursor?;
+            let page = self.thread_page(target, cursor.as_deref()).await;
+            let next = match &page {
+                Ok(Some(threads)) if threads.page_info.has_next_page => {
+                    threads.page_info.end_cursor.clone().map(Some)
+                }
+                Ok(_) | Err(_) => None,
+            };
+            Some((page, next))
+        })
+        .collect::<Vec<_>>()
+        .await;
+        Ok(pages
+            .into_iter()
+            .collect::<AppResult<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .flat_map(|threads| threads.nodes)
+            .filter_map(|thread| {
+                let root = thread
+                    .comments
+                    .nodes
+                    .first()?
+                    .full_database_id
+                    .as_ref()?
+                    .id()?;
+                Some((root, thread.is_resolved))
             })
             .collect())
     }
 
-    async fn resolutions(
+    /// Returns `None` when GitHub no longer exposes the pull request's threads.
+    async fn thread_page(
         &self,
-        target: &GitHubTarget,
-        number: &PullNumber,
-    ) -> AppResult<HashMap<u64, bool>> {
-        let mut result = HashMap::new();
-        let mut cursor: Option<String> = None;
-        loop {
-            let body = GraphQlRequest {
-                query: REVIEW_THREADS_QUERY,
-                variables: ThreadVariables {
-                    owner: target.owner(),
-                    repo: target.repo(),
-                    number: number.as_u32(),
-                    cursor: cursor.as_deref(),
-                },
-            };
-            let page: ThreadsResponse = self
-                .post("https://api.github.com/graphql", "application/json", &body)
-                .await?
-                .json()
-                .await
-                .map_err(|_| AppError::upstream("GitHub returned malformed review thread data."))?;
-            let Some(threads) = page
-                .data
-                .repository
-                .and_then(|repository| repository.pull_request)
-                .map(|pull| pull.review_threads)
-            else {
-                break;
-            };
-            for thread in threads.nodes {
-                if let Some(id) = thread
-                    .comments
-                    .nodes
-                    .first()
-                    .and_then(|comment| comment.full_database_id.as_ref())
-                    .and_then(DatabaseId::as_u64)
-                {
-                    result.insert(id, thread.is_resolved);
-                }
-            }
-            if !threads.page_info.has_next_page {
-                break;
-            }
-            cursor = threads.page_info.end_cursor;
-            if cursor.is_none() {
-                break;
-            }
-        }
-        Ok(result)
+        target: &PullTarget,
+        cursor: Option<&str>,
+    ) -> AppResult<Option<Threads>> {
+        let body = GraphQlRequest {
+            query: REVIEW_THREADS_QUERY,
+            variables: ThreadVariables {
+                owner: target.repository.owner(),
+                repo: target.repository.name(),
+                number: target.number.as_u32(),
+                cursor,
+            },
+        };
+        let page: ThreadsResponse = self
+            .post("https://api.github.com/graphql", "application/json", &body)
+            .await?
+            .json()
+            .await
+            .map_err(|_| AppError::upstream("GitHub returned malformed review thread data."))?;
+        Ok(page
+            .data
+            .repository
+            .and_then(|repository| repository.pull_request)
+            .map(|pull| pull.review_threads))
     }
 
     pub async fn reply(
         &self,
-        target: &GitHubTarget,
-        comment_id: u64,
-        body: &str,
+        target: &PullTarget,
+        comment_id: CommentId,
+        body: &NonEmptyText,
     ) -> AppResult<ReviewComment> {
-        let number = require_pull(target)?;
         let value: ReviewCommentResponse = self
             .post_json(
                 &format!(
-                    "https://api.github.com/repos/{}/{}/pulls/{number}/comments/{comment_id}/replies",
-                    target.owner(),
-                    target.repo()
+                    "https://api.github.com/repos/{}/pulls/{}/comments/{}/replies",
+                    target.repository, target.number, comment_id.0
                 ),
-                &ReplyPayload { body },
+                &ReplyPayload {
+                    body: body.as_str(),
+                },
             )
             .await?;
-        Ok(value.into())
+        Ok(ReviewComment::new(value, &HashMap::new()))
     }
 
-    pub async fn create_comment(
-        &self,
-        target: &GitHubTarget,
-        input: &InlineCommentInput,
-    ) -> AppResult<ReviewComment> {
-        let number = require_pull(target)?;
-        let payload = InlineCommentPayload {
-            body: &input.body,
-            commit_id: &input.commit_id,
-            path: &input.path,
-            line: input.line,
-            side: input.side,
-        };
+    pub async fn create_comment(&self, comment: &InlineComment) -> AppResult<ReviewComment> {
+        let target = &comment.pull_url;
         let value: ReviewCommentResponse = self
             .post_json(
                 &format!(
-                    "https://api.github.com/repos/{}/{}/pulls/{number}/comments",
-                    target.owner(),
-                    target.repo()
+                    "https://api.github.com/repos/{}/pulls/{}/comments",
+                    target.repository, target.number
                 ),
-                &payload,
+                &InlineCommentPayload {
+                    body: comment.body.as_str(),
+                    commit_id: &comment.commit_id,
+                    path: &comment.path,
+                    line: comment.line,
+                    side: comment.side,
+                },
             )
             .await?;
-        Ok(value.into())
+        Ok(ReviewComment::new(value, &HashMap::new()))
     }
 
     pub async fn submit_review(
         &self,
-        target: &GitHubTarget,
-        body: &str,
-        event: ReviewAction,
+        target: &PullTarget,
+        submission: &ReviewSubmission,
     ) -> AppResult<()> {
-        let number = require_pull(target)?;
         self.post(
             &format!(
-                "https://api.github.com/repos/{}/{}/pulls/{number}/reviews",
-                target.owner(),
-                target.repo()
+                "https://api.github.com/repos/{}/pulls/{}/reviews",
+                target.repository, target.number
             ),
             "application/vnd.github+json",
-            &SubmitReviewPayload { body, event },
+            &SubmitReviewPayload {
+                body: submission.body().map(NonEmptyText::as_str),
+                event: submission.action(),
+            },
         )
         .await?;
         Ok(())
     }
 }
 
-fn require_pull(target: &GitHubTarget) -> AppResult<&PullNumber> {
-    target.pull_number().ok_or_else(|| {
-        AppError::bad_request("GitHub reviews are available for pull requests, not compare URLs.")
-    })
-}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct CommentId(u64);
 
 #[derive(Serialize)]
 struct ReplyPayload<'a> {
@@ -163,15 +170,16 @@ struct ReplyPayload<'a> {
 #[derive(Serialize)]
 struct InlineCommentPayload<'a> {
     body: &'a str,
-    commit_id: &'a str,
-    path: &'a str,
-    line: usize,
+    commit_id: &'a Oid,
+    path: &'a RelativePath,
+    line: LineNumber,
     side: CommentSide,
 }
 
 #[derive(Serialize)]
 struct SubmitReviewPayload<'a> {
-    body: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body: Option<&'a str>,
     event: ReviewAction,
 }
 
@@ -181,6 +189,43 @@ pub enum ReviewAction {
     Comment,
     Approve,
     RequestChanges,
+}
+
+/// A review GitHub will accept: only approvals may omit the summary.
+#[derive(Debug, Clone)]
+pub enum ReviewSubmission {
+    Approve(Option<NonEmptyText>),
+    Comment(NonEmptyText),
+    RequestChanges(NonEmptyText),
+}
+
+impl ReviewSubmission {
+    pub fn new(action: ReviewAction, body: &str) -> AppResult<Self> {
+        let summary = NonEmptyText::parse(body).ok();
+        match (action, summary) {
+            (ReviewAction::Approve, summary) => Ok(Self::Approve(summary)),
+            (ReviewAction::Comment, Some(summary)) => Ok(Self::Comment(summary)),
+            (ReviewAction::RequestChanges, Some(summary)) => Ok(Self::RequestChanges(summary)),
+            (ReviewAction::Comment | ReviewAction::RequestChanges, None) => Err(
+                AppError::bad_request("Comment and request-changes reviews require a summary."),
+            ),
+        }
+    }
+
+    pub fn action(&self) -> ReviewAction {
+        match self {
+            Self::Approve(_) => ReviewAction::Approve,
+            Self::Comment(_) => ReviewAction::Comment,
+            Self::RequestChanges(_) => ReviewAction::RequestChanges,
+        }
+    }
+
+    fn body(&self) -> Option<&NonEmptyText> {
+        match self {
+            Self::Approve(summary) => summary.as_ref(),
+            Self::Comment(summary) | Self::RequestChanges(summary) => Some(summary),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -199,17 +244,17 @@ struct ThreadVariables<'a> {
 
 #[derive(Deserialize)]
 struct ReviewCommentResponse {
-    id: u64,
+    id: CommentId,
     path: String,
     body: String,
     user: Option<CommentUser>,
     html_url: String,
     created_at: String,
-    in_reply_to_id: Option<u64>,
+    in_reply_to_id: Option<CommentId>,
     line: Option<usize>,
     original_line: Option<usize>,
-    side: Option<String>,
-    original_side: Option<String>,
+    side: Option<CommentSide>,
+    original_side: Option<CommentSide>,
 }
 
 #[derive(Deserialize)]
@@ -220,8 +265,8 @@ struct CommentUser {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewComment {
-    pub id: u64,
-    pub root_id: u64,
+    pub id: CommentId,
+    pub root_id: CommentId,
     pub path: String,
     pub body: String,
     pub author: String,
@@ -232,16 +277,12 @@ pub struct ReviewComment {
     pub resolved: bool,
 }
 
-impl From<ReviewCommentResponse> for ReviewComment {
-    fn from(value: ReviewCommentResponse) -> Self {
-        let side = value
-            .side
-            .or(value.original_side)
-            .filter(|side| side == "LEFT")
-            .map_or(CommentSide::Right, |_| CommentSide::Left);
+impl ReviewComment {
+    fn new(value: ReviewCommentResponse, resolutions: &HashMap<CommentId, bool>) -> Self {
+        let root_id = value.in_reply_to_id.unwrap_or(value.id);
         Self {
             id: value.id,
-            root_id: value.in_reply_to_id.unwrap_or(value.id),
+            root_id,
             path: value.path,
             body: value.body,
             author: value
@@ -250,24 +291,29 @@ impl From<ReviewCommentResponse> for ReviewComment {
             html_url: value.html_url,
             created_at: value.created_at,
             line: value.line.or(value.original_line),
-            side,
-            resolved: false,
+            side: value
+                .side
+                .or(value.original_side)
+                .unwrap_or(CommentSide::Right),
+            resolved: resolutions.get(&root_id).copied().unwrap_or(false),
         }
     }
 }
 
+/// An inline comment request, decoded into GitHub-valid anchors at the HTTP
+/// boundary.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct InlineCommentInput {
-    pub pull_url: String,
-    pub commit_id: String,
-    pub path: String,
-    pub line: usize,
+pub struct InlineComment {
+    pub pull_url: PullTarget,
+    pub commit_id: Oid,
+    pub path: RelativePath,
+    pub line: LineNumber,
     pub side: CommentSide,
-    pub body: String,
+    pub body: NonEmptyText,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum CommentSide {
     Left,
@@ -329,10 +375,10 @@ enum DatabaseId {
 }
 
 impl DatabaseId {
-    fn as_u64(&self) -> Option<u64> {
+    fn id(&self) -> Option<CommentId> {
         match self {
-            Self::Number(value) => Some(*value),
-            Self::Text(value) => value.parse().ok(),
+            Self::Number(value) => Some(CommentId(*value)),
+            Self::Text(value) => value.parse().ok().map(CommentId),
         }
     }
 }
@@ -359,16 +405,34 @@ mod tests {
 
     #[test]
     fn inline_payload_excludes_the_hunker_route_field() {
+        let commit_id = Oid::parse("a".repeat(40)).unwrap();
+        let path = RelativePath::parse("src/main.rs").unwrap();
         let payload = InlineCommentPayload {
             body: "Please rename this.",
-            commit_id: "abc123",
-            path: "src/main.rs",
-            line: 12,
+            commit_id: &commit_id,
+            path: &path,
+            line: serde_json::from_str("12").unwrap(),
             side: CommentSide::Right,
         };
         assert_eq!(
-            serde_json::to_string(&payload).unwrap(),
-            r#"{"body":"Please rename this.","commit_id":"abc123","path":"src/main.rs","line":12,"side":"RIGHT"}"#
+            serde_json::to_value(&payload).unwrap(),
+            serde_json::json!({
+                "body": "Please rename this.",
+                "commit_id": "a".repeat(40),
+                "path": "src/main.rs",
+                "line": 12,
+                "side": "RIGHT"
+            })
         );
+    }
+
+    #[test]
+    fn only_approvals_may_omit_a_review_summary() {
+        assert!(ReviewSubmission::new(ReviewAction::Approve, "  ").is_ok());
+        assert!(ReviewSubmission::new(ReviewAction::Comment, "  ").is_err());
+        assert!(matches!(
+            ReviewSubmission::new(ReviewAction::RequestChanges, " fix this "),
+            Ok(ReviewSubmission::RequestChanges(summary)) if summary.as_str() == "fix this"
+        ));
     }
 }

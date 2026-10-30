@@ -1,39 +1,27 @@
-module Hunker.Review.Session exposing
-    ( Id
-    , create
-    , headOid
-    , pullUrl
-    , requestUrl
-    )
+module Hunker.Review.Session exposing (Id, create, diffUrl, headOid)
+
+{-| The identity of one loaded review: the diff it renders at one immutable
+head. Full-file, analysis, and collaboration responses carry it so a response
+started on one review cannot mutate another.
+-}
+
+import Hunker.Domain.Git exposing (Oid)
 
 
 type Id
-    = Id
-        { requestUrl : String
-        , pullUrl : String
-        , headOid : String
-        }
+    = Id { diffUrl : String, headOid : Oid }
 
 
-create : String -> String -> String -> Id
-create currentRequestUrl currentPullUrl currentHeadOid =
-    Id
-        { requestUrl = currentRequestUrl
-        , pullUrl = currentPullUrl
-        , headOid = currentHeadOid
-        }
+create : String -> Oid -> Id
+create url oid =
+    Id { diffUrl = url, headOid = oid }
 
 
-requestUrl : Id -> String
-requestUrl (Id details) =
-    details.requestUrl
+diffUrl : Id -> String
+diffUrl (Id details) =
+    details.diffUrl
 
 
-pullUrl : Id -> String
-pullUrl (Id details) =
-    details.pullUrl
-
-
-headOid : Id -> String
+headOid : Id -> Oid
 headOid (Id details) =
     details.headOid

@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     sync::OnceLock,
 };
 
@@ -10,46 +10,10 @@ use regex::Regex;
 use serde::Serialize;
 
 use crate::{
+    language::{self, LanguageSpec},
     source_presentation::{self, FilePresentation, FoldSeed, SourcePresentationResult},
-    types::{FilePair, FileStatus, SourceRange},
+    types::{FilePair, FileStatus, RelativePath, Side, SourceRange},
 };
-
-#[derive(Debug, Clone, Copy)]
-struct SupportedLanguage {
-    language: SupportLang,
-    name: &'static str,
-}
-
-fn language_for_path(path: &str) -> Option<SupportedLanguage> {
-    let extension = path.rsplit('.').next()?.to_ascii_lowercase();
-    match extension.as_str() {
-        "ts" => Some(SupportedLanguage {
-            language: SupportLang::TypeScript,
-            name: "TypeScript",
-        }),
-        "tsx" => Some(SupportedLanguage {
-            language: SupportLang::Tsx,
-            name: "TSX",
-        }),
-        "js" | "jsx" | "mjs" | "cjs" => Some(SupportedLanguage {
-            language: SupportLang::JavaScript,
-            name: "JavaScript",
-        }),
-        "py" | "pyi" => Some(SupportedLanguage {
-            language: SupportLang::Python,
-            name: "Python",
-        }),
-        "rs" => Some(SupportedLanguage {
-            language: SupportLang::Rust,
-            name: "Rust",
-        }),
-        "hcl" | "tf" | "tfvars" | "tofu" => Some(SupportedLanguage {
-            language: SupportLang::Hcl,
-            name: "OpenTofu / HCL",
-        }),
-        _ => None,
-    }
-}
 
 #[derive(Debug, Clone)]
 struct AstUnit {
@@ -60,31 +24,94 @@ struct AstUnit {
     label_fingerprint: String,
     shape_fingerprint: String,
     preview: String,
-    text: String,
+    byte_len: usize,
     order: usize,
     primary: bool,
 }
 
+/// Whether Tree-sitter recovered from syntax errors while parsing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TreeState {
+    Complete,
+    Incomplete,
+}
+
 #[derive(Debug)]
 struct Parsed {
-    parse_failed: bool,
+    state: TreeState,
     fingerprint: String,
     units: Vec<AstUnit>,
-    language: SupportedLanguage,
+    language: &'static LanguageSpec,
     source: String,
     tree: tree_sitter::Tree,
 }
 
-#[derive(Debug)]
-struct PreparedFile {
-    path: String,
-    previous_path: Option<String>,
-    status: FileStatus,
-    language: Option<SupportedLanguage>,
-    before: Option<Parsed>,
-    after: Option<Parsed>,
+impl Parsed {
+    fn presentation(&self) -> SourcePresentationResult {
+        source_presentation::build(
+            self.language,
+            &self.source,
+            &self.tree,
+            self.units.iter().map(|unit| FoldSeed {
+                kind: unit.kind.clone(),
+                label: unit.label.clone(),
+                start_line: unit.range.start_line,
+                end_line: unit.range.end_line,
+            }),
+        )
+    }
 }
 
+#[derive(Debug)]
+enum PreparedFile {
+    Unsupported {
+        path: RelativePath,
+    },
+    Supported {
+        path: RelativePath,
+        status: FileStatus,
+        before: Box<Parsed>,
+        after: Box<Parsed>,
+    },
+}
+
+impl PreparedFile {
+    fn new(file: &FilePair) -> Self {
+        match LanguageSpec::for_path(file.path.as_str()) {
+            None => Self::Unsupported {
+                path: file.path.clone(),
+            },
+            Some(language) => Self::Supported {
+                path: file.path.clone(),
+                status: file.status.clone(),
+                before: Box::new(parse_units(language, &file.old_text)),
+                after: Box::new(parse_units(language, &file.new_text)),
+            },
+        }
+    }
+
+    fn path(&self) -> &RelativePath {
+        match self {
+            Self::Unsupported { path } | Self::Supported { path, .. } => path,
+        }
+    }
+
+    fn presentation(&self) -> FilePresentation {
+        match self {
+            Self::Unsupported { .. } => FilePresentation {
+                old: source_presentation::unsupported(),
+                new: source_presentation::unsupported(),
+            },
+            Self::Supported { before, after, .. } => FilePresentation {
+                old: before.presentation(),
+                new: after.presentation(),
+            },
+        }
+    }
+}
+
+/// Every file of one review parsed once; semantic results, syntax
+/// presentation, and move detection all read this forest.
 #[derive(Debug)]
 pub struct PreparedReview {
     files: Vec<PreparedFile>,
@@ -93,66 +120,33 @@ pub struct PreparedReview {
 impl PreparedReview {
     pub fn new(files: &[FilePair]) -> Self {
         Self {
-            files: files
-                .iter()
-                .map(|file| {
-                    let language = language_for_path(&file.path);
-                    PreparedFile {
-                        path: file.path.clone(),
-                        previous_path: file.previous_path.clone(),
-                        status: file.status,
-                        before: language.map(|value| parse_units(value, &file.old_text)),
-                        after: language.map(|value| parse_units(value, &file.new_text)),
-                        language,
-                    }
-                })
-                .collect(),
+            files: files.iter().map(PreparedFile::new).collect(),
         }
     }
 
-    pub fn file_results(&self) -> Vec<SemanticResult> {
-        self.files.iter().map(analyze_prepared_file).collect()
+    pub fn file_results(&self) -> Vec<(RelativePath, SemanticResult)> {
+        self.files
+            .iter()
+            .map(|file| (file.path().clone(), analyze_prepared_file(file)))
+            .collect()
     }
 
     pub fn moves(&self) -> Vec<MovedBlock> {
         analyze_prepared_review(&self.files)
     }
 
-    pub fn file_presentations(&self) -> Vec<(String, FilePresentation)> {
+    pub fn file_presentations(&self) -> Vec<(RelativePath, FilePresentation)> {
         self.files
             .iter()
-            .map(|file| {
-                (
-                    file.path.clone(),
-                    FilePresentation {
-                        old: file
-                            .before
-                            .as_ref()
-                            .map_or_else(source_presentation::unsupported, presentation),
-                        new: file
-                            .after
-                            .as_ref()
-                            .map_or_else(source_presentation::unsupported, presentation),
-                    },
-                )
-            })
+            .map(|file| (file.path().clone(), file.presentation()))
             .collect()
     }
 
-    pub fn file_presentation(&self, path: &str) -> Option<FilePresentation> {
+    pub fn file_presentation(&self, path: &RelativePath) -> Option<FilePresentation> {
         self.files
             .iter()
-            .find(|file| file.path == path)
-            .map(|file| FilePresentation {
-                old: file
-                    .before
-                    .as_ref()
-                    .map_or_else(source_presentation::unsupported, presentation),
-                new: file
-                    .after
-                    .as_ref()
-                    .map_or_else(source_presentation::unsupported, presentation),
-            })
+            .find(|file| file.path() == path)
+            .map(PreparedFile::presentation)
     }
 }
 
@@ -344,7 +338,7 @@ fn collect_units(root: &SgNode<'_>) -> Vec<AstUnit> {
                 exact_fingerprint: format!("{kind}|{}", exact.join("|")),
                 shape_fingerprint: format!("{kind}|{}", shape.join("|")),
                 preview: preview(node.clone()),
-                text: node.text().into_owned(),
+                byte_len: node.text().len(),
                 order: units.len(),
                 primary: !inside_container,
             });
@@ -361,19 +355,24 @@ fn collect_units(root: &SgNode<'_>) -> Vec<AstUnit> {
     units
 }
 
-fn parse_units(language: SupportedLanguage, source: &str) -> Parsed {
-    let document = StrDoc::new(source, language.language);
+fn parse_units(language: &'static LanguageSpec, source: &str) -> Parsed {
+    let document = StrDoc::new(source, language.grammar);
     let tree = document.tree.clone();
     let source = document.src.clone();
     let grep = AstGrep::doc(document);
     let root = grep.root();
-    let parse_failed = root
+    let state = if root
         .dfs()
-        .any(|node| node.is_error() || node.kind() == "ERROR");
+        .any(|node| node.is_error() || node.kind() == "ERROR")
+    {
+        TreeState::Incomplete
+    } else {
+        TreeState::Complete
+    };
     let mut fingerprint = Vec::new();
     leaf_tokens(&root, false, &mut fingerprint);
     Parsed {
-        parse_failed,
+        state,
         fingerprint: fingerprint.join("|"),
         units: collect_units(&root),
         language,
@@ -382,228 +381,183 @@ fn parse_units(language: SupportedLanguage, source: &str) -> Parsed {
     }
 }
 
-fn presentation(parsed: &Parsed) -> SourcePresentationResult {
-    source_presentation::build(
-        parsed.language.language,
-        parsed.language.name,
-        &parsed.source,
-        &parsed.tree,
-        parsed.units.iter().map(|unit| FoldSeed {
-            kind: unit.kind.clone(),
-            label: unit.label.clone(),
-            start_line: unit.range.start_line,
-            end_line: unit.range.end_line,
-        }),
-    )
-}
-
 pub fn source_presentation(path: &str, source: &str) -> SourcePresentationResult {
-    language_for_path(path).map_or_else(source_presentation::unsupported, |language| {
-        presentation(&parse_units(language, source))
+    LanguageSpec::for_path(path).map_or_else(source_presentation::unsupported, |language| {
+        parse_units(language, source).presentation()
     })
 }
 
-fn unique_by<F>(units: &[AstUnit], remaining: &[bool], key: F) -> HashMap<String, usize>
-where
-    F: Fn(&AstUnit) -> &str,
-{
-    let mut grouped: HashMap<String, Vec<usize>> = HashMap::new();
-    for (index, unit) in units
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| remaining[*index])
-    {
-        grouped.entry(key(unit).to_owned()).or_default().push(index);
+/// The result of pairing items whose key is unique on both sides.
+struct Pairing<T> {
+    pairs: Vec<(T, T)>,
+    old_rest: Vec<T>,
+    new_rest: Vec<T>,
+}
+
+/// Pairs old and new items that share a key occurring exactly once on each
+/// side. Pairs keep old-side order so results are deterministic.
+fn pair_unique<'k, T: Copy>(old: &[T], new: &[T], key: impl Fn(T) -> &'k str) -> Pairing<T> {
+    fn unique<'k, T: Copy>(
+        items: &[T],
+        key: &impl Fn(T) -> &'k str,
+    ) -> HashMap<&'k str, Option<usize>> {
+        items
+            .iter()
+            .enumerate()
+            .fold(HashMap::new(), |mut keys, (index, item)| {
+                keys.entry(key(*item))
+                    .and_modify(|slot| *slot = None)
+                    .or_insert(Some(index));
+                keys
+            })
     }
-    grouped
+    let new_keys = unique(new, &key);
+    let matches = unique(old, &key)
         .into_iter()
-        .filter_map(|(key, values)| (values.len() == 1).then_some((key, values[0])))
-        .collect()
+        .filter_map(|(value, old_index)| Some((old_index?, (*new_keys.get(value)?)?)))
+        .collect::<BTreeMap<_, _>>();
+    let paired_new = matches.values().copied().collect::<HashSet<_>>();
+    Pairing {
+        pairs: matches
+            .iter()
+            .map(|(old_index, new_index)| (old[*old_index], new[*new_index]))
+            .collect(),
+        old_rest: old
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !matches.contains_key(index))
+            .map(|(_, item)| *item)
+            .collect(),
+        new_rest: new
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !paired_new.contains(index))
+            .map(|(_, item)| *item)
+            .collect(),
+    }
 }
 
 #[cfg(test)]
 pub fn analyze_file(file: &FilePair) -> SemanticResult {
-    PreparedReview::new(std::slice::from_ref(file))
-        .file_results()
-        .into_iter()
-        .next()
-        .expect("one prepared file produces one semantic result")
+    analyze_prepared_file(&PreparedFile::new(file))
+}
+
+fn primary(parsed: &Parsed) -> Vec<&AstUnit> {
+    parsed.units.iter().filter(|unit| unit.primary).collect()
 }
 
 fn analyze_prepared_file(file: &PreparedFile) -> SemanticResult {
-    let Some(language) = file.language else {
-        return SemanticResult::Unsupported { path: file.path.clone(), reason: "ast-grep semantic analysis currently supports JavaScript, TypeScript, Python, Rust, and OpenTofu/HCL.".to_owned() };
+    let PreparedFile::Supported { before, after, .. } = file else {
+        return SemanticResult::Unsupported {
+            reason: format!(
+                "ast-grep semantic analysis currently supports {}.",
+                language::supported_names()
+            ),
+        };
     };
-    let before = file
-        .before
-        .as_ref()
-        .expect("a supported language has a prepared old tree");
-    let after = file
-        .after
-        .as_ref()
-        .expect("a supported language has a prepared new tree");
-    if before.parse_failed || after.parse_failed {
+    let language = before.language.name.to_owned();
+    if before.state == TreeState::Incomplete || after.state == TreeState::Incomplete {
         return SemanticResult::ParseFailed {
-            path: file.path.clone(),
-            language: language.name.to_owned(),
+            language,
             reason: "ast-grep found an incomplete syntax tree, so the regular patch is shown."
                 .to_owned(),
         };
     }
-    let old_units = before
-        .units
-        .iter()
-        .filter(|unit| unit.primary)
-        .cloned()
-        .collect::<Vec<_>>();
-    let new_units = after
-        .units
-        .iter()
-        .filter(|unit| unit.primary)
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut old_remaining = vec![true; old_units.len()];
-    let mut new_remaining = vec![true; new_units.len()];
-    let mut changes = Vec::new();
-    consume(
-        &old_units,
-        &new_units,
-        &mut old_remaining,
-        &mut new_remaining,
-        |unit| &unit.exact_fingerprint,
-        |_, _| None,
-        &mut changes,
-    );
-    consume(
-        &old_units,
-        &new_units,
-        &mut old_remaining,
-        &mut new_remaining,
-        |unit| &unit.label_fingerprint,
-        |old, new| {
-            Some(SemanticChange::Updated {
-                kind: old.kind.clone(),
-                label: old.label.clone(),
-                old_range: old.range.clone(),
-                new_range: new.range.clone(),
-                confidence: 1.0,
-            })
-        },
-        &mut changes,
-    );
-    consume(
-        &old_units,
-        &new_units,
-        &mut old_remaining,
-        &mut new_remaining,
-        |unit| &unit.shape_fingerprint,
-        |old, new| {
-            Some(SemanticChange::Renamed {
-                kind: old.kind.clone(),
-                old_label: old.label.clone(),
-                new_label: new.label.clone(),
-                old_range: old.range.clone(),
-                new_range: new.range.clone(),
-                confidence: 0.85,
-            })
-        },
-        &mut changes,
-    );
-    changes.extend(
-        old_units
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| old_remaining[*index])
-            .map(|(_, unit)| SemanticChange::Deleted {
-                kind: unit.kind.clone(),
-                label: unit.label.clone(),
-                old_range: unit.range.clone(),
-                confidence: 1.0,
-            }),
-    );
-    changes.extend(
-        new_units
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| new_remaining[*index])
-            .map(|(_, unit)| SemanticChange::Inserted {
-                kind: unit.kind.clone(),
-                label: unit.label.clone(),
-                new_range: unit.range.clone(),
-                confidence: 1.0,
-            }),
-    );
+    let identical = pair_unique(&primary(before), &primary(after), |unit| {
+        unit.exact_fingerprint.as_str()
+    });
+    let updated = pair_unique(&identical.old_rest, &identical.new_rest, |unit| {
+        unit.label_fingerprint.as_str()
+    });
+    let renamed = pair_unique(&updated.old_rest, &updated.new_rest, |unit| {
+        unit.shape_fingerprint.as_str()
+    });
+    let changes = updated
+        .pairs
+        .into_iter()
+        .map(|(old, new)| SemanticChange::Updated {
+            kind: old.kind.clone(),
+            label: old.label.clone(),
+            old_range: old.range.clone(),
+            new_range: new.range.clone(),
+        })
+        .chain(
+            renamed
+                .pairs
+                .into_iter()
+                .map(|(old, new)| SemanticChange::Renamed {
+                    kind: old.kind.clone(),
+                    old_label: old.label.clone(),
+                    new_label: new.label.clone(),
+                    old_range: old.range.clone(),
+                    new_range: new.range.clone(),
+                }),
+        )
+        .chain(
+            renamed
+                .old_rest
+                .into_iter()
+                .map(|unit| SemanticChange::Deleted {
+                    kind: unit.kind.clone(),
+                    label: unit.label.clone(),
+                    old_range: unit.range.clone(),
+                }),
+        )
+        .chain(
+            renamed
+                .new_rest
+                .into_iter()
+                .map(|unit| SemanticChange::Inserted {
+                    kind: unit.kind.clone(),
+                    label: unit.label.clone(),
+                    new_range: unit.range.clone(),
+                }),
+        )
+        .collect();
     SemanticResult::Parsed {
-        path: file.path.clone(),
-        language: language.name.to_owned(),
+        language,
         semantic_equal: before.fingerprint == after.fingerprint,
         changes,
     }
 }
 
-fn consume<F, G>(
-    old: &[AstUnit],
-    new: &[AstUnit],
-    old_remaining: &mut [bool],
-    new_remaining: &mut [bool],
-    key: F,
-    make: G,
-    changes: &mut Vec<SemanticChange>,
-) where
-    F: Fn(&AstUnit) -> &str + Copy,
-    G: Fn(&AstUnit, &AstUnit) -> Option<SemanticChange>,
-{
-    let old_unique = unique_by(old, old_remaining, key);
-    let new_unique = unique_by(new, new_remaining, key);
-    for (value, old_index) in old_unique {
-        let Some(new_index) = new_unique.get(&value).copied() else {
-            continue;
-        };
-        let old_unit = &old[old_index];
-        let new_unit = &new[new_index];
-        if let Some(change) = make(old_unit, new_unit) {
-            changes.push(change);
-        }
-        old_remaining[old_index] = false;
-        new_remaining[new_index] = false;
-    }
+#[derive(Debug, Clone, Copy)]
+struct LocatedUnit<'a> {
+    unit: &'a AstUnit,
+    path: &'a RelativePath,
+    file_index: usize,
 }
 
-#[derive(Clone)]
-struct LocatedUnit {
-    unit: AstUnit,
-    path: String,
-    pair_index: usize,
-}
-fn located_units(files: &[PreparedFile], old: bool) -> Vec<LocatedUnit> {
+fn located_units(files: &[PreparedFile], side: Side) -> Vec<LocatedUnit<'_>> {
     files
         .iter()
         .enumerate()
-        .filter(|(_, file)| !crate::diff::generated(&file.path))
-        .flat_map(|(pair_index, file)| {
-            let Some(parsed) = (if old { &file.before } else { &file.after }) else {
-                return Vec::new();
-            };
-            if parsed.parse_failed {
-                return Vec::new();
+        .filter_map(|(file_index, file)| match file {
+            PreparedFile::Supported {
+                path,
+                status,
+                before,
+                after,
+            } if !crate::diff::generated(path.as_str()) => {
+                let parsed = match side {
+                    Side::Old => before,
+                    Side::New => after,
+                };
+                let located_path = match (side, status) {
+                    (Side::Old, FileStatus::Renamed { previous_path }) => previous_path,
+                    (Side::Old, FileStatus::Modified | FileStatus::Added | FileStatus::Deleted)
+                    | (Side::New, _) => path,
+                };
+                (parsed.state == TreeState::Complete).then_some((file_index, located_path, parsed))
             }
-            let path = if old && file.status == FileStatus::Renamed {
-                file.previous_path
-                    .clone()
-                    .unwrap_or_else(|| file.path.clone())
-            } else {
-                file.path.clone()
-            };
-            parsed
-                .units
-                .iter()
-                .cloned()
-                .map(|unit| LocatedUnit {
-                    unit,
-                    path: path.clone(),
-                    pair_index,
-                })
-                .collect()
+            PreparedFile::Supported { .. } | PreparedFile::Unsupported { .. } => None,
+        })
+        .flat_map(|(file_index, path, parsed)| {
+            parsed.units.iter().map(move |unit| LocatedUnit {
+                unit,
+                path,
+                file_index,
+            })
         })
         .collect()
 }
@@ -613,152 +567,96 @@ pub fn analyze_review(files: &[FilePair]) -> Vec<MovedBlock> {
     PreparedReview::new(files).moves()
 }
 
-fn analyze_prepared_review(files: &[PreparedFile]) -> Vec<MovedBlock> {
-    let old = located_units(files, true);
-    let new = located_units(files, false);
-    let mut old_remaining = vec![true; old.len()];
-    let mut new_remaining = vec![true; new.len()];
-    let mut moves = Vec::new();
-    match_moves(
-        &old,
-        &new,
-        &mut old_remaining,
-        &mut new_remaining,
-        false,
-        &mut moves,
-    );
-    match_moves(
-        &old,
-        &new,
-        &mut old_remaining,
-        &mut new_remaining,
-        true,
-        &mut moves,
-    );
-    moves
+/// Exact moves are found first; the remaining units are then matched by
+/// shape to find blocks that moved and were edited.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MoveMatch {
+    Exact,
+    Changed,
 }
 
-fn match_moves(
-    old: &[LocatedUnit],
-    new: &[LocatedUnit],
-    old_remaining: &mut [bool],
-    new_remaining: &mut [bool],
-    changed: bool,
-    moves: &mut Vec<MovedBlock>,
-) {
-    let key = |unit: &LocatedUnit| {
-        if changed {
-            unit.unit.shape_fingerprint.clone()
-        } else {
-            unit.unit.exact_fingerprint.clone()
+impl MoveMatch {
+    fn key(self, unit: &AstUnit) -> &str {
+        match self {
+            Self::Exact => &unit.exact_fingerprint,
+            Self::Changed => &unit.shape_fingerprint,
         }
-    };
-    let old_unique = unique_located(old, old_remaining, key);
-    let new_unique = unique_located(new, new_remaining, key);
-    let mut pairs = old_unique
-        .into_iter()
-        .filter_map(|(value, old_index)| {
-            new_unique
-                .get(&value)
-                .copied()
-                .map(|new_index| (old_index, new_index))
-        })
-        .collect::<Vec<_>>();
-    pairs.sort_by_key(|(old_index, _)| std::cmp::Reverse(old[*old_index].unit.text.len()));
-    let mut stable = HashSet::new();
-    if !changed {
-        let mut by_file: HashMap<usize, Vec<(usize, usize, usize)>> = HashMap::new();
-        for (pair_index, (old_index, new_index)) in pairs.iter().copied().enumerate() {
-            if old[old_index].pair_index == new[new_index].pair_index {
-                by_file.entry(old[old_index].pair_index).or_default().push((
-                    pair_index,
-                    old[old_index].unit.order,
-                    new[new_index].unit.order,
-                ));
-            }
-        }
-        for mut file_pairs in by_file.into_values() {
-            file_pairs.sort_by_key(|(_, old_order, _)| *old_order);
-            for index in longest_increasing(
-                &file_pairs
-                    .iter()
-                    .map(|(_, _, new_order)| *new_order)
-                    .collect::<Vec<_>>(),
-            ) {
-                stable.insert(file_pairs[index].0);
-            }
-        }
-    }
-    for (pair_index, (old_index, new_index)) in pairs.into_iter().enumerate() {
-        old_remaining[old_index] = false;
-        new_remaining[new_index] = false;
-        let old_unit = &old[old_index];
-        let new_unit = &new[new_index];
-        let different_file = old_unit.pair_index != new_unit.pair_index;
-        let reordered = !changed && !different_file && !stable.contains(&pair_index);
-        if !different_file && !reordered {
-            continue;
-        }
-        if moves
-            .iter()
-            .any(|movement| contains(movement, old_unit, new_unit))
-        {
-            continue;
-        }
-        moves.push(MovedBlock {
-            from_path: old_unit.path.clone(),
-            to_path: new_unit.path.clone(),
-            from_line: old_unit.unit.range.start_line,
-            to_line: new_unit.unit.range.start_line,
-            from_line_count: old_unit
-                .unit
-                .range
-                .end_line
-                .saturating_sub(old_unit.unit.range.start_line)
-                + 1,
-            to_line_count: new_unit
-                .unit
-                .range
-                .end_line
-                .saturating_sub(new_unit.unit.range.start_line)
-                + 1,
-            preview: old_unit.unit.preview.clone(),
-            kind: old_unit.unit.kind.clone(),
-            label: if changed {
-                format!("{} → {}", old_unit.unit.label, new_unit.unit.label)
-            } else {
-                old_unit.unit.label.clone()
-            },
-            confidence: if changed { 0.8 } else { 1.0 },
-            changed,
-        });
     }
 }
-fn unique_located<F>(units: &[LocatedUnit], remaining: &[bool], key: F) -> HashMap<String, usize>
-where
-    F: Fn(&LocatedUnit) -> String,
-{
-    let mut grouped: HashMap<String, Vec<usize>> = HashMap::new();
-    for (index, unit) in units
+
+fn analyze_prepared_review(files: &[PreparedFile]) -> Vec<MovedBlock> {
+    let exact = pair_unique(
+        &located_units(files, Side::Old),
+        &located_units(files, Side::New),
+        |located| MoveMatch::Exact.key(located.unit),
+    );
+    let changed = pair_unique(&exact.old_rest, &exact.new_rest, |located| {
+        MoveMatch::Changed.key(located.unit)
+    });
+    let exact_moves = moves_from(MoveMatch::Exact, exact.pairs, Vec::new());
+    moves_from(MoveMatch::Changed, changed.pairs, exact_moves)
+}
+
+/// Turns matched pairs into moves, largest blocks first, so a nested unit
+/// that moved with its parent is reported once through the parent.
+fn moves_from(
+    kind: MoveMatch,
+    mut pairs: Vec<(LocatedUnit<'_>, LocatedUnit<'_>)>,
+    found: Vec<MovedBlock>,
+) -> Vec<MovedBlock> {
+    pairs.sort_by_key(|(old, _)| std::cmp::Reverse(old.unit.byte_len));
+    let stable = match kind {
+        MoveMatch::Exact => stable_in_file(&pairs),
+        MoveMatch::Changed => HashSet::new(),
+    };
+    pairs
+        .into_iter()
+        .enumerate()
+        .filter(|(index, (old, new))| {
+            old.file_index != new.file_index
+                || (kind == MoveMatch::Exact && !stable.contains(index))
+        })
+        .fold(found, |mut moves, (_, (old, new))| {
+            if !moves.iter().any(|movement| movement.contains(old, new)) {
+                moves.push(MovedBlock::new(kind, old, new));
+            }
+            moves
+        })
+}
+
+/// Indexes of same-file pairs that keep their relative order: the longest
+/// increasing subsequence of new positions. Only the others were reordered.
+fn stable_in_file(pairs: &[(LocatedUnit<'_>, LocatedUnit<'_>)]) -> HashSet<usize> {
+    pairs
         .iter()
         .enumerate()
-        .filter(|(index, _)| remaining[*index])
-    {
-        grouped.entry(key(unit)).or_default().push(index);
-    }
-    grouped
-        .into_iter()
-        .filter_map(|(key, values)| (values.len() == 1).then_some((key, values[0])))
+        .filter(|(_, (old, new))| old.file_index == new.file_index)
+        .fold(
+            BTreeMap::<usize, Vec<(usize, usize, usize)>>::new(),
+            |mut by_file, (index, (old, new))| {
+                by_file.entry(old.file_index).or_default().push((
+                    index,
+                    old.unit.order,
+                    new.unit.order,
+                ));
+                by_file
+            },
+        )
+        .into_values()
+        .flat_map(|mut file_pairs| {
+            file_pairs.sort_by_key(|(_, old_order, _)| *old_order);
+            let new_orders = file_pairs
+                .iter()
+                .map(|(_, _, new_order)| *new_order)
+                .collect::<Vec<_>>();
+            longest_increasing(&new_orders)
+                .into_iter()
+                .map(move |position| file_pairs[position].0)
+        })
         .collect()
 }
-fn contains(movement: &MovedBlock, old: &LocatedUnit, new: &LocatedUnit) -> bool {
-    movement.from_path == old.path
-        && movement.to_path == new.path
-        && old.unit.range.start_line >= movement.from_line
-        && old.unit.range.end_line < movement.from_line + movement.from_line_count
-        && new.unit.range.start_line >= movement.to_line
-        && new.unit.range.end_line < movement.to_line + movement.to_line_count
-}
+
 fn longest_increasing(values: &[usize]) -> HashSet<usize> {
     let mut tails = Vec::new();
     let mut previous = vec![None; values.len()];
@@ -773,35 +671,27 @@ fn longest_increasing(values: &[usize]) -> HashSet<usize> {
             tails[position] = index;
         }
     }
-    let mut result = HashSet::new();
-    let mut cursor = tails.last().copied();
-    while let Some(index) = cursor {
-        result.insert(index);
-        cursor = previous[index];
-    }
-    result
+    std::iter::successors(tails.last().copied(), |index| previous[*index]).collect()
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "_tag")]
 pub enum SemanticResult {
     Parsed {
-        path: String,
         language: String,
         #[serde(rename = "semanticEqual")]
         semantic_equal: bool,
         changes: Vec<SemanticChange>,
     },
     Unsupported {
-        path: String,
         reason: String,
     },
     ParseFailed {
-        path: String,
         language: String,
         reason: String,
     },
 }
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "_tag")]
 pub enum SemanticChange {
@@ -810,14 +700,12 @@ pub enum SemanticChange {
         label: String,
         #[serde(rename = "newRange")]
         new_range: SourceRange,
-        confidence: f64,
     },
     Deleted {
         kind: String,
         label: String,
         #[serde(rename = "oldRange")]
         old_range: SourceRange,
-        confidence: f64,
     },
     Updated {
         kind: String,
@@ -826,7 +714,6 @@ pub enum SemanticChange {
         old_range: SourceRange,
         #[serde(rename = "newRange")]
         new_range: SourceRange,
-        confidence: f64,
     },
     Renamed {
         kind: String,
@@ -838,14 +725,14 @@ pub enum SemanticChange {
         old_range: SourceRange,
         #[serde(rename = "newRange")]
         new_range: SourceRange,
-        confidence: f64,
     },
 }
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MovedBlock {
-    pub from_path: String,
-    pub to_path: String,
+    pub from_path: RelativePath,
+    pub to_path: RelativePath,
     pub from_line: usize,
     pub to_line: usize,
     pub from_line_count: usize,
@@ -853,8 +740,37 @@ pub struct MovedBlock {
     pub preview: String,
     pub kind: String,
     pub label: String,
-    pub confidence: f64,
-    pub changed: bool,
+    #[serde(rename = "match")]
+    pub matched: MoveMatch,
+}
+
+impl MovedBlock {
+    fn new(matched: MoveMatch, old: LocatedUnit<'_>, new: LocatedUnit<'_>) -> Self {
+        Self {
+            from_path: old.path.clone(),
+            to_path: new.path.clone(),
+            from_line: old.unit.range.start_line,
+            to_line: new.unit.range.start_line,
+            from_line_count: old.unit.range.line_count(),
+            to_line_count: new.unit.range.line_count(),
+            preview: old.unit.preview.clone(),
+            kind: old.unit.kind.clone(),
+            label: match matched {
+                MoveMatch::Exact => old.unit.label.clone(),
+                MoveMatch::Changed => format!("{} → {}", old.unit.label, new.unit.label),
+            },
+            matched,
+        }
+    }
+
+    fn contains(&self, old: LocatedUnit<'_>, new: LocatedUnit<'_>) -> bool {
+        self.from_path == *old.path
+            && self.to_path == *new.path
+            && old.unit.range.start_line >= self.from_line
+            && old.unit.range.end_line < self.from_line + self.from_line_count
+            && new.unit.range.start_line >= self.to_line
+            && new.unit.range.end_line < self.to_line + self.to_line_count
+    }
 }
 
 #[cfg(test)]
@@ -862,8 +778,7 @@ mod tests {
     use super::*;
     fn pair(path: &str, old: &str, new: &str) -> FilePair {
         FilePair {
-            path: path.to_owned(),
-            previous_path: None,
+            path: RelativePath::parse(path).unwrap(),
             status: FileStatus::Modified,
             old_text: old.to_owned(),
             new_text: new.to_owned(),
@@ -888,7 +803,28 @@ mod tests {
         ];
         let moves = analyze_review(&files);
         assert_eq!(moves.len(), 1);
-        assert_eq!(moves[0].to_path, "src/b.rs");
+        assert_eq!(moves[0].to_path.as_str(), "src/b.rs");
+        assert_eq!(moves[0].matched, MoveMatch::Exact);
+    }
+
+    #[test]
+    fn reports_semantic_changes_in_a_deterministic_order() {
+        let old = "fn a() { 1 }\nfn b() { 2 }\nfn c() { 3 }\nfn d() { 4 }\n";
+        let new = "fn a() { 10 }\nfn b() { 20 }\nfn c() { 30 }\nfn d() { 40 }\n";
+        let labels = |result: SemanticResult| match result {
+            SemanticResult::Parsed { changes, .. } => changes
+                .into_iter()
+                .map(|change| match change {
+                    SemanticChange::Updated { label, .. } => label,
+                    other => panic!("expected an update, got {other:?}"),
+                })
+                .collect::<Vec<_>>(),
+            other => panic!("expected a parsed result, got {other:?}"),
+        };
+        assert_eq!(
+            labels(analyze_file(&pair("src/lib.rs", old, new))),
+            vec!["a", "b", "c", "d"]
+        );
     }
 
     #[test]

@@ -7,13 +7,14 @@ module Hunker.PreparedDiff exposing
     )
 
 import Dict exposing (Dict)
-import Hunker.Diff as Diff exposing (Hunk)
-import Hunker.Domain.Review exposing (CharacterDiff, CharacterRange, CommentSide(..), FileChange)
+import Hunker.Diff as Diff exposing (Hunk, Side(..))
+import Hunker.Domain.Review exposing (CharacterRange, CharacterRow, FileChange)
 
 
 type alias PreparedFile =
     { change : FileChange
     , hunks : List Hunk
+    , searchText : String
     , oldRanges : Dict Int (List CharacterRange)
     , newRanges : Dict Int (List CharacterRange)
     }
@@ -23,6 +24,7 @@ prepare : FileChange -> PreparedFile
 prepare change =
     { change = change
     , hunks = Diff.parsePatch change.patch
+    , searchText = String.toLower (change.path ++ "\n" ++ change.patch)
     , oldRanges = Dict.empty
     , newRanges = Dict.empty
     }
@@ -33,8 +35,8 @@ clearWordRanges prepared =
     { prepared | oldRanges = Dict.empty, newRanges = Dict.empty }
 
 
-withWordDiff : CharacterDiff -> PreparedFile -> PreparedFile
-withWordDiff wordDiff prepared =
+withWordDiff : List CharacterRow -> PreparedFile -> PreparedFile
+withWordDiff rows prepared =
     let
         add row indexes =
             { old = insertRanges row.oldLine row.oldRanges indexes.old
@@ -42,19 +44,21 @@ withWordDiff wordDiff prepared =
             }
 
         indexed =
-            List.foldl add { old = Dict.empty, new = Dict.empty } wordDiff.rows
+            List.foldl add { old = Dict.empty, new = Dict.empty } rows
     in
     { prepared | oldRanges = indexed.old, newRanges = indexed.new }
 
 
-rangesFor : CommentSide -> Int -> PreparedFile -> List CharacterRange
+{-| Word-diff ranges for one line. A line without changed words has none.
+-}
+rangesFor : Side -> Int -> PreparedFile -> List CharacterRange
 rangesFor side line prepared =
     Dict.get line
         (case side of
-            LeftSide ->
+            OldSide ->
                 prepared.oldRanges
 
-            RightSide ->
+            NewSide ->
                 prepared.newRanges
         )
         |> Maybe.withDefault []

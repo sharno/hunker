@@ -1,14 +1,27 @@
 module Hunker.Diff exposing
-    ( DiffLine
+    ( DiffLine(..)
     , Hunk
     , Kind(..)
+    , Side(..)
     , SideLine
     , SplitRow
     , fullFileRows
-    , fullFileRowsPrepared
+    , lastAnchor
+    , lineAnchor
+    , lineKind
+    , lineText
     , parsePatch
     , splitRows
+    , unifiedLines
     )
+
+{-| Hunks parsed from one file's patch. Rust owns file boundaries; this
+module only splits a single file's hunks into typed lines.
+
+Every list transformation here is a fold, so 10k-line files stay within the
+JavaScript stack.
+
+-}
 
 
 type Kind
@@ -17,12 +30,17 @@ type Kind
     | Deletion
 
 
-type alias DiffLine =
-    { kind : Kind
-    , text : String
-    , oldLine : Maybe Int
-    , newLine : Maybe Int
-    }
+type Side
+    = OldSide
+    | NewSide
+
+
+{-| A patch line. Each constructor carries exactly the line numbers it has.
+-}
+type DiffLine
+    = ContextLine { old : Int, new : Int, text : String }
+    | AddedLine { new : Int, text : String }
+    | RemovedLine { old : Int, text : String }
 
 
 type alias Hunk =
@@ -37,7 +55,7 @@ type alias Hunk =
 
 
 type alias SideLine =
-    { number : Maybe Int
+    { number : Int
     , text : String
     , kind : Kind
     }
@@ -49,130 +67,88 @@ type alias SplitRow =
     }
 
 
+lineKind : DiffLine -> Kind
+lineKind line =
+    case line of
+        ContextLine _ ->
+            Context
+
+        AddedLine _ ->
+            Addition
+
+        RemovedLine _ ->
+            Deletion
+
+
+lineText : DiffLine -> String
+lineText line =
+    case line of
+        ContextLine context ->
+            context.text
+
+        AddedLine added ->
+            added.text
+
+        RemovedLine removed ->
+            removed.text
+
+
+{-| Where a line can be anchored: removed lines on the old side, everything
+else on the new side.
+-}
+lineAnchor : DiffLine -> ( Side, Int )
+lineAnchor line =
+    case line of
+        ContextLine context ->
+            ( NewSide, context.new )
+
+        AddedLine added ->
+            ( NewSide, added.new )
+
+        RemovedLine removed ->
+            ( OldSide, removed.old )
+
+
+{-| The last real patch line, preferring the new side, as GitHub requires
+review comments to sit on a line of the diff.
+-}
+lastAnchor : List Hunk -> Maybe ( Side, Int )
+lastAnchor hunks =
+    let
+        lines =
+            List.concatMap .lines hunks |> List.reverse
+
+        newSide =
+            lines
+                |> List.filterMap
+                    (\line ->
+                        case lineAnchor line of
+                            ( NewSide, number ) ->
+                                Just ( NewSide, number )
+
+                            ( OldSide, _ ) ->
+                                Nothing
+                    )
+                |> List.head
+    in
+    case newSide of
+        Just anchor ->
+            Just anchor
+
+        Nothing ->
+            List.head lines |> Maybe.map lineAnchor
+
+
 type alias Builder =
-    { id : String
-    , header : String
-    , oldStart : Int
-    , oldCount : Int
-    , newStart : Int
-    , newCount : Int
+    { header : HunkHeader
+    , raw : String
     , oldLine : Int
     , newLine : Int
     , lines : List DiffLine
     }
 
 
-parsePatch : String -> List Hunk
-parsePatch patch =
-    let
-        step raw ( completed, current ) =
-            if String.startsWith "@@" raw then
-                let
-                    ranges =
-                        hunkRanges raw
-
-                    finished =
-                        Maybe.map finish current
-                in
-                ( maybeCons finished completed
-                , Just
-                    { id = String.fromInt ranges.oldStart ++ "-" ++ String.fromInt ranges.newStart
-                    , header = raw
-                    , oldStart = ranges.oldStart
-                    , oldCount = ranges.oldCount
-                    , newStart = ranges.newStart
-                    , newCount = ranges.newCount
-                    , oldLine = ranges.oldStart
-                    , newLine = ranges.newStart
-                    , lines = []
-                    }
-                )
-
-            else
-                case current of
-                    Nothing ->
-                        ( completed, Nothing )
-
-                    Just builder ->
-                        ( completed, Just (appendLine raw builder) )
-
-        ( reverseHunks, finalBuilder ) =
-            List.foldl step ( [], Nothing ) (String.lines patch)
-    in
-    List.reverse (maybeCons (Maybe.map finish finalBuilder) reverseHunks)
-
-
-finish : Builder -> Hunk
-finish builder =
-    { id = builder.id
-    , header = builder.header
-    , oldStart = builder.oldStart
-    , oldCount = builder.oldCount
-    , newStart = builder.newStart
-    , newCount = builder.newCount
-    , lines = List.reverse builder.lines
-    }
-
-
-appendLine : String -> Builder -> Builder
-appendLine raw builder =
-    if String.startsWith "\\ No newline" raw then
-        builder
-
-    else
-        case String.uncons raw of
-            Nothing ->
-                appendContext "" builder
-
-            Just ( marker, value ) ->
-                case marker of
-                    '+' ->
-                        { builder
-                            | newLine = builder.newLine + 1
-                            , lines =
-                                { kind = Addition
-                                , text = value
-                                , oldLine = Nothing
-                                , newLine = Just builder.newLine
-                                }
-                                    :: builder.lines
-                        }
-
-                    '-' ->
-                        { builder
-                            | oldLine = builder.oldLine + 1
-                            , lines =
-                                { kind = Deletion
-                                , text = value
-                                , oldLine = Just builder.oldLine
-                                , newLine = Nothing
-                                }
-                                    :: builder.lines
-                        }
-
-                    ' ' ->
-                        appendContext value builder
-
-                    _ ->
-                        appendContext raw builder
-
-
-appendContext : String -> Builder -> Builder
-appendContext value builder =
-    { builder
-        | oldLine = builder.oldLine + 1
-        , newLine = builder.newLine + 1
-        , lines =
-            { kind = Context
-            , text = value
-            , oldLine = Just builder.oldLine
-            , newLine = Just builder.newLine
-            }
-                :: builder.lines
-    }
-
-
-type alias HunkRanges =
+type alias HunkHeader =
     { oldStart : Int
     , oldCount : Int
     , newStart : Int
@@ -180,197 +156,288 @@ type alias HunkRanges =
     }
 
 
-hunkRanges : String -> HunkRanges
-hunkRanges header =
-    case String.words header of
-        "@@" :: oldRange :: newRange :: _ ->
-            let
-                ( oldStart, oldCount ) =
-                    range '-' oldRange
+parsePatch : String -> List Hunk
+parsePatch patch =
+    let
+        step raw ( completed, current ) =
+            case ( hunkHeader raw, current ) of
+                ( Just header, _ ) ->
+                    ( maybeCons (Maybe.map finish current) completed
+                    , Just { header = header, raw = raw, oldLine = header.oldStart, newLine = header.newStart, lines = [] }
+                    )
 
-                ( newStart, newCount ) =
-                    range '+' newRange
-            in
-            { oldStart = oldStart
-            , oldCount = oldCount
-            , newStart = newStart
-            , newCount = newCount
+                ( Nothing, Just builder ) ->
+                    ( completed, Just (appendLine raw builder) )
+
+                ( Nothing, Nothing ) ->
+                    ( completed, Nothing )
+
+        ( reverseHunks, finalBuilder ) =
+            List.foldl step ( [], Nothing ) (patchLines patch)
+    in
+    List.reverse (maybeCons (Maybe.map finish finalBuilder) reverseHunks)
+
+
+{-| A trailing newline is a terminator, not an empty context line.
+-}
+patchLines : String -> List String
+patchLines patch =
+    if String.endsWith "\n" patch then
+        String.lines (String.dropRight 1 patch)
+
+    else
+        String.lines patch
+
+
+finish : Builder -> Hunk
+finish builder =
+    { id = String.fromInt builder.header.oldStart ++ "-" ++ String.fromInt builder.header.newStart
+    , header = builder.raw
+    , oldStart = builder.header.oldStart
+    , oldCount = builder.header.oldCount
+    , newStart = builder.header.newStart
+    , newCount = builder.header.newCount
+    , lines = List.reverse builder.lines
+    }
+
+
+appendLine : String -> Builder -> Builder
+appendLine raw builder =
+    case String.uncons raw of
+        Just ( '+', value ) ->
+            { builder
+                | newLine = builder.newLine + 1
+                , lines = AddedLine { new = builder.newLine, text = value } :: builder.lines
             }
 
+        Just ( '-', value ) ->
+            { builder
+                | oldLine = builder.oldLine + 1
+                , lines = RemovedLine { old = builder.oldLine, text = value } :: builder.lines
+            }
+
+        Just ( '\\', _ ) ->
+            -- "\ No newline at end of file" annotates the previous line.
+            builder
+
+        Just ( ' ', value ) ->
+            appendContext value builder
+
+        Just _ ->
+            appendContext raw builder
+
+        Nothing ->
+            appendContext "" builder
+
+
+appendContext : String -> Builder -> Builder
+appendContext value builder =
+    { builder
+        | oldLine = builder.oldLine + 1
+        , newLine = builder.newLine + 1
+        , lines = ContextLine { old = builder.oldLine, new = builder.newLine, text = value } :: builder.lines
+    }
+
+
+{-| Parses `@@ -a[,b] +c[,d] @@`. Git omits a count of one.
+-}
+hunkHeader : String -> Maybe HunkHeader
+hunkHeader raw =
+    case String.words raw of
+        "@@" :: oldRange :: newRange :: _ ->
+            Maybe.map2
+                (\( oldStart, oldCount ) ( newStart, newCount ) ->
+                    { oldStart = oldStart, oldCount = oldCount, newStart = newStart, newCount = newCount }
+                )
+                (range "-" oldRange)
+                (range "+" newRange)
+
         _ ->
-            { oldStart = 0, oldCount = 0, newStart = 0, newCount = 0 }
+            Nothing
 
 
-range : Char -> String -> ( Int, Int )
+range : String -> String -> Maybe ( Int, Int )
 range marker value =
-    let
-        parts =
-            value
-                |> String.trimLeft
-                |> String.dropLeft
-                    (if String.startsWith (String.fromChar marker) value then
-                        1
+    if String.startsWith marker value then
+        case String.split "," (String.dropLeft 1 value) of
+            [ start ] ->
+                String.toInt start |> Maybe.map (\number -> ( number, 1 ))
 
-                     else
-                        0
-                    )
-                |> String.split ","
-    in
-    case parts of
-        start :: count :: _ ->
-            ( Maybe.withDefault 0 (String.toInt start)
-            , Maybe.withDefault 1 (String.toInt count)
-            )
+            [ start, count ] ->
+                Maybe.map2 Tuple.pair (String.toInt start) (String.toInt count)
 
-        [ start ] ->
-            ( Maybe.withDefault 0 (String.toInt start), 1 )
+            _ ->
+                Nothing
 
-        _ ->
-            ( 0, 0 )
+    else
+        Nothing
 
 
+{-| Aligns removed and added lines of each change block side by side. When
+whitespace is ignored, a pair that differs only in whitespace is dropped.
+-}
 splitRows : Bool -> Hunk -> List SplitRow
 splitRows ignoreWhitespace hunk =
-    rows hunk.lines
-        |> List.filter
-            (\row ->
-                if ignoreWhitespace then
-                    case ( row.left, row.right ) of
-                        ( Just left, Just right ) ->
-                            not
-                                (left.kind
-                                    == Deletion
-                                    && right.kind
-                                    == Addition
-                                    && normalizeWhitespace left.text
-                                    == normalizeWhitespace right.text
-                                )
+    let
+        flushed state =
+            zipChanges (List.reverse state.removed) (List.reverse state.added) ++ state.rows
 
-                        _ ->
-                            True
+        step line state =
+            case line of
+                ContextLine context ->
+                    { removed = []
+                    , added = []
+                    , rows =
+                        { left = Just { number = context.old, text = context.text, kind = Context }
+                        , right = Just { number = context.new, text = context.text, kind = Context }
+                        }
+                            :: flushed state
+                    }
 
-                else
-                    True
-            )
+                RemovedLine removed ->
+                    if List.isEmpty state.added then
+                        { state | removed = { number = removed.old, text = removed.text, kind = Deletion } :: state.removed }
 
+                    else
+                        { removed = [ { number = removed.old, text = removed.text, kind = Deletion } ], added = [], rows = flushed state }
 
-rows : List DiffLine -> List SplitRow
-rows lines =
-    case lines of
-        [] ->
-            []
-
-        first :: rest ->
-            case first.kind of
-                Context ->
-                    { left = Just (leftLine first), right = Just (rightLine first) } :: rows rest
-
-                Addition ->
-                    { left = Nothing, right = Just (rightLine first) } :: rows rest
-
-                Deletion ->
-                    let
-                        ( deletions, afterDeletions ) =
-                            takeKind Deletion lines
-
-                        ( additions, remaining ) =
-                            takeKind Addition afterDeletions
-                    in
-                    zipChanges deletions additions ++ rows remaining
+                AddedLine added ->
+                    { state | added = { number = added.new, text = added.text, kind = Addition } :: state.added }
+    in
+    List.foldl step { removed = [], added = [], rows = [] } hunk.lines
+        |> flushed
+        |> List.reverse
+        |> List.filter (\row -> not ignoreWhitespace || not (whitespaceOnly row))
 
 
-takeKind : Kind -> List DiffLine -> ( List DiffLine, List DiffLine )
-takeKind kind lines =
-    case lines of
-        first :: rest ->
-            if first.kind == kind then
-                let
-                    ( matches, remaining ) =
-                        takeKind kind rest
-                in
-                ( first :: matches, remaining )
+{-| Rows in reverse order, so callers can prepend them to a reversed list.
+-}
+zipChanges : List SideLine -> List SideLine -> List SplitRow
+zipChanges removed added =
+    let
+        paired =
+            List.map2 (\left right -> { left = Just left, right = Just right }) removed added
 
-            else
-                ( [], lines )
+        extraRemoved =
+            List.drop (List.length added) removed |> List.map (\left -> { left = Just left, right = Nothing })
 
-        [] ->
-            ( [], [] )
-
-
-zipChanges : List DiffLine -> List DiffLine -> List SplitRow
-zipChanges oldLines newLines =
-    case ( oldLines, newLines ) of
-        ( [], [] ) ->
-            []
-
-        ( old :: restOld, new :: restNew ) ->
-            { left = Just (leftLine old), right = Just (rightLine new) }
-                :: zipChanges restOld restNew
-
-        ( old :: restOld, [] ) ->
-            { left = Just (leftLine old), right = Nothing }
-                :: zipChanges restOld []
-
-        ( [], new :: restNew ) ->
-            { left = Nothing, right = Just (rightLine new) }
-                :: zipChanges [] restNew
+        extraAdded =
+            List.drop (List.length removed) added |> List.map (\right -> { left = Nothing, right = Just right })
+    in
+    List.reverse (paired ++ extraRemoved ++ extraAdded)
 
 
-leftLine : DiffLine -> SideLine
-leftLine line =
-    { number = line.oldLine, text = line.text, kind = line.kind }
+whitespaceOnly : SplitRow -> Bool
+whitespaceOnly row =
+    case ( row.left, row.right ) of
+        ( Just left, Just right ) ->
+            left.kind == Deletion && right.kind == Addition && normalizeWhitespace left.text == normalizeWhitespace right.text
+
+        _ ->
+            False
 
 
-rightLine : DiffLine -> SideLine
-rightLine line =
-    { number = line.newLine, text = line.text, kind = line.kind }
+{-| Flattens aligned rows back into unified order: each change block's
+removed lines, then its added lines.
+-}
+unifiedLines : List SplitRow -> List DiffLine
+unifiedLines rows =
+    let
+        flushed state =
+            List.reverse state.added ++ List.reverse state.removed ++ state.lines
+
+        step row state =
+            case ( row.left, row.right ) of
+                ( Just left, Just right ) ->
+                    if left.kind == Context && right.kind == Context then
+                        { removed = [], added = [], lines = ContextLine { old = left.number, new = right.number, text = right.text } :: flushed state }
+
+                    else
+                        { state | removed = sideLine left :: state.removed, added = sideLine right :: state.added }
+
+                ( Just left, Nothing ) ->
+                    { state | removed = sideLine left :: state.removed }
+
+                ( Nothing, Just right ) ->
+                    { state | added = sideLine right :: state.added }
+
+                ( Nothing, Nothing ) ->
+                    state
+    in
+    List.foldl step { removed = [], added = [], lines = [] } rows
+        |> flushed
+        |> List.reverse
 
 
-fullFileRows : String -> String -> String -> List SplitRow
-fullFileRows patch oldText newText =
-    fullFileRowsPrepared (parsePatch patch) oldText newText
+sideLine : SideLine -> DiffLine
+sideLine line =
+    case line.kind of
+        Deletion ->
+            RemovedLine { old = line.number, text = line.text }
+
+        Addition ->
+            AddedLine { new = line.number, text = line.text }
+
+        Context ->
+            -- A context cell without its partner only occurs in full-file
+            -- stitching, where both numbers are equal by construction.
+            ContextLine { old = line.number, new = line.number, text = line.text }
 
 
-fullFileRowsPrepared : List Hunk -> String -> String -> List SplitRow
-fullFileRowsPrepared hunks oldText newText =
-    stitchFullFile
-        (String.lines oldText)
-        (String.lines newText)
-        1
-        1
-        hunks
+{-| The whole file with patch hunks stitched in place of their context.
+Unread lines are consumed front to back, so stitching is linear in the file.
+-}
+fullFileRows : Bool -> List Hunk -> String -> String -> List SplitRow
+fullFileRows ignoreWhitespace hunks oldText newText =
+    let
+        numbered text =
+            List.indexedMap (\index line -> ( index + 1, line )) (String.lines text)
 
+        before limit =
+            span (\( number, _ ) -> number < limit)
 
-stitchFullFile : List String -> List String -> Int -> Int -> List Hunk -> List SplitRow
-stitchFullFile oldLines newLines oldPosition newPosition hunks =
-    case hunks of
-        [] ->
-            zipFull oldPosition
-                newPosition
-                (List.drop (oldPosition - 1) oldLines)
-                (List.drop (newPosition - 1) newLines)
-
-        hunk :: remaining ->
+        step hunk state =
             let
-                oldContext =
-                    oldLines
-                        |> List.drop (oldPosition - 1)
-                        |> List.take (max 0 (hunk.oldStart - oldPosition + zeroRangeOffset hunk.oldCount))
+                -- Git names the line before an insertion when a side's count
+                -- is zero, so that side's next unchanged line is one later.
+                ( oldContext, oldRest ) =
+                    before (hunk.oldStart + zeroRangeOffset hunk.oldCount) state.old
 
-                newContext =
-                    newLines
-                        |> List.drop (newPosition - 1)
-                        |> List.take (max 0 (hunk.newStart - newPosition + zeroRangeOffset hunk.newCount))
-
-                nextOld =
-                    hunk.oldStart + max 1 hunk.oldCount
-
-                nextNew =
-                    hunk.newStart + max 1 hunk.newCount
+                ( newContext, newRest ) =
+                    before (hunk.newStart + zeroRangeOffset hunk.newCount) state.new
             in
-            zipFull oldPosition newPosition oldContext newContext
-                ++ splitRows False hunk
-                ++ stitchFullFile oldLines newLines nextOld nextNew remaining
+            { old = Tuple.second (before (hunk.oldStart + max 1 hunk.oldCount) oldRest)
+            , new = Tuple.second (before (hunk.newStart + max 1 hunk.newCount) newRest)
+            , rows =
+                List.reverse (splitRows ignoreWhitespace hunk)
+                    ++ List.reverse (zipContext oldContext newContext)
+                    ++ state.rows
+            }
+
+        stitched =
+            List.foldl step { old = numbered oldText, new = numbered newText, rows = [] } hunks
+    in
+    List.reverse stitched.rows ++ zipContext stitched.old stitched.new
+
+
+{-| Splits a list at the first element failing `predicate`.
+-}
+span : (a -> Bool) -> List a -> ( List a, List a )
+span predicate =
+    let
+        help taken remaining =
+            case remaining of
+                first :: rest ->
+                    if predicate first then
+                        help (first :: taken) rest
+
+                    else
+                        ( List.reverse taken, remaining )
+
+                [] ->
+                    ( List.reverse taken, [] )
+    in
+    help []
 
 
 zeroRangeOffset : Int -> Int
@@ -382,25 +449,22 @@ zeroRangeOffset count =
         0
 
 
-zipFull : Int -> Int -> List String -> List String -> List SplitRow
-zipFull oldLineNumber newLineNumber oldLines newLines =
-    case ( oldLines, newLines ) of
-        ( [], [] ) ->
-            []
+zipContext : List ( Int, String ) -> List ( Int, String ) -> List SplitRow
+zipContext oldLines newLines =
+    let
+        cell kind ( number, text ) =
+            Just { number = number, text = text, kind = kind }
 
-        ( old :: remainingOld, new :: remainingNew ) ->
-            { left = Just { number = Just oldLineNumber, text = old, kind = Context }
-            , right = Just { number = Just newLineNumber, text = new, kind = Context }
-            }
-                :: zipFull (oldLineNumber + 1) (newLineNumber + 1) remainingOld remainingNew
+        paired =
+            List.map2 (\old new -> { left = cell Context old, right = cell Context new }) oldLines newLines
 
-        ( old :: remainingOld, [] ) ->
-            { left = Just { number = Just oldLineNumber, text = old, kind = Deletion }, right = Nothing }
-                :: zipFull (oldLineNumber + 1) newLineNumber remainingOld []
+        extraOld =
+            List.drop (List.length newLines) oldLines |> List.map (\old -> { left = cell Deletion old, right = Nothing })
 
-        ( [], new :: remainingNew ) ->
-            { left = Nothing, right = Just { number = Just newLineNumber, text = new, kind = Addition } }
-                :: zipFull oldLineNumber (newLineNumber + 1) [] remainingNew
+        extraNew =
+            List.drop (List.length oldLines) newLines |> List.map (\new -> { left = Nothing, right = cell Addition new })
+    in
+    paired ++ extraOld ++ extraNew
 
 
 normalizeWhitespace : String -> String

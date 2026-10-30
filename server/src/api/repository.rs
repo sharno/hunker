@@ -9,10 +9,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AppState,
-    error::{AppError, AppResult},
-    github::PullRequestState,
+    error::AppResult,
+    github::{PullRequestState, PullsPage, RepositoryPullsPage},
     local,
-    types::{BranchName, CloneDestination, Oid, RelativePath, RepositorySlug, SearchMode},
+    types::{BranchName, Oid, RelativePath, RepositoryRoot, RepositorySlug, SearchMode},
 };
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -102,25 +102,20 @@ async fn get_source_control(
 #[derive(Deserialize)]
 struct PullsQuery {
     repository: RepositorySlug,
-    state: Option<PullRequestState>,
-    page: Option<usize>,
+    #[serde(default)]
+    state: PullRequestState,
+    #[serde(default)]
+    page: PullsPage,
 }
 
 async fn get_pulls(
     State(state): State<Arc<AppState>>,
     Query(query): Query<PullsQuery>,
-) -> AppResult<Json<crate::github::RepositoryPullsPage>> {
-    let filter = query.state.unwrap_or(PullRequestState::Open);
-    let page = query.page.unwrap_or(1);
-    if !(1..=1_000).contains(&page) {
-        return Err(AppError::bad_request(
-            "Pull request page must be between 1 and 1000.",
-        ));
-    }
+) -> AppResult<Json<RepositoryPullsPage>> {
     Ok(Json(
         state
             .github
-            .repository_pulls(&query.repository, filter, page)
+            .repository_pulls(&query.repository, query.state, query.page)
             .await?,
     ))
 }
@@ -130,18 +125,17 @@ struct SearchQuery {
     repository: RepositorySlug,
     oid: Oid,
     query: String,
-    mode: Option<SearchMode>,
+    mode: SearchMode,
 }
 
 async fn get_search(
     State(state): State<Arc<AppState>>,
     Query(query): Query<SearchQuery>,
 ) -> AppResult<Json<local::SearchResults>> {
-    let mode = query.mode.unwrap_or(SearchMode::Literal);
     Ok(Json(
         state
             .local
-            .search(&query.repository, &query.oid, &query.query, mode)
+            .search(&query.repository, &query.oid, &query.query, query.mode)
             .await?,
     ))
 }
@@ -160,7 +154,7 @@ async fn get_file(
     Ok(Json(
         state
             .local
-            .read_file(&query.repository, &query.oid, query.path.as_str())
+            .read_file(&query.repository, &query.oid, &query.path)
             .await?,
     ))
 }
@@ -168,7 +162,7 @@ async fn get_file(
 #[derive(Deserialize)]
 struct CloneBody {
     repository: RepositorySlug,
-    destination: CloneDestination,
+    destination: RepositoryRoot,
 }
 
 async fn clone(

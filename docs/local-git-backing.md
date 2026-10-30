@@ -18,6 +18,11 @@ The URL stores the human-readable ref or GitHub resource. The server resolves it
 to immutable OIDs for one response, so concurrent tabs never depend on a mutable
 process-wide checkout.
 
+For pull requests and compares, `baseOid` is the merge base of the base and head
+commits, the commit GitHub diffs against. A two-dot local diff and the old side
+of every file pair then show exactly the reviewed change, even after the base
+branch has moved.
+
 ## Storage and commands
 
 Hunker should discover an existing checkout below `HUNKER_REPOS_ROOT` first.
@@ -25,7 +30,7 @@ Otherwise it should use a cached clone below `HUNKER_CACHE_ROOT`. PR and commit
 data can then be generated locally:
 
 - file lists and patches: `git diff --find-renames <baseOid> <headOid>`
-- file revisions: `git show <oid>:<path>`
+- file revisions: one `git cat-file --batch` process per review
 - commits: `git log <baseOid>..<headOid>`
 - repository files: `git ls-tree -r <oid>`
 

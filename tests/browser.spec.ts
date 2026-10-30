@@ -1,4 +1,44 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type Route } from "@playwright/test";
+
+// Mock payloads follow the Rust wire contract in server/src/types.rs and the
+// Elm decoders in elm/src/Hunker/Domain.
+type FileChange = {
+  path: string;
+  status: "modified" | "added" | "deleted";
+  additions: number;
+  deletions: number;
+  patch: string;
+};
+
+type ReviewDocument = {
+  title: string;
+  author: string;
+  base: string;
+  head: string;
+  files: FileChange[];
+  revision: { baseOid: string; headOid: string; headRef: string };
+  source: { _tag: "GitHub" } | { _tag: "Local"; path: string };
+};
+
+type HighlightSpan = {
+  line: number;
+  startCharacter: number;
+  endCharacter: number;
+  kind: string;
+};
+
+type FoldRegion = {
+  id: string;
+  kind: string;
+  label: string;
+  startLine: number;
+  endLine: number;
+};
+
+// The sticky app bar is `h-16` in elm/styles.css.
+const APP_BAR_HEIGHT = "64px";
+// Allow one CSS pixel of sub-pixel rounding in layout assertions.
+const LAYOUT_TOLERANCE = 1;
 
 const settings = {
   repositoriesRoot: "/Users/example/src",
@@ -25,16 +65,12 @@ const headOid = "2222222222222222222222222222222222222222";
 const longLine = `export const description = "${"long review text ".repeat(18)}";`;
 const reviewResponse = {
   title: "Improve the greeting",
-  repository: "example/hunker",
-  number: "42",
   author: "agent",
   base: "main",
   head: "feature/greeting",
-  url: reviewUrl,
   files: [
     {
       path: "src/long.ts",
-      previousPath: null,
       status: "modified",
       additions: 1,
       deletions: 1,
@@ -42,7 +78,6 @@ const reviewResponse = {
     },
     {
       path: "src/other.ts",
-      previousPath: null,
       status: "modified",
       additions: 1,
       deletions: 1,
@@ -50,37 +85,52 @@ const reviewResponse = {
         "@@ -1 +1 @@\n-export const other = false;\n+export const other = true;",
     },
   ],
-  backing: {
-    _tag: "GitHub",
+  revision: {
     baseOid: "1111111111111111111111111111111111111111",
     headOid,
     headRef: "feature/greeting",
-    path: "",
   },
-};
+  source: { _tag: "GitHub" },
+} satisfies ReviewDocument;
+
+function fulfillJson(route: Route, json: unknown, status = 200) {
+  return route.fulfill({ status, contentType: "application/json", json });
+}
+
+function deferred() {
+  return Promise.withResolvers<void>();
+}
+
+async function expectNoHorizontalOverflow(page: Page) {
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => document.documentElement.scrollWidth - window.innerWidth,
+      ),
+    )
+    .toBeLessThanOrEqual(LAYOUT_TOLERANCE);
+}
+
+function savedSettings(payload: unknown): unknown {
+  return typeof payload === "object" &&
+    payload !== null &&
+    "settings" in payload
+    ? payload.settings
+    : settings;
+}
 
 test.beforeEach(async ({ page }) => {
-  await page.route("**/api/settings", async (route) => {
-    if (route.request().method() === "PUT") {
-      const payload: { settings: typeof settings } = route
-        .request()
-        .postDataJSON();
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        json: {
-          settings: payload.settings,
-          configPath: settingsDocument.configPath,
-        },
-      });
-      return;
-    }
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      json: settingsDocument,
-    });
-  });
+  await page.route("**/api/settings", (route) =>
+    fulfillJson(
+      route,
+      route.request().method() === "PUT"
+        ? {
+            settings: savedSettings(route.request().postDataJSON()),
+            configPath: settingsDocument.configPath,
+          }
+        : settingsDocument,
+    ),
+  );
 });
 
 test("serves Elm on history routes and keeps browser Back and Forward canonical", async ({
@@ -92,27 +142,23 @@ test("serves Elm on history routes and keeps browser Back and Forward canonical"
   expect(await response.text()).toContain("Elm.Main.init");
 
   await page.route("**/api/repositories", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      json: {
-        configuredRoot: "/Users/example/src",
-        temporaryRoot: "/tmp/hunker/repositories",
-        repositories: [
-          {
-            owner: "example",
-            name: "hunker",
-            path: "/Users/example/src/hunker",
-            source: "configured",
-          },
-          {
-            owner: "effect-ts",
-            name: "effect",
-            path: "/tmp/hunker/repositories/effect-ts/effect",
-            source: "temporary",
-          },
-        ],
-      },
+    fulfillJson(route, {
+      configuredRoot: "/Users/example/src",
+      temporaryRoot: "/tmp/hunker/repositories",
+      repositories: [
+        {
+          owner: "example",
+          name: "hunker",
+          path: "/Users/example/src/hunker",
+          source: "configured",
+        },
+        {
+          owner: "effect-ts",
+          name: "effect",
+          path: "/tmp/hunker/repositories/effect-ts/effect",
+          source: "temporary",
+        },
+      ],
     }),
   );
   await mockRepository(page);
@@ -164,7 +210,9 @@ test("renders a nested repository tree and a deep-linked local file without head
     clientWidth: bar.clientWidth,
     scrollWidth: bar.scrollWidth,
   }));
-  expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
+  expect(layout.scrollWidth).toBeLessThanOrEqual(
+    layout.clientWidth + LAYOUT_TOLERANCE,
+  );
 
   const sourceLineLayout = await page
     .locator(".source-line")
@@ -230,19 +278,12 @@ test("keeps repository commit rows compact and aligned", async ({ page }) => {
 test("shows loading instead of stale review data and preserves a single fetched revision across history", async ({
   page,
 }) => {
-  let resolveReview: (() => void) | undefined;
-  const reviewGate = new Promise<void>((resolve) => {
-    resolveReview = resolve;
-  });
-  let reviewRequests = 0;
+  const reviewGate = deferred();
+  const reviewRequests: string[] = [];
   await page.route("**/api/diff?**", async (route) => {
-    reviewRequests += 1;
-    await reviewGate;
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      json: reviewResponse,
-    });
+    reviewRequests.push(route.request().url());
+    await reviewGate.promise;
+    await fulfillJson(route, reviewResponse);
   });
   await mockReviewAnalysis(page);
 
@@ -251,7 +292,7 @@ test("shows loading instead of stale review data and preserves a single fetched 
     "Loading the latest change",
   );
   await expect(page.locator(".diff-panel")).toHaveCount(0);
-  resolveReview?.();
+  reviewGate.resolve();
   await expect(
     page.getByRole("heading", { name: "Improve the greeting" }),
   ).toBeVisible();
@@ -319,7 +360,7 @@ test("shows loading instead of stale review data and preserves a single fetched 
   await expect(
     page.getByRole("button", { name: "Hide top bar" }),
   ).toBeFocused();
-  await expect(toolbar).toHaveCSS("top", "64px");
+  await expect(toolbar).toHaveCSS("top", APP_BAR_HEIGHT);
 
   const lineLayout = await page
     .locator(".split-row")
@@ -374,7 +415,9 @@ test("shows loading instead of stale review data and preserves a single fetched 
     document.body.style.minHeight = "3000px";
     window.scrollTo(0, 1200);
   });
-  await page.waitForTimeout(300);
+  await expect
+    .poll(() => page.evaluate(() => window.scrollY))
+    .toBeGreaterThan(0);
   await expect(toolbar).toHaveCSS("height", `${toolbarHeight}px`);
   await expect(toolbar).not.toHaveClass(/is-compact|is-expanded/);
 
@@ -385,9 +428,13 @@ test("shows loading instead of stale review data and preserves a single fetched 
   await expect(page).toHaveURL("/example/hunker/pull/42/files/src/other.ts");
   await expect
     .poll(async () => {
-      const target = await page.locator("#file-src-other-ts").boundingBox();
+      // File anchors escape every non-alphanumeric character as -<hex>-.
+      const target = await page
+        .locator("#file-src-2f-other-2e-ts")
+        .boundingBox();
       const stickyToolbar = await toolbar.boundingBox();
       if (!target || !stickyToolbar) return Number.POSITIVE_INFINITY;
+      // The panel lands just below the sticky toolbar, after its 12px margin.
       return Math.abs(target.y - (stickyToolbar.y + stickyToolbar.height + 12));
     })
     .toBeLessThan(20);
@@ -395,20 +442,16 @@ test("shows loading instead of stale review data and preserves a single fetched 
   await expect(page).toHaveURL("/example/hunker/pull/42/files/src/long.ts");
   await page.goForward();
   await expect(page).toHaveURL("/example/hunker/pull/42/files/src/other.ts");
-  expect(reviewRequests).toBe(1);
+  expect(reviewRequests).toHaveLength(1);
 });
 
 test("keeps review controls reachable and metadata inside narrow viewports", async ({
   page,
 }) => {
   await page.route("**/api/diff?**", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      json: {
-        ...reviewResponse,
-        base: "1111111111111111111111111111111111111111",
-      },
+    fulfillJson(route, {
+      ...reviewResponse,
+      base: "1111111111111111111111111111111111111111",
     }),
   );
   await mockReviewAnalysis(page);
@@ -428,43 +471,25 @@ test("keeps review controls reachable and metadata inside narrow viewports", asy
   await page.setViewportSize({ width: 390, height: 720 });
   await options.click();
   await expect(page.locator(".diff-options")).toBeVisible();
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () => document.documentElement.scrollWidth - window.innerWidth,
-      ),
-    )
-    .toBeLessThanOrEqual(1);
+  await expectNoHorizontalOverflow(page);
 });
 
 test("shows approval progress and success through real Fetch transport", async ({
   page,
 }) => {
   await page.route("**/api/diff?**", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      json: reviewResponse,
-    }),
+    fulfillJson(route, reviewResponse),
   );
   await mockReviewAnalysis(page);
 
-  let releaseReview: (() => void) | undefined;
-  const reviewGate = new Promise<void>((resolve) => {
-    releaseReview = resolve;
-  });
-  let postedBody: unknown;
+  const reviewGate = deferred();
   await page.route("**/api/reviews/submit", async (route) => {
-    postedBody = route.request().postDataJSON();
-    await reviewGate;
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      json: { event: "APPROVE" },
-    });
+    await reviewGate.promise;
+    await fulfillJson(route, { event: "APPROVE" });
   });
 
   await page.goto("/example/hunker/pull/42/files/src/long.ts");
+  const submitted = page.waitForRequest("**/api/reviews/submit");
   await page.getByRole("button", { name: "Approve", exact: true }).click();
 
   await expect(
@@ -476,13 +501,13 @@ test("shows approval progress and success through real Fetch transport", async (
   await expect(page.getByRole("status")).toHaveText(
     "Submitting review to GitHub…",
   );
-  expect(postedBody).toEqual({
+  expect((await submitted).postDataJSON()).toEqual({
     url: reviewUrl,
     body: "",
     event: "APPROVE",
   });
 
-  releaseReview?.();
+  reviewGate.resolve();
   await expect(page.getByRole("status")).toHaveText(
     "Review approved on GitHub.",
   );
@@ -494,27 +519,20 @@ test("shows approval progress and success through real Fetch transport", async (
 test("renders semantic analysis progress once and omits repeated skipped banners", async ({
   page,
 }) => {
-  let releaseAnalysis: (() => void) | undefined;
-  const analysisGate = new Promise<void>((resolve) => {
-    releaseAnalysis = resolve;
-  });
+  const analysisGate = deferred();
   await page.route("**/api/diff?**", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      json: reviewResponse,
-    }),
+    fulfillJson(route, reviewResponse),
   );
   await mockReviewSupport(page);
   await page.route("**/api/analysis?**", async (route) => {
-    await analysisGate;
+    await analysisGate.promise;
     await fulfillReviewAnalysis(route);
   });
 
   await page.goto("/example/hunker/pull/42/files/src/long.ts");
   await expect(page.locator(".review-analysis-status")).toHaveCount(1);
   await expect(page.locator(".semantic-banner.is-loading")).toHaveCount(0);
-  releaseAnalysis?.();
+  analysisGate.resolve();
   await expect(page.locator(".review-analysis-status")).toHaveCount(0);
   await page.getByLabel("Diff scope").selectOption("full");
   await expect(page.locator(".diff-panel")).toHaveCount(2);
@@ -526,15 +544,11 @@ test("shows a clear empty state for a repository with no open pull requests", as
 }) => {
   await mockRepository(page);
   await page.route("**/api/repository/pulls?**", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      json: {
-        state: "open",
-        page: 1,
-        pullRequests: [],
-        hasMore: false,
-      },
+    fulfillJson(route, {
+      state: "open",
+      page: 1,
+      pullRequests: [],
+      hasMore: false,
     }),
   );
   await page.setViewportSize({ width: 390, height: 720 });
@@ -568,16 +582,10 @@ test("shows a clear empty state for a repository with no open pull requests", as
   });
   expect(mobileLayout.navPosition).toBe("fixed");
   expect(mobileLayout.emptyMessageBottom).toBeLessThanOrEqual(
-    mobileLayout.navTop + 1,
+    mobileLayout.navTop + LAYOUT_TOLERANCE,
   );
   expect(mobileLayout.pullWhiteSpace).toBe("nowrap");
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () => document.documentElement.scrollWidth - window.innerWidth,
-      ),
-    )
-    .toBeLessThanOrEqual(1);
+  await expectNoHorizontalOverflow(page);
 });
 
 test("keeps settings usable without horizontal overflow on mobile", async ({
@@ -601,47 +609,39 @@ test("keeps settings usable without horizontal overflow on mobile", async ({
         scroll: section.scrollWidth,
       })),
     );
-  for (const width of sectionWidths)
-    expect(width.scroll).toBeLessThanOrEqual(width.client + 1);
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () => document.documentElement.scrollWidth - window.innerWidth,
-      ),
-    )
-    .toBeLessThanOrEqual(1);
+  expect(
+    sectionWidths.filter(
+      (width) => width.scroll > width.client + LAYOUT_TOLERANCE,
+    ),
+  ).toEqual([]);
+  await expectNoHorizontalOverflow(page);
 });
 
 test("does not poll mutable revision state for an immutable commit", async ({
   page,
 }) => {
   const sha = "2222222222222222222222222222222222222222";
-  let revisionRequests = 0;
-  let analysisRequests = 0;
-  page.on("request", (request) => {
-    if (new URL(request.url()).pathname === "/api/analysis")
-      analysisRequests += 1;
-  });
+  const requestedPaths: string[] = [];
+  page.on("request", (request) =>
+    requestedPaths.push(new URL(request.url()).pathname),
+  );
+  const requests = (path: string) =>
+    requestedPaths.filter((requested) => requested === path).length;
   await page.route("**/api/diff?**", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      json: reviewResponse,
-    }),
+    fulfillJson(route, reviewResponse),
   );
   await mockReviewAnalysis(page);
-  await page.route("**/api/revision?**", (route) => {
-    revisionRequests += 1;
-    return route.fulfill({
-      status: 400,
-      contentType: "application/json",
-      json: {
+  await page.route("**/api/revision?**", (route) =>
+    fulfillJson(
+      route,
+      {
         code: "bad_request",
         message: "Immutable commits do not have a latest revision.",
         retryable: false,
       },
-    });
-  });
+      400,
+    ),
+  );
 
   await page.goto(`/example/hunker/commit/${sha}`);
   await expect(
@@ -650,9 +650,10 @@ test("does not poll mutable revision state for an immutable commit", async ({
   await expect(page).toHaveURL(
     `/example/hunker/commit/${sha}?file=src%2Flong.ts`,
   );
-  await page.waitForTimeout(300);
-  expect(revisionRequests).toBe(0);
-  expect(analysisRequests).toBe(1);
+  // Analysis starts together with any revision check, so once it has been
+  // requested a revision request would already be visible too.
+  await expect.poll(() => requests("/api/analysis")).toBe(1);
+  expect(requests("/api/revision")).toBe(0);
   await expect(page.locator(".revision-notice")).toHaveCount(0);
 });
 
@@ -661,18 +662,13 @@ test("keeps the review file list sticky with its own scrollbar", async ({
 }) => {
   const files = Array.from({ length: 80 }, (_, index) => ({
     path: `src/feature-${String(index).padStart(2, "0")}/file.ts`,
-    previousPath: null,
-    status: "modified",
+    status: "modified" as const,
     additions: 1,
     deletions: 1,
     patch: `@@ -1 +1 @@\n-export const value = ${index};\n+export const value = ${index + 1};`,
   }));
   await page.route("**/api/diff?**", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      json: { ...reviewResponse, files },
-    }),
+    fulfillJson(route, { ...reviewResponse, files } satisfies ReviewDocument),
   );
   await mockReviewAnalysis(page);
   await page.setViewportSize({ width: 1280, height: 600 });
@@ -721,7 +717,9 @@ test("keeps the review file list sticky with its own scrollbar", async ({
   });
 
   expect(Math.abs(layout.sidebarTop - layout.toolbarBottom)).toBeLessThan(2);
-  expect(layout.sidebarBottom).toBeLessThanOrEqual(layout.viewportHeight + 1);
+  expect(layout.sidebarBottom).toBeLessThanOrEqual(
+    layout.viewportHeight + LAYOUT_TOLERANCE,
+  );
   expect(layout.overflowY).toBe("auto");
   expect(layout.treeScrollHeight).toBeGreaterThan(layout.treeClientHeight);
   expect(layout.treeScrollTop).toBeGreaterThan(0);
@@ -737,23 +735,18 @@ test("keeps every deferred diff line available to native browser Find", async ({
       : `export const generatedLine${index} = ${index};`,
   );
   await page.route("**/api/diff?**", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      json: {
-        ...reviewResponse,
-        files: [
-          {
-            path: "src/generated.ts",
-            previousPath: null,
-            status: "added",
-            additions: lines.length,
-            deletions: 0,
-            patch: `@@ -0,0 +1,${lines.length} @@\n${lines.map((line) => `+${line}`).join("\n")}`,
-          },
-        ],
-      },
-    }),
+    fulfillJson(route, {
+      ...reviewResponse,
+      files: [
+        {
+          path: "src/generated.ts",
+          status: "added",
+          additions: lines.length,
+          deletions: 0,
+          patch: `@@ -0,0 +1,${lines.length} @@\n${lines.map((line) => `+${line}`).join("\n")}`,
+        },
+      ],
+    } satisfies ReviewDocument),
   );
   await mockReviewAnalysis(page);
 
@@ -777,44 +770,35 @@ test("posts an inline line comment through the real browser Fetch transport", as
   page,
 }) => {
   await page.route("**/api/diff?**", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      json: reviewResponse,
-    }),
+    fulfillJson(route, reviewResponse),
   );
   await mockReviewAnalysis(page);
-  let postedBody: unknown;
-  await page.route("**/api/reviews/comment", async (route) => {
-    postedBody = route.request().postDataJSON();
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      json: {
-        comment: {
-          id: 91,
-          rootId: 91,
-          path: "src/long.ts",
-          body: "Please keep this concise.",
-          author: "reviewer",
-          htmlUrl: `${reviewUrl}#discussion_r91`,
-          createdAt: "2026-08-07T12:00:00Z",
-          line: 1,
-          side: "RIGHT",
-          resolved: false,
-        },
+  await page.route("**/api/reviews/comment", (route) =>
+    fulfillJson(route, {
+      comment: {
+        id: 91,
+        rootId: 91,
+        path: "src/long.ts",
+        body: "Please keep this concise.",
+        author: "reviewer",
+        htmlUrl: `${reviewUrl}#discussion_r91`,
+        createdAt: "2026-08-07T12:00:00Z",
+        line: 1,
+        side: "RIGHT",
+        resolved: false,
       },
-    });
-  });
+    }),
+  );
 
   await page.goto("/example/hunker/pull/42/files/src/long.ts");
   await page.locator(".split-cell.right .comment-trigger").first().click();
   await page
     .getByPlaceholder("Leave a review comment on GitHub…")
     .fill("Please keep this concise.");
+  const posted = page.waitForRequest("**/api/reviews/comment");
   await page.getByRole("button", { name: "Add comment" }).click();
 
-  expect(postedBody).toEqual({
+  expect((await posted).postDataJSON()).toEqual({
     pullUrl: reviewUrl,
     commitId: headOid,
     path: "src/long.ts",
@@ -829,96 +813,80 @@ test("posts an inline line comment through the real browser Fetch transport", as
 
 async function mockRepository(page: Page) {
   await page.route("**/api/repository/files?**", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      json: {
-        files: [
-          { path: "src/nested/greet.ts", size: 33, gitStatus: "clean" },
-          { path: "README.md", size: 10, gitStatus: "clean" },
-        ],
-      },
+    fulfillJson(route, {
+      files: [
+        { path: "src/nested/greet.ts", size: 33 },
+        { path: "README.md", size: 10 },
+      ],
     }),
   );
   await page.route("**/api/repository/file?**", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      json: {
-        path: "src/nested/greet.ts",
-        content:
-          'export function greeting() {\n  const value = "hello";\n  return value;\n}\n',
-        truncated: false,
-        presentation: sourcePresentation(
-          "TypeScript",
-          [
-            { line: 1, startCharacter: 0, endCharacter: 6, kind: "keyword" },
-            { line: 1, startCharacter: 7, endCharacter: 15, kind: "keyword" },
-            { line: 1, startCharacter: 16, endCharacter: 24, kind: "function" },
-            { line: 2, startCharacter: 2, endCharacter: 7, kind: "keyword" },
-            { line: 2, startCharacter: 16, endCharacter: 23, kind: "string" },
-            { line: 3, startCharacter: 2, endCharacter: 8, kind: "keyword" },
-          ],
-          [
-            {
-              id: "function:1:4:greeting",
-              kind: "function",
-              label: "greeting",
-              startLine: 1,
-              endLine: 4,
-            },
-          ],
-        ),
-      },
+    fulfillJson(route, {
+      path: "src/nested/greet.ts",
+      content:
+        'export function greeting() {\n  const value = "hello";\n  return value;\n}\n',
+      truncated: false,
+      presentation: sourcePresentation(
+        "TypeScript",
+        [
+          { line: 1, startCharacter: 0, endCharacter: 6, kind: "keyword" },
+          { line: 1, startCharacter: 7, endCharacter: 15, kind: "keyword" },
+          { line: 1, startCharacter: 16, endCharacter: 24, kind: "function" },
+          { line: 2, startCharacter: 2, endCharacter: 7, kind: "keyword" },
+          { line: 2, startCharacter: 16, endCharacter: 23, kind: "string" },
+          { line: 3, startCharacter: 2, endCharacter: 8, kind: "keyword" },
+        ],
+        [
+          {
+            id: "function:1:4:greeting",
+            kind: "function",
+            label: "greeting",
+            startLine: 1,
+            endLine: 4,
+          },
+        ],
+      ),
     }),
   );
   await page.route("**/api/repository/commits?**", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      json: {
-        ref: headOid,
-        shallow: false,
-        commits: [
-          {
-            sha: "1111111111111111111111111111111111111111",
-            parents: [],
-            authorName: "Mohamed Elsharnouby",
-            authorEmail: "mohamed@example.com",
-            authoredAt: "2026-08-07T12:00:00-04:00",
-            subject: "Keep repository commit rows compact",
-          },
-          {
-            sha: "2222222222222222222222222222222222222222",
-            parents: ["1111111111111111111111111111111111111111"],
-            authorName: "Hunker Agent",
-            authorEmail: "agent@example.com",
-            authoredAt: "2026-08-07T11:00:00-04:00",
-            subject: "Add repository commit view",
-          },
-        ],
-      },
+    fulfillJson(route, {
+      ref: headOid,
+      history: "complete",
+      commits: [
+        {
+          sha: "1111111111111111111111111111111111111111",
+          parents: [],
+          authorName: "Mohamed Elsharnouby",
+          authorEmail: "mohamed@example.com",
+          authoredAt: "2026-08-07T12:00:00-04:00",
+          subject: "Keep repository commit rows compact",
+        },
+        {
+          sha: "2222222222222222222222222222222222222222",
+          parents: ["1111111111111111111111111111111111111111"],
+          authorName: "Hunker Agent",
+          authorEmail: "agent@example.com",
+          authoredAt: "2026-08-07T11:00:00-04:00",
+          subject: "Add repository commit view",
+        },
+      ],
     }),
   );
   await page.route("**/api/repository/source-control?**", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      json: {
-        status: {
-          path: "/Users/example/src/hunker",
-          checkout: {
-            _tag: "TrackingBranch",
-            name: "main",
-            oid: headOid,
-            upstream: "origin/main",
-            ahead: 0,
-            behind: 0,
-          },
-          branches: [{ name: "main", local: true, remote: true }],
-          changes: { staged: 0, unstaged: 0, untracked: 0 },
-          remote: { _tag: "RemoteCurrent", checkedAt: 1 },
+    fulfillJson(route, {
+      status: {
+        path: "/Users/example/src/hunker",
+        checkout: {
+          _tag: "TrackingBranch",
+          name: "main",
+          oid: headOid,
+          upstream: "origin/main",
+          ahead: 0,
+          behind: 0,
         },
+        branches: [{ name: "main", presence: "both" }],
+        changes: { staged: 0, unstaged: 0, untracked: 0 },
+        remote: { _tag: "RemoteCurrent", checkedAt: 1 },
       },
     }),
   );
@@ -929,10 +897,7 @@ async function mockReviewAnalysis(page: Page) {
   await mockReviewSupport(page);
 }
 
-async function fulfillReviewAnalysis(
-  route: Parameters<Parameters<Page["route"]>[1]>[0],
-) {
-  const query = new URL(route.request().url()).searchParams;
+function fulfillReviewAnalysis(route: Route) {
   const file = (path: string) => ({
     path,
     semantic: {
@@ -954,10 +919,8 @@ async function fulfillReviewAnalysis(
       },
     },
     wordDiff: {
-      path,
-      ignoreWhitespace: query.get("whitespace") === "ignore",
-      mode: query.get("mode"),
-      rows:
+      _tag: "Complete",
+      value:
         path === "src/long.ts"
           ? [
               {
@@ -970,66 +933,28 @@ async function fulfillReviewAnalysis(
           : [],
     },
   });
-  return route.fulfill({
-    status: 200,
-    contentType: "application/json",
-    json: {
-      key: {
-        repository: "example/hunker",
-        baseOid: query.get("baseOid"),
-        headOid: query.get("headOid"),
-        options: {
-          ignoreWhitespace: query.get("whitespace") === "ignore",
-          semantic: query.get("semantic") === "true",
-          syntax: query.get("syntax") === "true",
-          inlineDiff: query.get("mode"),
-        },
-      },
-      files: [file("src/long.ts"), file("src/other.ts")],
-      moves: [],
-    },
+  return fulfillJson(route, {
+    files: [file("src/long.ts"), file("src/other.ts")],
+    moves: [],
   });
 }
 
 async function mockReviewSupport(page: Page) {
   await page.route("**/api/reviews?**", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      json: { comments: [] },
-    }),
+    fulfillJson(route, { comments: [] }),
   );
   await page.route("**/api/commits?**", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      json: { commits: [] },
-    }),
+    fulfillJson(route, { commits: [] }),
   );
   await page.route("**/api/revision?**", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      json: { source: "github" },
-    }),
+    fulfillJson(route, { source: "github" }),
   );
 }
 
 function sourcePresentation(
   language: string,
-  highlights: Array<{
-    line: number;
-    startCharacter: number;
-    endCharacter: number;
-    kind: string;
-  }>,
-  folds: Array<{
-    id: string;
-    kind: string;
-    label: string;
-    startLine: number;
-    endLine: number;
-  }> = [],
+  highlights: HighlightSpan[],
+  folds: FoldRegion[] = [],
 ) {
   return {
     _tag: "Complete",

@@ -1,23 +1,31 @@
 module Hunker.Route exposing
-    ( PullRequestState(..)
+    ( FilesLocation
+    , GithubInputError(..)
+    , PullRequestRef
+    , PullView(..)
     , RepositoryLocation
-    , RepositoryTab(..)
+    , RepositoryView(..)
     , ReviewLocation
-    , ReviewTab(..)
-    , ReviewTarget(..)
+    , ReviewSubject(..)
     , Route(..)
-    , SearchMode(..)
+    , Search(..)
+    , blobUrl
+    , diffUrl
     , fromGithubString
     , fromUrl
-    , githubUrl
-    , isPullRequest
-    , pullRequestStateToString
-    , repositoryName
-    , searchModeToString
+    , pullRequest
+    , pullRequestUrl
+    , reviewLabel
+    , sameDiff
+    , selectFile
+    , selectedPath
     , toPath
     )
 
+import Hunker.Domain.Git as Git exposing (Oid, RepositoryId)
+import Hunker.Domain.Repository as Repository exposing (PullRequestState(..), SearchMode(..))
 import Url exposing (Url)
+import Url.Builder
 
 
 type Route
@@ -28,53 +36,62 @@ type Route
     | NotFound String
 
 
-type RepositoryTab
-    = RepositoryFiles
-    | RepositoryPulls
-    | RepositoryCommits
-
-
 type alias RepositoryLocation =
-    { owner : String
-    , repository : String
-    , tab : RepositoryTab
-    , ref : Maybe String
-    , path : Maybe String
-    , query : String
-    , searchMode : SearchMode
-    , pullState : PullRequestState
+    { repository : RepositoryId
+    , view : RepositoryView
     }
 
 
-type SearchMode
-    = LiteralSearch
-    | RegexSearch
-    | FuzzySearch
+{-| Each repository tab owns only the location fields it can use.
+-}
+type RepositoryView
+    = FilesView FilesLocation
+    | CommitsView (Maybe String)
+    | PullsView PullRequestState
 
 
-type PullRequestState
-    = OpenPulls
-    | ClosedPulls
-    | AllPulls
+type alias FilesLocation =
+    { ref : Maybe String
+    , path : Maybe String
+    , search : Search
+    }
 
 
-type ReviewTab
-    = ReviewFiles
-    | ReviewCommits
-
-
-type ReviewTarget
-    = PullRequest String String Int
-    | Compare String String String
-    | Commit String String String
+type Search
+    = NoSearch
+    | Search String SearchMode
 
 
 type alias ReviewLocation =
-    { target : ReviewTarget
-    , tab : ReviewTab
-    , path : Maybe String
-    , commit : Maybe String
+    { repository : RepositoryId
+    , subject : ReviewSubject
     }
+
+
+{-| Only pull requests have commit and collaboration views.
+-}
+type ReviewSubject
+    = PullRequest Int PullView
+    | Compare String (Maybe String)
+    | Commit String (Maybe String)
+
+
+type PullView
+    = PullFiles (Maybe String)
+    | PullCommits
+    | PullCommitFiles String (Maybe String)
+
+
+type alias PullRequestRef =
+    { repository : RepositoryId
+    , number : Int
+    }
+
+
+type GithubInputError
+    = UnparseableUrl
+    | ForeignHost
+    | UnsupportedLocation
 
 
 fromUrl : Url -> Route
@@ -82,7 +99,9 @@ fromUrl url =
     fromPath url.path url.query
 
 
-fromGithubString : String -> Result String Route
+{-| Accepts GitHub (or Hunker) URLs for repositories and reviews only.
+-}
+fromGithubString : String -> Result GithubInputError Route
 fromGithubString raw =
     let
         normalized =
@@ -94,19 +113,28 @@ fromGithubString raw =
     in
     case Url.fromString normalized of
         Nothing ->
-            Err "Paste a complete GitHub repository, pull request, compare, commit, or file URL."
+            Err UnparseableUrl
 
         Just url ->
-            if url.host == "github.com" || url.host == "www.github.com" || url.host == "localhost" || url.host == "127.0.0.1" then
+            if List.member url.host [ "github.com", "www.github.com", "localhost", "127.0.0.1" ] then
                 case fromPath url.path url.query of
-                    NotFound _ ->
-                        Err "Hunker does not have a focused view for that GitHub URL."
-
-                    route ->
+                    (Repository _) as route ->
                         Ok route
 
+                    (Review _) as route ->
+                        Ok route
+
+                    Home ->
+                        Err UnsupportedLocation
+
+                    Settings ->
+                        Err UnsupportedLocation
+
+                    NotFound _ ->
+                        Err UnsupportedLocation
+
             else
-                Err "Hunker currently accepts github.com or Hunker URLs."
+                Err ForeignHost
 
 
 fromPath : String -> Maybe String -> Route
@@ -116,114 +144,85 @@ fromPath path maybeQuery =
             NotFound path
 
         Just segments ->
-            parseSegments segments (queryOptions maybeQuery) path
+            parseSegments segments (queryOptions maybeQuery)
+                |> Maybe.withDefault (NotFound path)
 
 
-parseSegments : List String -> QueryOptions -> String -> Route
-parseSegments segments options originalPath =
+parseSegments : List String -> QueryOptions -> Maybe Route
+parseSegments segments options =
+    let
+        repository owner name view =
+            Just (Repository { repository = Git.repositoryId owner name, view = view })
+
+        review owner name subject =
+            Just (Review { repository = Git.repositoryId owner name, subject = subject })
+
+        files ref path =
+            FilesView { ref = ref, path = path, search = options.search }
+    in
     case segments of
         [] ->
-            Home
+            Just Home
 
         [ "settings" ] ->
-            Settings
+            Just Settings
 
-        [ "repo", owner, repository ] ->
-            repositoryRoute owner repository RepositoryFiles Nothing Nothing options
+        [ "repo", owner, name ] ->
+            repository owner name (files Nothing Nothing)
 
-        owner :: repository :: "pull" :: number :: rest ->
-            case String.toInt number of
-                Nothing ->
-                    NotFound originalPath
+        owner :: name :: "pull" :: number :: rest ->
+            String.toInt number
+                |> Maybe.andThen (\pull -> parsePull rest options |> Maybe.map (PullRequest pull))
+                |> Maybe.andThen (review owner name)
 
-                Just pullNumber ->
-                    parsePull owner repository pullNumber rest options
+        [ owner, name, "compare", range ] ->
+            review owner name (Compare range options.file)
 
-        [ owner, repository, "compare", range ] ->
-            Review
-                { target = Compare owner repository range
-                , tab = ReviewFiles
-                , path = nonEmpty options.file
-                , commit = Nothing
-                }
+        [ owner, name, "commit", sha ] ->
+            review owner name (Commit sha options.file)
 
-        [ owner, repository, "commit", sha ] ->
-            Review
-                { target = Commit owner repository sha
-                , tab = ReviewFiles
-                , path = nonEmpty options.file
-                , commit = Nothing
-                }
+        owner :: name :: "blob" :: reference :: ((_ :: _) as filePath) ->
+            repository owner name (files (Just reference) (Just (String.join "/" filePath)))
 
-        owner :: repository :: "blob" :: reference :: filePath ->
-            if List.isEmpty filePath then
-                NotFound originalPath
+        [ owner, name, "tree", reference ] ->
+            repository owner name (files (Just reference) Nothing)
 
-            else
-                repositoryRoute owner repository RepositoryFiles (Just reference) (Just (String.join "/" filePath)) options
+        [ owner, name, "pulls" ] ->
+            repository owner name (PullsView options.pullState)
 
-        [ owner, repository, "tree", reference ] ->
-            repositoryRoute owner repository RepositoryFiles (Just reference) Nothing options
+        [ owner, name, "commits" ] ->
+            repository owner name (CommitsView Nothing)
 
-        [ owner, repository, "pulls" ] ->
-            repositoryRoute owner repository RepositoryPulls Nothing Nothing options
+        owner :: name :: "commits" :: ((_ :: _) as reference) ->
+            repository owner name (CommitsView (Just (String.join "/" reference)))
 
-        [ owner, repository, "commits" ] ->
-            repositoryRoute owner repository RepositoryCommits Nothing Nothing options
-
-        owner :: repository :: "commits" :: reference ->
-            repositoryRoute owner repository RepositoryCommits (Just (String.join "/" reference)) Nothing options
-
-        [ owner, repository ] ->
-            repositoryRoute owner repository RepositoryFiles Nothing (nonEmpty options.file) options
+        [ owner, name ] ->
+            repository owner name (files Nothing options.file)
 
         _ ->
-            NotFound originalPath
+            Nothing
 
 
-parsePull : String -> String -> Int -> List String -> QueryOptions -> Route
-parsePull owner repository number rest options =
-    let
-        base tab path commit =
-            Review
-                { target = PullRequest owner repository number
-                , tab = tab
-                , path = path
-                , commit = commit
-                }
-    in
+parsePull : List String -> QueryOptions -> Maybe PullView
+parsePull rest options =
     case rest of
         [] ->
-            base ReviewFiles (nonEmpty options.file) Nothing
+            Just (PullFiles options.file)
 
         [ "files" ] ->
-            base ReviewFiles (nonEmpty options.file) Nothing
+            Just (PullFiles options.file)
 
-        "files" :: path ->
-            base ReviewFiles (Just (String.join "/" path)) Nothing
+        "files" :: ((_ :: _) as path) ->
+            Just (PullFiles (Just (String.join "/" path)))
 
         [ "commits" ] ->
-            base ReviewCommits Nothing Nothing
+            Just PullCommits
 
         [ "commits", sha ] ->
-            base ReviewCommits Nothing (Just sha)
+            Just (PullCommitFiles sha options.file)
 
         _ ->
-            NotFound ("/" ++ String.join "/" (owner :: repository :: "pull" :: String.fromInt number :: rest))
-
-
-repositoryRoute : String -> String -> RepositoryTab -> Maybe String -> Maybe String -> QueryOptions -> Route
-repositoryRoute owner repository tab reference path options =
-    Repository
-        { owner = owner
-        , repository = repository
-        , tab = tab
-        , ref = reference
-        , path = path
-        , query = options.query
-        , searchMode = options.searchMode
-        , pullState = options.pullState
-        }
+            Nothing
 
 
 toPath : Route -> String
@@ -249,134 +248,199 @@ repositoryPath : RepositoryLocation -> String
 repositoryPath location =
     let
         prefix =
-            "/" ++ encode location.owner ++ "/" ++ encode location.repository
-
-        path =
-            case ( location.tab, location.path, location.ref ) of
-                ( RepositoryFiles, Just filePath, maybeReference ) ->
-                    prefix ++ "/blob/" ++ encode (Maybe.withDefault "HEAD" maybeReference) ++ "/" ++ encodePath filePath
-
-                ( RepositoryFiles, Nothing, Just reference ) ->
-                    prefix ++ "/tree/" ++ encode reference
-
-                ( RepositoryPulls, _, _ ) ->
-                    prefix ++ "/pulls"
-
-                ( RepositoryCommits, _, Just reference ) ->
-                    prefix ++ "/commits/" ++ encodePath reference
-
-                ( RepositoryCommits, _, Nothing ) ->
-                    prefix ++ "/commits"
-
-                _ ->
-                    prefix
-
-        query =
-            repositoryQuery location
+            repositoryPrefix location.repository
     in
-    path
-        ++ (if query == "" then
-                ""
+    case location.view of
+        FilesView files ->
+            (case ( files.path, files.ref ) of
+                ( Just filePath, reference ) ->
+                    prefix ++ "/blob/" ++ Url.percentEncode (Maybe.withDefault "HEAD" reference) ++ "/" ++ encodePath filePath
 
-            else
-                "?" ++ query
-           )
+                ( Nothing, Just reference ) ->
+                    prefix ++ "/tree/" ++ Url.percentEncode reference
+
+                ( Nothing, Nothing ) ->
+                    prefix
+            )
+                ++ Url.Builder.toQuery (searchQuery files.search)
+
+        CommitsView Nothing ->
+            prefix ++ "/commits"
+
+        CommitsView (Just reference) ->
+            prefix ++ "/commits/" ++ encodePath reference
+
+        PullsView OpenPulls ->
+            prefix ++ "/pulls"
+
+        PullsView state ->
+            prefix ++ "/pulls" ++ Url.Builder.toQuery [ Url.Builder.string "state" (Repository.pullRequestStateToString state) ]
 
 
-repositoryQuery : RepositoryLocation -> String
-repositoryQuery location =
-    [ if location.tab == RepositoryFiles && location.query /= "" then
-        Just ("q=" ++ encode location.query)
+searchQuery : Search -> List Url.Builder.QueryParameter
+searchQuery search =
+    case search of
+        NoSearch ->
+            []
 
-      else
-        Nothing
-    , if location.tab == RepositoryFiles && location.searchMode /= LiteralSearch then
-        Just ("search=" ++ encode (searchModeToString location.searchMode))
+        Search query LiteralSearch ->
+            [ Url.Builder.string "q" query ]
 
-      else
-        Nothing
-    , if location.tab == RepositoryPulls && location.pullState /= OpenPulls then
-        Just ("state=" ++ encode (pullRequestStateToString location.pullState))
-
-      else
-        Nothing
-    ]
-        |> List.filterMap identity
-        |> String.join "&"
+        Search query mode ->
+            [ Url.Builder.string "q" query, Url.Builder.string "search" (Repository.searchModeToString mode) ]
 
 
 reviewPath : ReviewLocation -> String
 reviewPath location =
     let
         prefix =
-            case location.target of
-                PullRequest owner repository number ->
-                    "/" ++ encode owner ++ "/" ++ encode repository ++ "/pull/" ++ String.fromInt number
+            repositoryPrefix location.repository
 
-                Compare owner repository range ->
-                    "/" ++ encode owner ++ "/" ++ encode repository ++ "/compare/" ++ encode range
-
-                Commit owner repository sha ->
-                    "/" ++ encode owner ++ "/" ++ encode repository ++ "/commit/" ++ encode sha
+        withFile file path =
+            path ++ Url.Builder.toQuery (List.map (Url.Builder.string "file") (maybeToList file))
     in
-    case location.target of
-        PullRequest _ _ _ ->
-            case ( location.tab, location.commit, location.path ) of
-                ( ReviewCommits, Just sha, _ ) ->
-                    prefix ++ "/commits/" ++ encode sha
+    case location.subject of
+        PullRequest number view ->
+            let
+                pull =
+                    prefix ++ "/pull/" ++ String.fromInt number
+            in
+            case view of
+                PullFiles Nothing ->
+                    pull ++ "/files"
 
-                ( ReviewCommits, Nothing, _ ) ->
-                    prefix ++ "/commits"
+                PullFiles (Just path) ->
+                    pull ++ "/files/" ++ encodePath path
 
-                ( ReviewFiles, _, Just path ) ->
-                    prefix ++ "/files/" ++ encodePath path
+                PullCommits ->
+                    pull ++ "/commits"
 
-                _ ->
-                    prefix ++ "/files"
+                PullCommitFiles sha file ->
+                    withFile file (pull ++ "/commits/" ++ Url.percentEncode sha)
 
-        _ ->
-            case location.path of
-                Just path ->
-                    prefix ++ "?file=" ++ encode path
+        Compare range file ->
+            withFile file (prefix ++ "/compare/" ++ Url.percentEncode range)
 
-                Nothing ->
-                    prefix
-
-
-githubUrl : ReviewTarget -> String
-githubUrl target =
-    case target of
-        PullRequest owner repository number ->
-            "https://github.com/" ++ owner ++ "/" ++ repository ++ "/pull/" ++ String.fromInt number
-
-        Compare owner repository range ->
-            "https://github.com/" ++ owner ++ "/" ++ repository ++ "/compare/" ++ range
-
-        Commit owner repository sha ->
-            "https://github.com/" ++ owner ++ "/" ++ repository ++ "/commit/" ++ sha
+        Commit sha file ->
+            withFile file (prefix ++ "/commit/" ++ Url.percentEncode sha)
 
 
-repositoryName : ReviewTarget -> String
-repositoryName target =
-    case target of
-        PullRequest owner repository _ ->
-            owner ++ "/" ++ repository
-
-        Compare owner repository _ ->
-            owner ++ "/" ++ repository
-
-        Commit owner repository _ ->
-            owner ++ "/" ++ repository
+repositoryPrefix : RepositoryId -> String
+repositoryPrefix repository =
+    "/" ++ Url.percentEncode (Git.repositoryOwner repository) ++ "/" ++ Url.percentEncode (Git.repositoryName repository)
 
 
-isPullRequest : ReviewTarget -> Bool
-isPullRequest target =
-    case target of
-        PullRequest _ _ _ ->
-            True
+{-| The GitHub URL whose immutable diff a review location renders.
+-}
+diffUrl : ReviewLocation -> String
+diffUrl location =
+    let
+        repository =
+            "https://github.com/" ++ Git.repositoryToString location.repository
+    in
+    case location.subject of
+        PullRequest _ (PullCommitFiles sha _) ->
+            repository ++ "/commit/" ++ sha
 
-        _ ->
-            False
+        PullRequest number _ ->
+            repository ++ "/pull/" ++ String.fromInt number
+
+        Compare range _ ->
+            repository ++ "/compare/" ++ range
+
+        Commit sha _ ->
+            repository ++ "/commit/" ++ sha
+
+
+{-| Two locations that load the same immutable diff differ only in selection.
+-}
+sameDiff : ReviewLocation -> ReviewLocation -> Bool
+sameDiff first second =
+    diffUrl first == diffUrl second
+
+
+pullRequest : ReviewLocation -> Maybe PullRequestRef
+pullRequest location =
+    case location.subject of
+        PullRequest number _ ->
+            Just { repository = location.repository, number = number }
+
+        Compare _ _ ->
+            Nothing
+
+        Commit _ _ ->
+            Nothing
+
+
+pullRequestUrl : PullRequestRef -> String
+pullRequestUrl pull =
+    "https://github.com/" ++ Git.repositoryToString pull.repository ++ "/pull/" ++ String.fromInt pull.number
+
+
+blobUrl : RepositoryId -> Oid -> String -> String
+blobUrl repository oid path =
+    "https://github.com/" ++ Git.repositoryToString repository ++ "/blob/" ++ Git.oidToString oid ++ "/" ++ encodePath path
+
+
+reviewLabel : ReviewLocation -> String
+reviewLabel location =
+    case location.subject of
+        PullRequest number _ ->
+            "#" ++ String.fromInt number
+
+        Compare range _ ->
+            range
+
+        Commit sha _ ->
+            String.left 7 sha
+
+
+selectedPath : ReviewLocation -> Maybe String
+selectedPath location =
+    case location.subject of
+        PullRequest _ (PullFiles path) ->
+            path
+
+        PullRequest _ PullCommits ->
+            Nothing
+
+        PullRequest _ (PullCommitFiles _ path) ->
+            path
+
+        Compare _ path ->
+            path
+
+        Commit _ path ->
+            path
+
+
+{-| Selects a file within the diff the location already shows. The pull
+request commit list has no diff, so selecting there opens the files view.
+-}
+selectFile : String -> ReviewLocation -> ReviewLocation
+selectFile path location =
+    let
+        selected =
+            Just path
+    in
+    { location
+        | subject =
+            case location.subject of
+                PullRequest number (PullFiles _) ->
+                    PullRequest number (PullFiles selected)
+
+                PullRequest number PullCommits ->
+                    PullRequest number (PullFiles selected)
+
+                PullRequest number (PullCommitFiles sha _) ->
+                    PullRequest number (PullCommitFiles sha selected)
+
+                Compare range _ ->
+                    Compare range selected
+
+                Commit sha _ ->
+                    Commit sha selected
+    }
 
 
 decodedSegments : String -> Maybe (List String)
@@ -385,41 +449,31 @@ decodedSegments path =
         |> String.split "/"
         |> List.filter ((/=) "")
         |> List.map Url.percentDecode
-        |> sequenceMaybe
-
-
-sequenceMaybe : List (Maybe value) -> Maybe (List value)
-sequenceMaybe values =
-    List.foldr (Maybe.map2 (::)) (Just []) values
-
-
-encode : String -> String
-encode =
-    Url.percentEncode
+        |> List.foldr (Maybe.map2 (::)) (Just [])
 
 
 encodePath : String -> String
 encodePath path =
     path
         |> String.split "/"
-        |> List.map encode
+        |> List.map Url.percentEncode
         |> String.join "/"
 
 
-nonEmpty : String -> Maybe String
-nonEmpty value =
-    if value == "" then
-        Nothing
+maybeToList : Maybe a -> List a
+maybeToList maybe =
+    case maybe of
+        Just value ->
+            [ value ]
 
-    else
-        Just value
+        Nothing ->
+            []
 
 
 type alias QueryOptions =
-    { query : String
-    , searchMode : SearchMode
+    { search : Search
     , pullState : PullRequestState
-    , file : String
+    , file : Maybe String
     }
 
 
@@ -434,82 +488,44 @@ queryOptions query =
                     (\part ->
                         case String.split "=" part of
                             key :: valueParts ->
-                                Just
-                                    ( Url.percentDecode key |> Maybe.withDefault key
-                                    , Url.percentDecode (String.join "=" valueParts) |> Maybe.withDefault (String.join "=" valueParts)
-                                    )
+                                Maybe.map2 Tuple.pair
+                                    (Url.percentDecode (String.replace "+" " " key))
+                                    (Url.percentDecode (String.replace "+" " " (String.join "=" valueParts)))
 
                             [] ->
                                 Nothing
                     )
 
-        find key fallback =
+        find key =
             pairs
                 |> List.filter (Tuple.first >> (==) key)
                 |> List.head
                 |> Maybe.map Tuple.second
-                |> Maybe.withDefault fallback
-
-        mode =
-            find "search" "literal"
-
-        state =
-            find "state" "open"
+                |> Maybe.andThen nonEmpty
     in
-    { query = find "q" ""
-    , searchMode = searchModeFromString mode
-    , pullState = pullRequestStateFromString state
-    , file = find "file" ""
+    { search =
+        case find "q" of
+            Just text ->
+                Search text
+                    (find "search"
+                        |> Maybe.andThen Repository.searchModeFromString
+                        |> Maybe.withDefault LiteralSearch
+                    )
+
+            Nothing ->
+                NoSearch
+    , pullState =
+        find "state"
+            |> Maybe.andThen Repository.pullRequestStateFromString
+            |> Maybe.withDefault OpenPulls
+    , file = find "file"
     }
 
 
-searchModeToString : SearchMode -> String
-searchModeToString mode =
-    case mode of
-        LiteralSearch ->
-            "literal"
+nonEmpty : String -> Maybe String
+nonEmpty value =
+    if value == "" then
+        Nothing
 
-        RegexSearch ->
-            "regex"
-
-        FuzzySearch ->
-            "fuzzy"
-
-
-searchModeFromString : String -> SearchMode
-searchModeFromString value =
-    case value of
-        "regex" ->
-            RegexSearch
-
-        "fuzzy" ->
-            FuzzySearch
-
-        _ ->
-            LiteralSearch
-
-
-pullRequestStateToString : PullRequestState -> String
-pullRequestStateToString state =
-    case state of
-        OpenPulls ->
-            "open"
-
-        ClosedPulls ->
-            "closed"
-
-        AllPulls ->
-            "all"
-
-
-pullRequestStateFromString : String -> PullRequestState
-pullRequestStateFromString value =
-    case value of
-        "closed" ->
-            ClosedPulls
-
-        "all" ->
-            AllPulls
-
-        _ ->
-            OpenPulls
+    else
+        Just value

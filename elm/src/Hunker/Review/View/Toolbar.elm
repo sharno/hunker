@@ -1,30 +1,31 @@
-module Hunker.Review.View.Toolbar exposing (Config, view)
+module Hunker.Review.View.Toolbar exposing (Config, PullTabs, view)
 
 import Html exposing (Html, button, div, input, label, option, section, select, span, text)
-import Html.Attributes exposing (attribute, checked, class, selected, type_, value)
+import Html.Attributes exposing (attribute, checked, class, classList, selected, type_, value)
 import Html.Events exposing (onCheck, onClick, onInput)
-import Hunker.Domain.Settings as Settings exposing (InlineDiffMode(..), ReviewScope(..), Settings, ViewMode(..))
+import Hunker.Domain.Settings as Settings exposing (Change, Settings, Toggle(..))
 import Hunker.Review.DiffView exposing (SearchMode(..))
-import Hunker.Route exposing (ReviewTab(..))
+import Hunker.View.Settings as SettingsView
+import Json.Decode as Decode
+
+
+{-| Only pull requests have a commits tab and GitHub review threads.
+-}
+type alias PullTabs msg =
+    { filesActive : Bool
+    , selectFiles : msg
+    , selectCommits : msg
+    }
 
 
 type alias Config msg =
     { settings : Settings
-    , pullRequest : Bool
-    , tab : ReviewTab
+    , pullTabs : Maybe (PullTabs msg)
     , filter : String
     , searchMode : SearchMode
-    , selectTab : ReviewTab -> msg
     , changeFilter : String -> msg
     , selectSearchMode : SearchMode -> msg
-    , selectScope : ReviewScope -> msg
-    , selectViewMode : ViewMode -> msg
-    , toggleWhitespace : Bool -> msg
-    , toggleSemantic : Bool -> msg
-    , selectInlineMode : InlineDiffMode -> msg
-    , toggleSyntax : Bool -> msg
-    , toggleDiffColors : Bool -> msg
-    , toggleReviews : Bool -> msg
+    , changeSetting : Change -> msg
     , optionsOpen : Bool
     , toggleOptions : msg
     , closeOptions : msg
@@ -33,23 +34,25 @@ type alias Config msg =
 
 view : Config msg -> Html msg
 view config =
-    section [ class ("compact-review-toolbar" ++ optionsClass config.optionsOpen) ]
+    section [ classList [ ( "compact-review-toolbar", True ), ( "options-open", config.optionsOpen ) ] ]
         [ if config.optionsOpen then
             button [ type_ "button", class "diff-options-backdrop", attribute "aria-label" "Close diff options", onClick config.closeOptions ] []
 
           else
             text ""
         , div [ class "review-tab-picker" ]
-            [ segment (config.tab == ReviewFiles) (config.selectTab ReviewFiles) "Files"
-            , if config.pullRequest then
-                segment (config.tab == ReviewCommits) (config.selectTab ReviewCommits) "Commits"
+            (case config.pullTabs of
+                Just tabs ->
+                    [ segment tabs.filesActive tabs.selectFiles "Files"
+                    , segment (not tabs.filesActive) tabs.selectCommits "Commits"
+                    ]
 
-              else
-                text ""
-            ]
+                Nothing ->
+                    [ span [ class "segmented-button is-active" ] [ text "Files" ] ]
+            )
         , label [ class "review-search" ]
             [ span [] [ text "⌕" ]
-            , select [ onInput (searchModeFromString >> config.selectSearchMode) ]
+            , select [ onSearchMode config.selectSearchMode ]
                 [ option [ value "literal", selected (config.searchMode == Literal) ] [ text "Text" ]
                 , option [ value "regex", selected (config.searchMode == Regex) ] [ text "Regex" ]
                 ]
@@ -70,86 +73,60 @@ view config =
             ]
             [ text "Diff options" ]
         , div [ class "diff-options" ]
-            [ select [ attribute "aria-label" "Diff scope", onInput (scopeFromString >> config.selectScope) ]
-                [ option [ value "file", selected (config.settings.reviewScope == OneFile) ] [ text "One file" ]
-                , option [ value "full", selected (config.settings.reviewScope == FullDiff) ] [ text "Full diff" ]
-                ]
-            , select [ attribute "aria-label" "Diff layout", onInput (viewModeFromString >> config.selectViewMode) ]
-                [ option [ value "split", selected (config.settings.viewMode == Split) ] [ text "Side by side" ]
-                , option [ value "unified", selected (config.settings.viewMode == Unified) ] [ text "Unified" ]
-                ]
-            , toggle "Ignore whitespace" config.settings.ignoreWhitespace config.toggleWhitespace
-            , toggle "Semantic" config.settings.semantic config.toggleSemantic
-            , select [ attribute "aria-label" "Inline diff", onInput (Settings.inlineDiffModeFromString >> config.selectInlineMode) ]
-                [ option [ value "token", selected (config.settings.inlineDiffMode == Token) ] [ text "Word diff" ]
-                , option [ value "character", selected (config.settings.inlineDiffMode == Character) ] [ text "Character diff" ]
-                , option [ value "off", selected (config.settings.inlineDiffMode == InlineOff) ] [ text "Inline off" ]
-                ]
-            , toggle "Syntax" config.settings.syntaxHighlighting config.toggleSyntax
-            , toggle "Diff colors" config.settings.diffColors config.toggleDiffColors
-            , if config.pullRequest then
-                toggle "GitHub reviews" config.settings.showGitHubReviews config.toggleReviews
+            ([ select [ attribute "aria-label" "Diff scope", SettingsView.onSelect Settings.scopeSelect config.changeSetting ]
+                (SettingsView.options Settings.scopeSelect .short config.settings)
+             , select [ attribute "aria-label" "Diff layout", SettingsView.onSelect Settings.layoutSelect config.changeSetting ]
+                (SettingsView.options Settings.layoutSelect .short config.settings)
+             , toggle config WhitespaceToggle
+             , toggle config SemanticToggle
+             , select [ attribute "aria-label" "Inline diff", SettingsView.onSelect Settings.inlineSelect config.changeSetting ]
+                (SettingsView.options Settings.inlineSelect .short config.settings)
+             , toggle config SyntaxToggle
+             , toggle config DiffColorsToggle
+             ]
+                ++ (case config.pullTabs of
+                        Just _ ->
+                            [ toggle config ReviewsToggle ]
 
-              else
-                text ""
-            ]
+                        Nothing ->
+                            []
+                   )
+            )
         ]
 
 
-optionsClass : Bool -> String
-optionsClass open =
-    if open then
-        " options-open"
-
-    else
-        ""
-
-
-toggle : String -> Bool -> (Bool -> msg) -> Html msg
-toggle labelText current toMsg =
-    label [ class ("filter-toggle" ++ activeClass current) ]
-        [ input [ type_ "checkbox", checked current, onCheck toMsg ] []
+toggle : Config msg -> Toggle -> Html msg
+toggle config control =
+    let
+        on =
+            Settings.toggleIsOn control config.settings
+    in
+    label [ classList [ ( "filter-toggle", True ), ( "is-active", on ) ] ]
+        [ input [ type_ "checkbox", checked on, onCheck (Settings.toggleChange control >> config.changeSetting) ] []
         , span [ class "toggle-dot" ] []
-        , text labelText
+        , text (Settings.toggleLabel control).short
         ]
 
 
 segment : Bool -> msg -> String -> Html msg
 segment active message labelText =
-    button [ type_ "button", class ("segmented-button" ++ activeClass active), onClick message ] [ text labelText ]
+    button [ type_ "button", classList [ ( "segmented-button", True ), ( "is-active", active ) ], onClick message ] [ text labelText ]
 
 
-scopeFromString : String -> ReviewScope
-scopeFromString encoded =
-    if encoded == "full" then
-        FullDiff
+onSearchMode : (SearchMode -> msg) -> Html.Attribute msg
+onSearchMode toMsg =
+    Html.Events.on "change"
+        (Html.Events.targetValue
+            |> Decode.andThen
+                (\key ->
+                    case key of
+                        "literal" ->
+                            Decode.succeed (toMsg Literal)
 
-    else
-        OneFile
+                        "regex" ->
+                            Decode.succeed (toMsg Regex)
 
-
-viewModeFromString : String -> ViewMode
-viewModeFromString encoded =
-    if encoded == "unified" then
-        Unified
-
-    else
-        Split
-
-
-searchModeFromString : String -> SearchMode
-searchModeFromString encoded =
-    if encoded == "regex" then
-        Regex
-
-    else
-        Literal
-
-
-activeClass : Bool -> String
-activeClass active =
-    if active then
-        " is-active"
-
-    else
-        ""
+                        _ ->
+                            Decode.fail ("Unknown search mode: " ++ key)
+                )
+        )

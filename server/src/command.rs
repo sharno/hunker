@@ -1,10 +1,44 @@
-use std::{path::Path, process::Output};
+use std::{
+    path::Path,
+    process::{ExitStatus, Output},
+};
 
 use tokio::process::Command;
 
-use crate::error::{AppError, AppResult};
+use crate::{
+    error::{AppError, AppResult},
+    types::Oid,
+};
 
-pub async fn output(program: &str, args: &[&str], cwd: Option<&Path>) -> AppResult<Output> {
+/// A finished subprocess. Callers decide what a non-zero exit means.
+pub struct Run {
+    pub status: ExitStatus,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+impl Run {
+    fn from_output(output: &Output) -> Self {
+        Self {
+            status: output.status,
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        }
+    }
+
+    /// The most specific human-readable explanation of a failure.
+    pub fn message(&self, program: &str) -> String {
+        [self.stderr.trim(), self.stdout.trim()]
+            .into_iter()
+            .find(|text| !text.is_empty())
+            .map_or_else(
+                || format!("{program} exited with status {}.", self.status),
+                str::to_owned,
+            )
+    }
+}
+
+pub async fn run(program: &str, args: &[&str], cwd: Option<&Path>) -> AppResult<Run> {
     let mut command = Command::new(program);
     command.args(args);
     if let Some(directory) = cwd {
@@ -13,54 +47,90 @@ pub async fn output(program: &str, args: &[&str], cwd: Option<&Path>) -> AppResu
     command
         .output()
         .await
+        .map(|output| Run::from_output(&output))
         .map_err(|error| AppError::upstream(format!("Could not run {program}: {error}")))
 }
 
 pub async fn checked(program: &str, args: &[&str], cwd: Option<&Path>) -> AppResult<String> {
-    let result = output(program, args, cwd).await?;
+    let result = run(program, args, cwd).await?;
     if result.status.success() {
-        stdout(program, result)
+        Ok(result.stdout)
     } else {
-        Err(failure(program, &result))
+        Err(AppError::upstream(result.message(program)))
     }
 }
 
-pub async fn git(cwd: &Path, args: &[&str]) -> AppResult<String> {
-    checked("git", args, Some(cwd)).await
+/// Git commands rooted at one repository, with Git's documented exit codes
+/// decoded into typed results.
+#[derive(Clone, Copy)]
+pub struct Git<'a> {
+    root: &'a Path,
 }
 
-/// Reads a Git configuration value while preserving the distinction between an
-/// absent key (Git's documented exit status 1) and a command failure.
-pub async fn git_config(cwd: &Path, args: &[&str]) -> AppResult<Option<String>> {
-    let mut config_args = Vec::with_capacity(args.len() + 1);
-    config_args.push("config");
-    config_args.extend_from_slice(args);
-    let result = output("git", &config_args, Some(cwd)).await?;
-    if result.status.success() {
-        stdout("git", result).map(Some)
-    } else if result.status.code() == Some(1)
-        && result.stdout.is_empty()
-        && result.stderr.is_empty()
-    {
-        Ok(None)
-    } else {
-        Err(failure("git", &result))
+impl<'a> Git<'a> {
+    pub fn at(root: &'a Path) -> Self {
+        Self { root }
     }
-}
 
-fn stdout(program: &str, result: Output) -> AppResult<String> {
-    String::from_utf8(result.stdout)
-        .map_err(|_| AppError::upstream(format!("{program} returned invalid UTF-8.")))
-}
+    pub async fn run(self, args: &[&str]) -> AppResult<Run> {
+        run("git", args, Some(self.root)).await
+    }
 
-fn failure(program: &str, result: &Output) -> AppError {
-    let stderr = String::from_utf8_lossy(&result.stderr).trim().to_owned();
-    let stdout = String::from_utf8_lossy(&result.stdout).trim().to_owned();
-    AppError::upstream(if !stderr.is_empty() {
-        stderr
-    } else if !stdout.is_empty() {
-        stdout
-    } else {
-        format!("{program} exited with status {}.", result.status)
-    })
+    pub async fn ok(self, args: &[&str]) -> AppResult<String> {
+        checked("git", args, Some(self.root)).await
+    }
+
+    /// Runs a query whose exit status 1 means "no answer" (an absent config
+    /// key, a missing object, no merge base, or a detached HEAD).
+    pub async fn optional(self, args: &[&str]) -> AppResult<Option<String>> {
+        let result = self.run(args).await?;
+        match result.status.code() {
+            Some(0) => Ok(Some(result.stdout)),
+            Some(1) if result.stderr.trim().is_empty() => Ok(None),
+            _ => Err(AppError::upstream(result.message("git"))),
+        }
+    }
+
+    pub async fn oid(self, revision: &str) -> AppResult<Oid> {
+        let raw = self.ok(&["rev-parse", "--verify", revision]).await?;
+        Oid::parse(raw.trim()).map_err(AppError::upstream)
+    }
+
+    pub async fn head(self) -> AppResult<Oid> {
+        self.oid("HEAD").await
+    }
+
+    pub async fn is_shallow(self) -> AppResult<bool> {
+        Ok(self
+            .ok(&["rev-parse", "--is-shallow-repository"])
+            .await?
+            .trim()
+            == "true")
+    }
+
+    pub async fn has_commit(self, oid: &Oid) -> AppResult<bool> {
+        Ok(self
+            .optional(&[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("{oid}^{{commit}}"),
+            ])
+            .await?
+            .is_some())
+    }
+
+    pub async fn has_merge_base(self, base: &Oid, head: &Oid) -> AppResult<bool> {
+        Ok(self
+            .optional(&["merge-base", base.as_str(), head.as_str()])
+            .await?
+            .is_some())
+    }
+
+    pub async fn config(self, args: &[&str]) -> AppResult<Option<String>> {
+        let config_args = std::iter::once("config")
+            .chain(args.iter().copied())
+            .collect::<Vec<_>>();
+        self.optional(&config_args).await
+    }
 }

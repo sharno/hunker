@@ -4,18 +4,17 @@ module Hunker.Review.FileIndex exposing
     , analysis
     , change
     , changes
-    , clearWordRanges
+    , clearAnalysis
+    , files
     , fromChanges
     , get
-    , hunks
     , moveAt
     , prepared
     , withAnalysis
     )
 
 import Dict exposing (Dict)
-import Hunker.Diff exposing (Hunk)
-import Hunker.Domain.Review exposing (AnalysisFile, AnalysisSnapshot, FileChange, MovedBlock)
+import Hunker.Domain.Review exposing (AnalysisFeature(..), AnalysisFile, AnalysisSnapshot, FileChange, MovedBlock)
 import Hunker.PreparedDiff as PreparedDiff exposing (PreparedFile)
 import Hunker.Review.MoveIndex as MoveIndex exposing (FileMoves)
 import Hunker.SemanticMove exposing (Endpoint)
@@ -23,13 +22,13 @@ import Hunker.SemanticMove exposing (Endpoint)
 
 {-| The ordered files in a review and their prepared patches are one value.
 
-Keeping the constructor private prevents the rendered order and path lookup from
-drifting apart after a refresh or analysis result.
+The ordered list is the source of truth; the path lookup is rebuilt from it
+on every change, so rendered order and lookup cannot drift apart.
 
 -}
 type FileIndex
     = FileIndex
-        { order : List String
+        { ordered : List File
         , byPath : Dict String File
         }
 
@@ -44,41 +43,45 @@ type File
 
 fromChanges : List FileChange -> FileIndex
 fromChanges orderedChanges =
-    FileIndex
-        { order = List.map .path orderedChanges
-        , byPath =
+    fromFiles
+        (List.map
+            (\fileChange ->
+                File
+                    { prepared = PreparedDiff.prepare fileChange
+                    , analysis = Nothing
+                    , moves = MoveIndex.emptyFile
+                    }
+            )
             orderedChanges
-                |> List.map
-                    (\fileChange ->
-                        ( fileChange.path
-                        , File
-                            { prepared = PreparedDiff.prepare fileChange
-                            , analysis = Nothing
-                            , moves = MoveIndex.emptyFile
-                            }
-                        )
-                    )
-                |> Dict.fromList
+        )
+
+
+fromFiles : List File -> FileIndex
+fromFiles ordered =
+    FileIndex
+        { ordered = ordered
+        , byPath = Dict.fromList (List.map (\file -> ( (change file).path, file )) ordered)
         }
 
 
+mapFiles : (File -> File) -> FileIndex -> FileIndex
+mapFiles transform (FileIndex index) =
+    fromFiles (List.map transform index.ordered)
+
+
+files : FileIndex -> List File
+files (FileIndex index) =
+    index.ordered
+
+
 changes : FileIndex -> List FileChange
-changes (FileIndex index) =
-    List.filterMap
-        (\path -> Dict.get path index.byPath |> Maybe.map change)
-        index.order
+changes =
+    files >> List.map change
 
 
 get : String -> FileIndex -> Maybe File
 get path (FileIndex index) =
     Dict.get path index.byPath
-
-
-hunks : String -> FileIndex -> List Hunk
-hunks path index =
-    get path index
-        |> Maybe.map (prepared >> .hunks)
-        |> Maybe.withDefault []
 
 
 prepared : File -> PreparedFile
@@ -91,6 +94,8 @@ change =
     prepared >> .change
 
 
+{-| Present only while a completed analysis snapshot decorates the file.
+-}
 analysis : File -> Maybe AnalysisFile
 analysis (File file) =
     file.analysis
@@ -101,49 +106,50 @@ moveAt endpoint line (File file) =
     MoveIndex.get endpoint line file.moves
 
 
-clearWordRanges : FileIndex -> FileIndex
-clearWordRanges (FileIndex index) =
-    FileIndex
-        { index
-            | byPath =
-                Dict.map
-                    (\_ (File file) ->
-                        File
-                            { file
-                                | prepared = PreparedDiff.clearWordRanges file.prepared
-                                , analysis = Nothing
-                                , moves = MoveIndex.emptyFile
-                            }
-                    )
-                    index.byPath
-        }
+clearAnalysis : FileIndex -> FileIndex
+clearAnalysis =
+    mapFiles
+        (\(File file) ->
+            File
+                { file
+                    | prepared = PreparedDiff.clearWordRanges file.prepared
+                    , analysis = Nothing
+                    , moves = MoveIndex.emptyFile
+                }
+        )
 
 
 withAnalysis : AnalysisSnapshot -> FileIndex -> FileIndex
-withAnalysis snapshot (FileIndex index) =
+withAnalysis snapshot =
     let
         moves =
             MoveIndex.fromList snapshot.moves
-
-        apply path (File file) =
+    in
+    mapFiles
+        (\(File file) ->
             let
+                path =
+                    file.prepared.change.path
+
                 analyzed =
                     Dict.get path snapshot.files
-
-                preparedFile =
-                    analyzed
-                        |> Maybe.andThen .wordDiff
-                        |> Maybe.map (\wordDiff -> PreparedDiff.withWordDiff wordDiff file.prepared)
-                        |> Maybe.withDefault file.prepared
             in
             File
                 { file
-                    | prepared = preparedFile
+                    | prepared =
+                        case Maybe.map .wordDiff analyzed of
+                            Just (FeatureComplete rows) ->
+                                PreparedDiff.withWordDiff rows file.prepared
+
+                            Just FeatureDisabled ->
+                                file.prepared
+
+                            Just (FeatureSkipped _) ->
+                                file.prepared
+
+                            Nothing ->
+                                file.prepared
                     , analysis = analyzed
                     , moves = MoveIndex.file path moves
                 }
-    in
-    FileIndex
-        { index
-            | byPath = Dict.map apply index.byPath
-        }
+        )

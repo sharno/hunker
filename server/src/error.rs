@@ -12,13 +12,37 @@ pub enum ErrorCode {
     Internal,
 }
 
+impl ErrorCode {
+    fn status(self) -> StatusCode {
+        match self {
+            Self::BadRequest => StatusCode::BAD_REQUEST,
+            Self::Unauthorized => StatusCode::UNAUTHORIZED,
+            Self::NotFound => StatusCode::NOT_FOUND,
+            Self::Conflict => StatusCode::CONFLICT,
+            Self::Upstream => StatusCode::BAD_GATEWAY,
+            Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    fn retryable(self) -> bool {
+        match self {
+            Self::Upstream => true,
+            Self::BadRequest
+            | Self::Unauthorized
+            | Self::NotFound
+            | Self::Conflict
+            | Self::Internal => false,
+        }
+    }
+}
+
+/// The code is the single source of truth; the HTTP status and retry hint are
+/// derived from it so they cannot disagree.
 #[derive(Debug, thiserror::Error)]
 #[error("{message}")]
 pub struct AppError {
-    pub status: StatusCode,
-    pub code: ErrorCode,
-    pub message: String,
-    pub retryable: bool,
+    code: ErrorCode,
+    message: String,
 }
 
 #[derive(Serialize)]
@@ -29,57 +53,45 @@ struct ErrorBody<'a> {
 }
 
 impl AppError {
-    pub fn new(status: StatusCode, message: impl Into<String>) -> Self {
-        let (code, retryable) = match status {
-            StatusCode::BAD_REQUEST => (ErrorCode::BadRequest, false),
-            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => (ErrorCode::Unauthorized, false),
-            StatusCode::NOT_FOUND => (ErrorCode::NotFound, false),
-            StatusCode::CONFLICT => (ErrorCode::Conflict, false),
-            StatusCode::BAD_GATEWAY
-            | StatusCode::SERVICE_UNAVAILABLE
-            | StatusCode::GATEWAY_TIMEOUT => (ErrorCode::Upstream, true),
-            _ => (ErrorCode::Internal, status.is_server_error()),
-        };
+    pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
         Self {
-            status,
             code,
             message: message.into(),
-            retryable,
         }
     }
 
     pub fn bad_request(message: impl Into<String>) -> Self {
-        Self::new(StatusCode::BAD_REQUEST, message)
+        Self::new(ErrorCode::BadRequest, message)
     }
 
     pub fn not_found(message: impl Into<String>) -> Self {
-        Self::new(StatusCode::NOT_FOUND, message)
+        Self::new(ErrorCode::NotFound, message)
     }
 
     pub fn conflict(message: impl Into<String>) -> Self {
-        Self::new(StatusCode::CONFLICT, message)
+        Self::new(ErrorCode::Conflict, message)
     }
 
     pub fn upstream(message: impl Into<String>) -> Self {
-        Self::new(StatusCode::BAD_GATEWAY, message)
+        Self::new(ErrorCode::Upstream, message)
     }
 
     pub fn internal(message: impl Into<String>) -> Self {
-        Self::new(StatusCode::INTERNAL_SERVER_ERROR, message)
+        Self::new(ErrorCode::Internal, message)
+    }
+
+    fn body(&self) -> ErrorBody<'_> {
+        ErrorBody {
+            code: self.code,
+            message: &self.message,
+            retryable: self.code.retryable(),
+        }
     }
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
-        (
-            self.status,
-            Json(ErrorBody {
-                code: self.code,
-                message: &self.message,
-                retryable: self.retryable,
-            }),
-        )
-            .into_response()
+        (self.code.status(), Json(self.body())).into_response()
     }
 }
 
@@ -92,16 +104,10 @@ mod tests {
     #[test]
     fn serializes_a_stable_typed_error_contract() {
         let error = AppError::conflict("Commit or stash staged changes before pulling.");
-        let body = ErrorBody {
-            code: error.code,
-            message: &error.message,
-            retryable: error.retryable,
-        };
 
-        assert_eq!(error.code, ErrorCode::Conflict);
-        assert!(!error.retryable);
+        assert_eq!(error.code.status(), StatusCode::CONFLICT);
         assert_eq!(
-            serde_json::to_value(body).expect("error body should serialize"),
+            serde_json::to_value(error.body()).expect("error body should serialize"),
             serde_json::json!({
                 "code": "conflict",
                 "message": "Commit or stash staged changes before pulling.",

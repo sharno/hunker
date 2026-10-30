@@ -20,6 +20,13 @@
   disable duplicate or draft-mutating controls until the matching response, and
   render persistent success or typed error feedback. A transport request with no
   visible state transition is a UI bug.
+- Each draft owns its in-flight state (a reply draft per thread, one inline
+  composer per file, one review summary). A sending draft refuses edits and
+  resubmission, and a transition that cannot start returns `Nothing` instead of
+  silently replacing the request in flight.
+- A refresh keeps the ready review on screen until the replacement arrives; a
+  failed operation on a known checkout keeps its snapshot and reports the failed
+  operation. Background polls settle silently.
 - Decode external JSON directly into domain types in `Hunker.Domain.*`. Do not
   pass `Decode.Value`, unchecked flags, or parallel sentinel fields beyond the
   boundary.
@@ -36,13 +43,24 @@
   index so a snapshot and its word ranges cannot update independently.
 - Carry repository and immutable OID together in one opaque revision identity
   for Elm file and search requests. Do not pass positional repository/OID string
-  pairs through feature state.
+  pairs through feature state. Repository, OID, and branch identities are the
+  opaque types in `Hunker.Domain.Git`; `Hunker.Api` takes them and builds
+  queries with `Url.Builder`.
+- Route locations are tagged unions: each repository tab and each review subject
+  carries only the fields it can use. Only `PullRequest` subjects have commit
+  views, and only a pull-request review owns `Collaboration`.
 - A ready review also owns one immutable `Hunker.Review.Session.Id`. Full-file,
   collaboration, and analysis requests must carry that identity through their
   opaque feature modules so a response started on one PR cannot mutate another.
 - Main exclusively owns settings and serializes/coalesces persistence. Pages
-  emit settings-change intents; they do not issue `/api/settings` requests or
-  cache an independent settings document.
+  return `Hunker.Domain.Settings.Change` values from `update`; `Settings.apply`
+  is the only interpreter. Pages never issue `/api/settings` requests or keep a
+  settings copy: the Settings page holds pending changes and applies them over
+  the live settings at view and submit time.
+- Settings switches are closed types (`Whitespace`, `Feature`, `Visibility`) in
+  Elm; the boolean wire format is decoded once in `Hunker.Domain.Settings`.
+  Selects and toggles render from the `Select`/`Toggle` tables there, so a view
+  never parses an option string with a fallback.
 - Keep settings persistence in the opaque `Hunker.Settings.Sync` state machine.
   Revision, sent settings, latest desired settings, config path, and save error
   belong to one ADT; do not reintroduce parallel synchronization fields in
@@ -70,7 +88,11 @@
 - Format every Elm source and test with `elm-format`.
 - Test state-machine and view branches through `avh4/elm-program-test`, mapping
   the real `Hunker.Effect.Effect` into simulated effects. Do not create a second
-  test-only update function.
+  test-only update function. Request bodies are `Effect.Body` values and
+  responses go through `Effect.responseToMessage`, so tests exercise the same
+  payloads and error decoding as the browser.
+- Elm evaluates eagerly: never use `Debug.todo` as a `withDefault` fallback,
+  even in tests. Fail the test with `Expect.fail` instead.
 - Keep Playwright deliberately thin: history/deep-route fallback, real Fetch
   transport, CSS/layout/sticky behavior, and browser-specific interactions. Pure
   route, diff, tree, and state behavior belongs in Elm tests.
@@ -116,7 +138,11 @@
 - Key and lazy-render full-diff file panels by path. Each panel receives only
   stable file-scoped analysis, UI, and collaboration values; never pass a
   review-wide model through every panel, because an unrelated draft or collapse
-  transition would reconcile the entire diff.
+  transition would reconcile the entire diff. Per-file state is sparse and its
+  accessor returns one shared empty value for untouched files, so `Html.Lazy`
+  sees the same reference.
+- Recursion over lines must be a fold or tail call; 10k-line files exceed the
+  JavaScript stack otherwise.
 - Do not pass the complete settings record into a lazy file panel. Translate
   only rendering-relevant preferences into small closed ADTs, and put purely
   visual switches on an ancestor CSS class, so unrelated global settings retain
@@ -158,12 +184,22 @@
 - Decode repository slugs, branch names, clone destinations, search modes,
   analysis options, and pull-request numbers into closed enums or newtypes at
   the HTTP/URL boundary. Do not reinterpret their strings inside services.
+  GitHub URLs decode into `GitHubTarget` or `PullTarget` in the extractor, so
+  collaboration handlers never check for a pull request at runtime; user text is
+  `NonEmptyText`, review submissions are `ReviewSubmission`.
+- `AppError` carries only an `ErrorCode`; the HTTP status and retry hint derive
+  from it. Unknown `/api/*` paths answer a typed 404, and only requests
+  addressed to localhost are served.
+- Run Git through `command::Git`, which decodes Git's documented exit codes
+  (exit 1 means "no answer") instead of matching English stderr. Stream
+  `cat-file --batch` input and output concurrently.
 - Return named Serde response structs and tagged enums from every Axum handler;
   never use `serde_json::Value` or `json!` as an application API contract.
 - Keep `Hunker.Generated.ContractFixtures` generated by Rust domain values via
   `bun run contracts:write`. Elm decoder tests must consume those fixtures, and
   `contracts:check` must run before tests so Rust/Elm wire-format drift fails
-  locally and in CI.
+  locally and in CI. Add a fixture to the `FIXTURES` table in
+  `server/src/contracts.rs` for every new response type or variant.
 - Group Axum transport handlers by feature under `server/src/api`. Keep local
   object reads and checkout mutations in separate `local` modules; mutation
   commands surface Git refusal as conflicts and never participate in review
@@ -174,6 +210,9 @@
 - Read Git diffs, commits, and files from immutable OIDs. Worktree branch
   mutations are explicit repository actions; never switch a checkout merely to
   render a review.
+- Review revisions use the merge base as `baseOid` (from GitHub's compare
+  `merge_base_commit`), so local two-dot diffs and file pairs match GitHub's
+  three-dot diff.
 - Key analysis snapshots by repository, base OID, head OID, and options. Load
   local blobs with one `git cat-file --batch` process and reuse the resulting
   file pairs for word diff, AST analysis, and whole-review move detection. Do

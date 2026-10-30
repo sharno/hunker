@@ -1,41 +1,25 @@
-use std::{
-    collections::BTreeSet,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
-
-use tokio::sync::Mutex;
+use std::{collections::BTreeSet, path::Path};
 
 use crate::{
-    command,
+    command::Git,
     error::{AppError, AppResult},
     types::{BranchName, RepositorySlug},
 };
 
 use super::{
-    Branch, Checkout, Local, PullResult, RemoteState, SourceControlStatus, WorkingTreeChanges,
-    git_result, mutations, now_ms,
+    Branch, BranchPresence, Checkout, Local, PullResult, RemoteState, SourceControlStatus,
+    WorkingTreeChanges, mutations, now_ms,
 };
-impl Local {
-    async fn lock_for(&self, repository: &RepositorySlug) -> AppResult<(PathBuf, Arc<Mutex<()>>)> {
-        let root = self.repository_path(repository).await?;
-        let lock = {
-            let mut locks = self.repository_locks.lock().await;
-            locks
-                .entry(root.clone())
-                .or_insert_with(|| Arc::new(Mutex::new(())))
-                .clone()
-        };
-        Ok((root, lock))
-    }
 
+impl Local {
     pub async fn source_control(
         &self,
         repository: &RepositorySlug,
     ) -> AppResult<SourceControlStatus> {
-        let (root, lock) = self.lock_for(repository).await?;
+        let root = self.repository_path(repository).await?;
+        let lock = self.repository_lock(&root).await;
         let _guard = lock.lock().await;
-        inspect(&root, true).await
+        inspect(&root, refresh_remote(&root).await?).await
     }
 
     pub async fn switch_branch(
@@ -43,154 +27,143 @@ impl Local {
         repository: &RepositorySlug,
         branch: &BranchName,
     ) -> AppResult<SourceControlStatus> {
-        let (root, lock) = self.lock_for(repository).await?;
+        let root = self.repository_path(repository).await?;
+        let lock = self.repository_lock(&root).await;
         let _guard = lock.lock().await;
         mutations::switch_branch(&root, branch).await
     }
 
     pub async fn pull(&self, repository: &RepositorySlug) -> AppResult<PullResult> {
-        let (root, lock) = self.lock_for(repository).await?;
+        let root = self.repository_path(repository).await?;
+        let lock = self.repository_lock(&root).await;
         let _guard = lock.lock().await;
         mutations::pull(&root).await
     }
 }
 
-pub(super) async fn inspect(root: &Path, refresh: bool) -> AppResult<SourceControlStatus> {
+/// Fetches `origin` and reports whether the remote could be reached.
+pub(super) async fn refresh_remote(root: &Path) -> AppResult<RemoteState> {
+    let git = Git::at(root);
     let checked_at = now_ms();
-    let remote = if refresh {
-        let fetch = git_result(root, &["fetch", "--prune", "--quiet", "origin"]).await?;
-        let list = git_result(root, &["ls-remote", "--heads", "origin"]).await?;
-        if fetch.0 && list.0 {
-            RemoteState::RemoteCurrent { checked_at }
-        } else {
-            RemoteState::RemoteUnavailable {
-                checked_at,
-                error: [fetch.1, list.1]
-                    .into_iter()
-                    .filter(|value| !value.trim().is_empty())
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            }
-        }
-    } else {
+    let fetch = git.run(&["fetch", "--prune", "--quiet", "origin"]).await?;
+    let list = git.run(&["ls-remote", "--heads", "origin"]).await?;
+    Ok(if fetch.status.success() && list.status.success() {
         RemoteState::RemoteCurrent { checked_at }
-    };
-    let local_raw = command::git(
-        root,
-        &[
-            "for-each-ref",
-            "--format=%(refname:short)%00%(objectname)",
-            "refs/heads",
-        ],
-    )
-    .await?;
-    let local_names = local_raw
-        .lines()
-        .filter_map(|line| line.split_once('\0').map(|(name, _)| name.to_owned()))
-        .collect::<BTreeSet<_>>();
-    let remote_raw = command::git(
-        root,
-        &[
-            "for-each-ref",
-            "--format=%(refname:short)",
-            "refs/remotes/origin",
-        ],
-    )
-    .await?;
-    let remote_names = remote_raw
-        .lines()
-        .filter_map(|line| line.strip_prefix("origin/"))
-        .filter(|name| *name != "HEAD")
-        .map(str::to_owned)
+    } else {
+        RemoteState::RemoteUnavailable {
+            checked_at,
+            error: [&fetch, &list]
+                .into_iter()
+                .filter(|run| !run.status.success())
+                .map(|run| run.message("git"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        }
+    })
+}
+
+/// Reads the checkout. `remote` is the result of the caller's most recent
+/// [`refresh_remote`], so a status never claims a check that did not happen.
+pub(super) async fn inspect(root: &Path, remote: RemoteState) -> AppResult<SourceControlStatus> {
+    let git = Git::at(root);
+    let local_names = ref_names(git, "--format=%(refname:short)", "refs/heads").await?;
+    let remote_names = ref_names(git, "--format=%(refname:lstrip=3)", "refs/remotes/origin")
+        .await?
+        .into_iter()
+        .filter(|name| name != "HEAD")
         .collect::<BTreeSet<_>>();
     let branches = local_names
         .union(&remote_names)
-        .map(|name| Branch {
-            name: name.clone(),
-            local: local_names.contains(name),
-            remote: remote_names.contains(name),
+        .map(|name| {
+            let presence = match (local_names.contains(name), remote_names.contains(name)) {
+                (true, true) => BranchPresence::Both,
+                (true, false) => BranchPresence::Local,
+                (false, _) => BranchPresence::Remote,
+            };
+            BranchName::parse(name.as_str())
+                .map(|name| Branch { name, presence })
+                .map_err(AppError::upstream)
         })
-        .collect();
-    let oid = command::git(root, &["rev-parse", "HEAD"])
-        .await?
-        .trim()
-        .to_owned();
-    let symbolic = git_result(root, &["symbolic-ref", "--quiet", "--short", "HEAD"]).await?;
-    let checkout = if symbolic.0 {
-        let name = symbolic.1.trim().to_owned();
-        let upstream = command::git(
-            root,
-            &[
-                "for-each-ref",
-                "--format=%(upstream:short)",
-                &format!("refs/heads/{name}"),
-            ],
-        )
-        .await?
-        .trim()
-        .to_owned();
-        if upstream.is_empty() {
-            Checkout::UntrackedBranch { name, oid }
-        } else {
-            let counts = command::git(
-                root,
-                &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
-            )
-            .await?;
-            let (ahead, behind) = parse_ahead_behind(&counts)?;
-            Checkout::TrackingBranch {
-                name,
-                oid,
-                upstream,
-                ahead,
-                behind,
-            }
-        }
-    } else {
-        Checkout::DetachedHead { oid }
+        .collect::<AppResult<Vec<_>>>()?;
+    let checkout = checkout(git).await?;
+    let changes = WorkingTreeChanges {
+        staged: count_paths(git, &["diff", "--cached", "--name-only", "-z"]).await?,
+        unstaged: count_paths(git, &["diff", "--name-only", "-z"]).await?,
+        untracked: count_paths(git, &["ls-files", "--others", "--exclude-standard", "-z"]).await?,
     };
-    let staged = command::git(root, &["diff", "--cached", "--name-only", "-z"])
-        .await?
-        .split('\0')
-        .filter(|value| !value.is_empty())
-        .count();
-    let unstaged = command::git(root, &["diff", "--name-only", "-z"])
-        .await?
-        .split('\0')
-        .filter(|value| !value.is_empty())
-        .count();
-    let untracked = command::git(root, &["ls-files", "--others", "--exclude-standard", "-z"])
-        .await?
-        .split('\0')
-        .filter(|value| !value.is_empty())
-        .count();
     Ok(SourceControlStatus {
         path: root.to_string_lossy().into_owned(),
         checkout,
         branches,
-        changes: WorkingTreeChanges {
-            staged,
-            unstaged,
-            untracked,
-        },
+        changes,
         remote,
     })
 }
 
+async fn ref_names(git: Git<'_>, format: &str, prefix: &str) -> AppResult<BTreeSet<String>> {
+    Ok(git
+        .ok(&["for-each-ref", format, prefix])
+        .await?
+        .lines()
+        .map(str::to_owned)
+        .collect())
+}
+
+async fn checkout(git: Git<'_>) -> AppResult<Checkout> {
+    let oid = git.head().await?;
+    let Some(symbolic) = git
+        .optional(&["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .await?
+    else {
+        return Ok(Checkout::DetachedHead { oid });
+    };
+    let name = BranchName::parse(symbolic.trim()).map_err(AppError::upstream)?;
+    let upstream = git
+        .ok(&[
+            "for-each-ref",
+            "--format=%(upstream:short)",
+            &format!("refs/heads/{name}"),
+        ])
+        .await?
+        .trim()
+        .to_owned();
+    if upstream.is_empty() {
+        return Ok(Checkout::UntrackedBranch { name, oid });
+    }
+    let counts = git
+        .ok(&["rev-list", "--left-right", "--count", "HEAD...@{upstream}"])
+        .await?;
+    let (ahead, behind) = parse_ahead_behind(&counts)?;
+    Ok(Checkout::TrackingBranch {
+        name,
+        oid,
+        upstream,
+        ahead,
+        behind,
+    })
+}
+
+async fn count_paths(git: Git<'_>, args: &[&str]) -> AppResult<usize> {
+    Ok(git
+        .ok(args)
+        .await?
+        .split('\0')
+        .filter(|value| !value.is_empty())
+        .count())
+}
+
 fn parse_ahead_behind(raw: &str) -> AppResult<(usize, usize)> {
-    let values = raw.split_whitespace().collect::<Vec<_>>();
-    let [ahead, behind] = values.as_slice() else {
+    let [ahead, behind] = raw.split_whitespace().collect::<Vec<_>>()[..] else {
         return Err(AppError::upstream(
             "Git returned an invalid ahead/behind count.",
         ));
     };
-    let ahead = ahead
-        .parse()
-        .map_err(|_| AppError::upstream("Git returned an invalid ahead count."))?;
-    let behind = behind
-        .parse()
-        .map_err(|_| AppError::upstream("Git returned an invalid behind count."))?;
-    Ok((ahead, behind))
+    let count = |value: &str| {
+        value
+            .parse()
+            .map_err(|_| AppError::upstream("Git returned an invalid ahead/behind count."))
+    };
+    Ok((count(ahead)?, count(behind)?))
 }
 
 #[cfg(test)]

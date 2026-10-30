@@ -7,22 +7,21 @@ module Hunker.Review.View.Collaboration exposing
     )
 
 import Html exposing (Html, article, button, div, form, h2, header, span, strong, text, textarea)
-import Html.Attributes exposing (class, disabled, id, placeholder, title, type_, value)
+import Html.Attributes exposing (attribute, class, classList, disabled, id, placeholder, title, type_, value)
 import Html.Events exposing (onClick, onInput, onSubmit)
 import Hunker.ApiError as ApiError exposing (ApiError)
 import Hunker.Domain.Review as Review exposing (CommentSide, ReviewAction(..), ReviewComment)
-import Hunker.Remote exposing (Remote(..))
-import Hunker.Review.Collaboration as Collaboration
+import Hunker.Review.Collaboration as Collaboration exposing (Inline(..), ReplyDraft(..), ReviewDraft(..), ReviewOutcome(..), Thread)
 import Markdown
 
 
 type alias Actions msg =
-    { toggleThread : Int -> msg
-    , changeReply : Int -> String -> msg
-    , submitReply : Int -> msg
-    , changeInlineBody : String -> msg
-    , cancelInline : msg
-    , submitInline : msg
+    { toggleThread : String -> Int -> msg
+    , changeReply : String -> Int -> String -> msg
+    , submitReply : String -> Int -> msg
+    , changeInlineBody : String -> String -> msg
+    , cancelInline : String -> msg
+    , submitInline : String -> msg
     , changeReviewBody : String -> msg
     , submitReview : ReviewAction -> msg
     }
@@ -30,138 +29,96 @@ type alias Actions msg =
 
 lineThreads : Actions msg -> Collaboration.FileState -> String -> CommentSide -> Int -> Html msg
 lineThreads actions collaboration path side lineNumber =
-    case Collaboration.fileComments collaboration of
-        Success _ values ->
-            values
-                |> rootComments
-                |> List.filter (\comment -> comment.path == path && comment.side == side && comment.line == Just lineNumber)
-                |> List.map (threadView actions collaboration values)
-                |> div [ class "inline-review-threads" ]
-
-        _ ->
+    case Collaboration.threadsAt side lineNumber collaboration of
+        [] ->
             text ""
+
+        threads ->
+            div [ class "inline-review-threads" ] (List.map (threadView actions collaboration path) threads)
 
 
 detachedThreads : Actions msg -> Collaboration.FileState -> String -> Html msg
 detachedThreads actions collaboration path =
-    case Collaboration.fileComments collaboration of
-        Success _ values ->
-            values
-                |> rootComments
-                |> List.filter (\comment -> comment.path == path && comment.line == Nothing)
-                |> List.map (threadView actions collaboration values)
-                |> div [ class "detached-review-threads" ]
-
-        Failure _ error ->
-            div [ class "review-comments-error" ] [ text (ApiError.message error) ]
-
-        _ ->
+    case Collaboration.detachedThreads collaboration of
+        [] ->
             text ""
+
+        threads ->
+            div [ class "detached-review-threads" ] (List.map (threadView actions collaboration path) threads)
 
 
 inlineComposer : Actions msg -> Collaboration.FileState -> String -> String -> Html msg
 inlineComposer actions collaboration fileAnchor path =
-    case Collaboration.inlineComposer collaboration of
-        Just composer ->
-            if composer.path /= path then
-                text ""
+    let
+        composer anchor body sending error =
+            form [ class "inline-comment-composer", onSubmit (actions.submitInline path) ]
+                [ header [] [ strong [] [ text ("Comment on " ++ path ++ ":" ++ String.fromInt anchor.line) ], span [] [ text (Review.commentSideToString anchor.side) ] ]
+                , textarea [ id ("inline-comment-" ++ fileAnchor), placeholder "Leave a review comment on GitHub…", value body, disabled sending, onInput (actions.changeInlineBody path) ] []
+                , div []
+                    [ button [ type_ "button", disabled sending, onClick (actions.cancelInline path) ] [ text "Cancel" ]
+                    , button [ type_ "submit", disabled (sending || String.trim body == "") ]
+                        [ text
+                            (if sending then
+                                "Adding…"
 
-            else
-                let
-                    loading =
-                        Collaboration.inlineLoading collaboration
-                in
-                form [ class "inline-comment-composer", onSubmit actions.submitInline ]
-                    [ header [] [ strong [] [ text ("Comment on " ++ path ++ ":" ++ String.fromInt composer.line) ], span [] [ text (Review.commentSideToString composer.side) ] ]
-                    , textarea [ id ("inline-comment-" ++ fileAnchor), placeholder "Leave a review comment on GitHub…", value composer.body, disabled loading, onInput actions.changeInlineBody ] []
-                    , div []
-                        [ button [ type_ "button", disabled loading, onClick actions.cancelInline ] [ text "Cancel" ]
-                        , button [ type_ "submit", disabled (loading || String.trim composer.body == "") ]
-                            [ text
-                                (if loading then
-                                    "Adding…"
-
-                                 else
-                                    "Add comment"
-                                )
-                            ]
+                             else
+                                "Add comment"
+                            )
                         ]
-                    , apiErrorView (Collaboration.inlineError collaboration)
                     ]
-
-        Nothing ->
+                , apiErrorView error
+                ]
+    in
+    case Collaboration.inline collaboration of
+        InlineClosed ->
             text ""
+
+        Composing anchor body error ->
+            composer anchor body False error
+
+        SubmittingInline _ anchor body ->
+            composer anchor body True Nothing
 
 
 reviewComposer : Actions msg -> Collaboration.Model -> Html msg
 reviewComposer actions collaboration =
     let
-        submission =
-            Collaboration.reviewSubmissionState collaboration
+        draft =
+            Collaboration.reviewDraft collaboration
 
-        loading =
-            case submission of
-                Collaboration.ReviewSubmitting _ ->
-                    True
+        ( body, submitting ) =
+            case draft of
+                DraftingReview text_ _ ->
+                    ( text_, Nothing )
 
-                _ ->
-                    False
-
-        body =
-            Collaboration.reviewBody collaboration
+                SubmittingReview request text_ ->
+                    ( text_, Just request )
     in
     form [ class "github-review-composer" ]
         [ h2 [] [ text "Submit review" ]
-        , textarea [ placeholder "Leave an overall review…", value body, disabled loading, onInput actions.changeReviewBody ] []
-        , div []
-            [ reviewButton actions submission body CommentReview
-            , reviewButton actions submission body ApproveReview
-            , reviewButton actions submission body RequestChangesReview
-            ]
-        , reviewFeedback submission
+        , textarea [ placeholder "Leave an overall review…", value body, disabled (submitting /= Nothing), onInput actions.changeReviewBody ] []
+        , div [] (List.map (reviewButton actions draft body) [ CommentReview, ApproveReview, RequestChangesReview ])
+        , reviewFeedback draft
         ]
 
 
-reviewButton : Actions msg -> Collaboration.ReviewSubmissionState -> String -> ReviewAction -> Html msg
-reviewButton actions submission body action =
+reviewButton : Actions msg -> ReviewDraft -> String -> ReviewAction -> Html msg
+reviewButton actions draft body action =
     let
-        loading =
-            case submission of
-                Collaboration.ReviewSubmitting _ ->
-                    True
+        ( label, submitting ) =
+            case draft of
+                SubmittingReview _ _ ->
+                    ( actionLabel (submittingAction draft == Just action) action, True )
 
-                _ ->
-                    False
-
-        requiresBody =
-            action /= ApproveReview
-
-        label =
-            case ( submission, action ) of
-                ( Collaboration.ReviewSubmitting CommentReview, CommentReview ) ->
-                    "Commenting…"
-
-                ( Collaboration.ReviewSubmitting ApproveReview, ApproveReview ) ->
-                    "Approving…"
-
-                ( Collaboration.ReviewSubmitting RequestChangesReview, RequestChangesReview ) ->
-                    "Requesting changes…"
-
-                ( _, CommentReview ) ->
-                    "Comment"
-
-                ( _, ApproveReview ) ->
-                    "Approve"
-
-                ( _, RequestChangesReview ) ->
-                    "Request changes"
+                DraftingReview _ _ ->
+                    ( actionLabel False action, False )
 
         needsSummary =
-            requiresBody && String.trim body == ""
+            action /= ApproveReview && String.trim body == ""
     in
     button
         [ type_ "button"
-        , disabled (loading || needsSummary)
+        , disabled (submitting || needsSummary)
         , title
             (if needsSummary then
                 "Write a review summary first"
@@ -174,19 +131,51 @@ reviewButton actions submission body action =
         [ text label ]
 
 
-reviewFeedback : Collaboration.ReviewSubmissionState -> Html msg
-reviewFeedback submission =
-    case submission of
-        Collaboration.ReviewNotSubmitted ->
+submittingAction : ReviewDraft -> Maybe ReviewAction
+submittingAction draft =
+    case draft of
+        SubmittingReview request _ ->
+            Just (Collaboration.reviewRequestAction request)
+
+        DraftingReview _ _ ->
+            Nothing
+
+
+actionLabel : Bool -> ReviewAction -> String
+actionLabel inFlight action =
+    case ( inFlight, action ) of
+        ( True, CommentReview ) ->
+            "Commenting…"
+
+        ( True, ApproveReview ) ->
+            "Approving…"
+
+        ( True, RequestChangesReview ) ->
+            "Requesting changes…"
+
+        ( False, CommentReview ) ->
+            "Comment"
+
+        ( False, ApproveReview ) ->
+            "Approve"
+
+        ( False, RequestChangesReview ) ->
+            "Request changes"
+
+
+reviewFeedback : ReviewDraft -> Html msg
+reviewFeedback draft =
+    case draft of
+        DraftingReview _ Nothing ->
             text ""
 
-        Collaboration.ReviewSubmitting _ ->
-            div [ class "form-status", Html.Attributes.attribute "role" "status" ] [ text "Submitting review to GitHub…" ]
+        SubmittingReview _ _ ->
+            div [ class "form-status", attribute "role" "status" ] [ text "Submitting review to GitHub…" ]
 
-        Collaboration.ReviewSucceeded action ->
-            div [ class "form-success", Html.Attributes.attribute "role" "status" ] [ text (reviewSuccessMessage action) ]
+        DraftingReview _ (Just (ReviewAccepted action)) ->
+            div [ class "form-success", attribute "role" "status" ] [ text (reviewSuccessMessage action) ]
 
-        Collaboration.ReviewSubmissionFailed error ->
+        DraftingReview _ (Just (ReviewRejected error)) ->
             apiErrorView (Just error)
 
 
@@ -203,41 +192,18 @@ reviewSuccessMessage action =
             "Changes requested on GitHub."
 
 
-rootComments : List ReviewComment -> List ReviewComment
-rootComments =
-    List.filter (\comment -> comment.id == comment.rootId)
-
-
-threadView : Actions msg -> Collaboration.FileState -> List ReviewComment -> ReviewComment -> Html msg
-threadView actions collaboration comments root =
+threadView : Actions msg -> Collaboration.FileState -> String -> Thread -> Html msg
+threadView actions collaboration path thread =
     let
+        root =
+            thread.root
+
         collapsed =
-            Collaboration.isThreadCollapsed root.rootId collaboration
-
-        replies =
-            List.filter (\comment -> comment.rootId == root.rootId && comment.id /= root.id) comments
+            Collaboration.isThreadCollapsed root.id collaboration
     in
-    article
-        [ class
-            ("github-review-thread"
-                ++ (if root.resolved then
-                        " is-resolved"
-
-                    else
-                        ""
-                   )
-            )
-        ]
-        [ button [ type_ "button", class "review-thread-header", onClick (actions.toggleThread root.rootId) ]
-            [ span []
-                [ text
-                    (if collapsed then
-                        "›"
-
-                     else
-                        "⌄"
-                    )
-                ]
+    article [ classList [ ( "github-review-thread", True ), ( "is-resolved", root.resolved ) ] ]
+        [ button [ type_ "button", class "review-thread-header", onClick (actions.toggleThread path root.id) ]
+            [ span [] [ text (disclosure collapsed) ]
             , strong [] [ text root.author ]
             , if root.resolved then
                 span [ class "resolved-tag" ] [ text "Resolved" ]
@@ -252,10 +218,19 @@ threadView actions collaboration comments root =
           else
             div [ class "review-thread-body" ]
                 (Markdown.toHtml [ class "github-markdown" ] root.body
-                    :: List.map commentBody replies
-                    ++ [ replyComposer actions collaboration root.rootId ]
+                    :: List.map commentBody thread.replies
+                    ++ [ replyComposer actions collaboration path root.id ]
                 )
         ]
+
+
+disclosure : Bool -> String
+disclosure collapsed =
+    if collapsed then
+        "›"
+
+    else
+        "⌄"
 
 
 commentBody : ReviewComment -> Html msg
@@ -266,27 +241,29 @@ commentBody comment =
         ]
 
 
-replyComposer : Actions msg -> Collaboration.FileState -> Int -> Html msg
-replyComposer actions collaboration commentId =
+replyComposer : Actions msg -> Collaboration.FileState -> String -> Int -> Html msg
+replyComposer actions collaboration path threadId =
     let
-        loading =
-            Collaboration.replyLoading commentId collaboration
+        ( body, sending, error ) =
+            case Collaboration.replyDraft threadId collaboration of
+                EditingReply draft failure ->
+                    ( draft, False, failure )
 
-        body =
-            Collaboration.replyDraft commentId collaboration
+                SendingReply _ draft ->
+                    ( draft, True, Nothing )
     in
-    form [ class "review-reply-composer", onSubmit (actions.submitReply commentId) ]
-        [ textarea [ placeholder "Reply on GitHub…", value body, disabled loading, onInput (actions.changeReply commentId) ] []
-        , button [ type_ "submit", disabled (loading || String.trim body == "") ]
+    form [ class "review-reply-composer", onSubmit (actions.submitReply path threadId) ]
+        [ textarea [ placeholder "Reply on GitHub…", value body, disabled sending, onInput (actions.changeReply path threadId) ] []
+        , button [ type_ "submit", disabled (sending || String.trim body == "") ]
             [ text
-                (if loading then
+                (if sending then
                     "Replying…"
 
                  else
                     "Reply"
                 )
             ]
-        , apiErrorView (Collaboration.replyError commentId collaboration)
+        , apiErrorView error
         ]
 
 

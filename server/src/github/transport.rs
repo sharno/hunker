@@ -1,44 +1,65 @@
 use std::env;
 
-use axum::http::StatusCode;
-use reqwest::{Method, header};
+use futures::{StreamExt, stream};
+use reqwest::{Method, StatusCode, header};
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::{
     command,
-    error::{AppError, AppResult},
+    error::{AppError, AppResult, ErrorCode},
 };
 
 const API_VERSION: &str = "2022-11-28";
 
 #[derive(Clone)]
+enum Credential {
+    Anonymous,
+    Token(String),
+}
+
+impl Credential {
+    fn from_token(value: &str) -> Option<Self> {
+        let token = value.trim();
+        (!token.is_empty()).then(|| Self::Token(token.to_owned()))
+    }
+
+    async fn discover() -> Self {
+        let configured = env::var("GITHUB_TOKEN")
+            .or_else(|_| env::var("GH_TOKEN"))
+            .ok()
+            .and_then(|value| Self::from_token(&value));
+        if let Some(credential) = configured {
+            return credential;
+        }
+        match command::checked("gh", &["auth", "token"], None).await {
+            Ok(value) => Self::from_token(&value).unwrap_or(Self::Anonymous),
+            Err(error) => {
+                tracing::warn!(
+                    reason = %error,
+                    "GitHub authentication is unavailable; public repositories remain accessible"
+                );
+                Self::Anonymous
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct GitHub {
     client: reqwest::Client,
-    token: Option<String>,
+    credential: Credential,
 }
 
 impl GitHub {
     pub async fn new() -> AppResult<Self> {
-        let token = match env::var("GITHUB_TOKEN").or_else(|_| env::var("GH_TOKEN")) {
-            Ok(value) if !value.trim().is_empty() => Some(value.trim().to_owned()),
-            _ => match command::checked("gh", &["auth", "token"], None).await {
-                Ok(value) => Some(value.trim().to_owned()).filter(|value| !value.is_empty()),
-                Err(error) => {
-                    tracing::warn!(
-                        reason = %error,
-                        "GitHub authentication is unavailable; public repositories remain accessible"
-                    );
-                    None
-                }
-            },
-        };
+        let credential = Credential::discover().await;
         let client = reqwest::Client::builder()
             .user_agent("hunker-diff-reviewer")
             .build()
             .map_err(|error| {
                 AppError::internal(format!("Could not initialize GitHub HTTP: {error}"))
             })?;
-        Ok(Self { client, token })
+        Ok(Self { client, credential })
     }
 
     pub(super) async fn json<T: DeserializeOwned>(&self, url: &str) -> AppResult<T> {
@@ -47,6 +68,32 @@ impl GitHub {
             .json()
             .await
             .map_err(|_| AppError::upstream("GitHub returned malformed data."))
+    }
+
+    /// Reads a page-numbered REST collection. A short page is GitHub's
+    /// end-of-list marker; `max_pages` bounds runaway lists.
+    pub(super) async fn paged<T: DeserializeOwned>(
+        &self,
+        page_url: impl Fn(usize) -> String,
+        page_size: usize,
+        max_pages: usize,
+    ) -> AppResult<Vec<T>> {
+        let page_url = &page_url;
+        let pages = stream::unfold(Some(1), |next_page| async move {
+            let page = next_page?;
+            let values = self.json::<Vec<T>>(&page_url(page)).await;
+            let following = match &values {
+                Ok(values) if values.len() == page_size && page < max_pages => Some(page + 1),
+                Ok(_) | Err(_) => None,
+            };
+            Some((values, following))
+        })
+        .collect::<Vec<_>>()
+        .await;
+        pages
+            .into_iter()
+            .collect::<AppResult<Vec<_>>>()
+            .map(|pages| pages.into_iter().flatten().collect())
     }
 
     pub(super) async fn post_json<B: Serialize + ?Sized, T: DeserializeOwned>(
@@ -111,9 +158,9 @@ impl GitHub {
             .request(method, url)
             .header(header::ACCEPT, accept)
             .header("x-github-api-version", API_VERSION);
-        match &self.token {
-            Some(token) => request.bearer_auth(token),
-            None => request,
+        match &self.credential {
+            Credential::Token(token) => request.bearer_auth(token),
+            Credential::Anonymous => request,
         }
     }
 
@@ -125,22 +172,29 @@ impl GitHub {
         if response.status().is_success() {
             return Ok(response);
         }
-        let status = response.status();
-        let message = match status.as_u16() {
-            404 if self.token.is_none() => {
-                "That change may be private. Run gh auth login or set GITHUB_TOKEN."
-            }
-            404 => "That change could not be found or your GitHub account cannot access it.",
-            401 => "GitHub rejected the local credential. Run gh auth login again.",
-            403 => {
-                "GitHub denied this request. Check that the local token has pull-request access and try again."
-            }
-            422 => "GitHub rejected this review action. Refresh the PR and try again.",
-            _ => "GitHub returned an error. Try again in a moment.",
-        };
-        Err(AppError::new(
-            StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
-            message,
-        ))
+        Err(rejection(response.status(), &self.credential))
+    }
+}
+
+fn rejection(status: StatusCode, credential: &Credential) -> AppError {
+    match (status, credential) {
+        (StatusCode::NOT_FOUND, Credential::Anonymous) => AppError::not_found(
+            "That change may be private. Run gh auth login or set GITHUB_TOKEN.",
+        ),
+        (StatusCode::NOT_FOUND, Credential::Token(_)) => AppError::not_found(
+            "That change could not be found or your GitHub account cannot access it.",
+        ),
+        (StatusCode::UNAUTHORIZED, _) => AppError::new(
+            ErrorCode::Unauthorized,
+            "GitHub rejected the local credential. Run gh auth login again.",
+        ),
+        (StatusCode::FORBIDDEN, _) => AppError::new(
+            ErrorCode::Unauthorized,
+            "GitHub denied this request. Check that the local token has pull-request access and try again.",
+        ),
+        (StatusCode::UNPROCESSABLE_ENTITY, _) => AppError::bad_request(
+            "GitHub rejected this review action. Refresh the PR and try again.",
+        ),
+        _ => AppError::upstream("GitHub returned an error. Try again in a moment."),
     }
 }

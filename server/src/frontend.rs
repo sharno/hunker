@@ -1,11 +1,11 @@
 use axum::{
-    body::Body,
-    http::{Response, StatusCode, header},
+    http::header,
     response::{Html, IntoResponse},
 };
 
 const APPLICATION_JAVASCRIPT: &str = include_str!(concat!(env!("OUT_DIR"), "/app.js"));
 const APPLICATION_CSS: &str = include_str!(concat!(env!("OUT_DIR"), "/app.css"));
+const VIEWPORT_JAVASCRIPT: &str = include_str!("../../elm/viewport.js");
 
 const INDEX: &str = r#"<!doctype html>
 <html lang="en">
@@ -20,31 +20,9 @@ const INDEX: &str = r#"<!doctype html>
     <div id="root"></div>
     <script src="/assets/app.js"></script>
     <script>
-      const mountNode = document.getElementById("root");
-      Elm.Main.init({ node: mountNode });
-
-      let viewportScrollRegionFrame;
-      const sizeViewportScrollRegions = () => {
-        viewportScrollRegionFrame = undefined;
-        document.querySelectorAll("[data-viewport-scroll-region]").forEach((region) => {
-          const visibleTop = Math.max(0, region.getBoundingClientRect().top);
-          region.style.setProperty("--viewport-scroll-region-top", `${visibleTop}px`);
-        });
-      };
-      const scheduleViewportScrollRegionSize = () => {
-        if (viewportScrollRegionFrame === undefined) {
-          viewportScrollRegionFrame = requestAnimationFrame(sizeViewportScrollRegions);
-        }
-      };
-
-      addEventListener("scroll", scheduleViewportScrollRegionSize, { passive: true });
-      addEventListener("resize", scheduleViewportScrollRegionSize, { passive: true });
-      new MutationObserver(scheduleViewportScrollRegionSize).observe(document.body, {
-        childList: true,
-        subtree: true,
-      });
-      scheduleViewportScrollRegionSize();
+      Elm.Main.init({ node: document.getElementById("root") });
     </script>
+    <script src="/assets/viewport.js"></script>
   </body>
 </html>
 "#;
@@ -57,22 +35,27 @@ pub async fn javascript() -> impl IntoResponse {
     asset("text/javascript; charset=utf-8", APPLICATION_JAVASCRIPT)
 }
 
+pub async fn viewport() -> impl IntoResponse {
+    asset("text/javascript; charset=utf-8", VIEWPORT_JAVASCRIPT)
+}
+
 pub async fn stylesheet() -> impl IntoResponse {
     asset("text/css; charset=utf-8", APPLICATION_CSS)
 }
 
-fn asset(content_type: &'static str, content: &'static str) -> Response<Body> {
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, content_type)
-        .header(header::CACHE_CONTROL, "no-cache")
-        .body(Body::from(content))
-        .expect("static asset response is valid")
+fn asset(content_type: &'static str, content: &'static str) -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, content_type),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        content,
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{APPLICATION_CSS, APPLICATION_JAVASCRIPT, INDEX};
+    use super::{APPLICATION_CSS, APPLICATION_JAVASCRIPT, INDEX, VIEWPORT_JAVASCRIPT};
 
     #[test]
     fn embeds_compiled_elm_application() {
@@ -80,5 +63,7 @@ mod tests {
         assert!(APPLICATION_CSS.contains(".app-bar"));
         assert!(INDEX.contains("/assets/app.js"));
         assert!(INDEX.contains("/assets/app.css"));
+        assert!(INDEX.contains("/assets/viewport.js"));
+        assert!(VIEWPORT_JAVASCRIPT.contains("--viewport-scroll-region-top"));
     }
 }

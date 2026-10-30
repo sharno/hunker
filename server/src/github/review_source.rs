@@ -2,111 +2,136 @@ use serde::Deserialize;
 
 use crate::{
     error::{AppError, AppResult},
-    types::{FilePair, FileStatus, PullCommit},
+    types::{
+        FileChange, FilePair, Oid, PullCommit, RelativePath, RepositorySlug, ReviewRevision, Side,
+    },
 };
 
-use super::{GitHub, GitHubTarget, encode};
+use super::{GitHub, GitHubChange, GitHubTarget, PullTarget, encode};
+
+const PAGE_SIZE: usize = 100;
+const MAX_PAGES: usize = 100;
 
 #[derive(Debug, Clone)]
 pub struct ReviewMetadata {
     pub title: String,
-    pub repository: String,
-    pub number: String,
     pub author: String,
     pub base: String,
     pub head: String,
-    pub url: String,
-    pub base_oid: String,
-    pub head_oid: String,
-    pub head_ref: String,
+    pub revision: ReviewRevision,
 }
 
 impl GitHub {
+    /// Resolves a review's title, labels, and immutable revision. The base
+    /// OID is the merge base, the commit GitHub diffs against, so file pairs
+    /// and local diffs show exactly the reviewed change.
     pub async fn metadata(&self, target: &GitHubTarget) -> AppResult<ReviewMetadata> {
-        match target {
-            GitHubTarget::Pull {
-                owner,
-                repo,
-                number,
-            } => {
+        let repository = &target.repository;
+        match &target.change {
+            GitHubChange::Pull(_) => {
                 let value: PullMetadataResponse = self.json(&target.api_url()).await?;
+                let base_oid = self
+                    .merge_base(repository, value.base.sha.as_str(), value.head.sha.as_str())
+                    .await?;
                 Ok(ReviewMetadata {
                     title: value.title,
-                    repository: format!("{owner}/{repo}"),
-                    number: number.to_string(),
                     author: value
                         .user
                         .map_or_else(|| "GitHub".to_owned(), |user| user.login),
                     base: value.base.reference,
                     head: value.head.reference.clone(),
-                    url: target.web_url(),
-                    base_oid: value.base.sha,
-                    head_oid: value.head.sha,
-                    head_ref: value.head.reference,
+                    revision: ReviewRevision {
+                        base_oid,
+                        head_oid: value.head.sha,
+                        head_ref: value.head.reference,
+                    },
                 })
             }
-            GitHubTarget::Compare { owner, repo, range } => {
-                let value: CompareMetadataResponse = self.json(&target.api_url()).await?;
-                let (base, head) = range.split_once("...").unwrap_or(("base", "head"));
-                let base_oid = value.base_commit.sha;
+            GitHubChange::Compare(range) => {
+                let (base_oid, head_oid) = futures::try_join!(
+                    self.merge_base(repository, &range.base, &range.head),
+                    self.commit_oid(repository, &range.head),
+                )?;
                 Ok(ReviewMetadata {
-                    title: range.clone(),
-                    repository: format!("{owner}/{repo}"),
-                    number: "compare".to_owned(),
+                    title: range.to_string(),
                     author: "GitHub".to_owned(),
-                    base: base.to_owned(),
-                    head: head.to_owned(),
-                    url: target.web_url(),
-                    base_oid: base_oid.clone(),
-                    head_oid: value
-                        .commits
-                        .last()
-                        .map_or_else(|| base_oid.clone(), |commit| commit.sha.clone()),
-                    head_ref: head.to_owned(),
+                    base: range.base.clone(),
+                    head: range.head.clone(),
+                    revision: ReviewRevision {
+                        base_oid,
+                        head_oid,
+                        head_ref: range.head.clone(),
+                    },
                 })
             }
-            GitHubTarget::Commit { owner, repo, sha } => {
+            GitHubChange::Commit(_) => {
                 let value: CommitMetadataResponse = self.json(&target.api_url()).await?;
                 let base_oid = value
                     .parents
-                    .first()
-                    .map_or_else(String::new, |parent| parent.sha.clone());
+                    .into_iter()
+                    .next()
+                    .map(|parent| parent.sha)
+                    .ok_or_else(|| {
+                        AppError::bad_request("Root commits have no parent to compare against.")
+                    })?;
                 Ok(ReviewMetadata {
                     title: value
                         .commit
                         .message
                         .lines()
                         .next()
-                        .unwrap_or(&value.commit.message)
+                        .unwrap_or_default()
                         .to_owned(),
-                    repository: format!("{owner}/{repo}"),
-                    number: sha.chars().take(7).collect(),
                     author: author(value.author.as_ref(), value.commit.author.as_ref()),
-                    base: base_oid.clone(),
-                    head: value.sha.clone(),
-                    url: target.web_url(),
-                    base_oid,
-                    head_oid: value.sha.clone(),
-                    head_ref: value.sha,
+                    base: base_oid.to_string(),
+                    head: value.sha.to_string(),
+                    revision: ReviewRevision {
+                        base_oid,
+                        head_ref: value.sha.to_string(),
+                        head_oid: value.sha,
+                    },
                 })
             }
         }
     }
 
-    pub async fn revision_diff(
+    async fn merge_base(
         &self,
-        target: &GitHubTarget,
+        repository: &RepositorySlug,
         base: &str,
         head: &str,
-    ) -> AppResult<String> {
-        self.text(
-            &format!(
-                "https://api.github.com/repos/{}/{}/compare/{}...{}",
-                target.owner(),
-                target.repo(),
+    ) -> AppResult<Oid> {
+        let value: CompareMetadataResponse = self
+            .json(&format!(
+                "https://api.github.com/repos/{repository}/compare/{}...{}?per_page=1",
                 encode(base),
                 encode(head)
-            ),
+            ))
+            .await?;
+        Ok(value.merge_base_commit.sha)
+    }
+
+    async fn commit_oid(&self, repository: &RepositorySlug, reference: &str) -> AppResult<Oid> {
+        let raw = self
+            .text(
+                &format!(
+                    "https://api.github.com/repos/{repository}/commits/{}",
+                    encode(reference)
+                ),
+                "application/vnd.github.sha",
+            )
+            .await?;
+        Oid::parse(raw.trim()).map_err(AppError::upstream)
+    }
+
+    pub async fn revision_diff(
+        &self,
+        repository: &RepositorySlug,
+        base: &Oid,
+        head: &Oid,
+    ) -> AppResult<String> {
+        self.text(
+            &format!("https://api.github.com/repos/{repository}/compare/{base}...{head}"),
             "application/vnd.github.diff",
         )
         .await
@@ -114,88 +139,61 @@ impl GitHub {
 
     pub async fn file_pair(
         &self,
-        target: &GitHubTarget,
-        base: &str,
-        head: &str,
-        path: &str,
-        previous_path: &str,
-        status: FileStatus,
+        repository: &RepositorySlug,
+        base: &Oid,
+        head: &Oid,
+        file: &FileChange,
     ) -> AppResult<FilePair> {
-        let old_path = if status == FileStatus::Renamed && !previous_path.is_empty() {
-            previous_path
-        } else {
-            path
-        };
-        let old_text = if status == FileStatus::Added {
-            String::new()
-        } else {
-            self.file(target, old_path, base).await?
-        };
-        let new_text = if status == FileStatus::Deleted {
-            String::new()
-        } else {
-            self.file(target, path, head).await?
-        };
+        let (old_text, new_text) = futures::try_join!(
+            self.side_text(repository, file.path_on(Side::Old), base),
+            self.side_text(repository, file.path_on(Side::New), head),
+        )?;
         Ok(FilePair {
-            path: path.to_owned(),
-            previous_path: (!previous_path.is_empty()).then(|| previous_path.to_owned()),
-            status,
+            path: file.path.clone(),
+            status: file.status.clone(),
             old_text,
             new_text,
         })
     }
 
-    async fn file(&self, target: &GitHubTarget, path: &str, reference: &str) -> AppResult<String> {
-        let encoded_path = path.split('/').map(encode).collect::<Vec<_>>().join("/");
+    async fn side_text(
+        &self,
+        repository: &RepositorySlug,
+        path: Option<&RelativePath>,
+        reference: &Oid,
+    ) -> AppResult<String> {
+        let Some(path) = path else {
+            return Ok(String::new());
+        };
+        let encoded_path = path
+            .as_str()
+            .split('/')
+            .map(encode)
+            .collect::<Vec<_>>()
+            .join("/");
         self.text(
             &format!(
-                "https://api.github.com/repos/{}/{}/contents/{encoded_path}?ref={}",
-                target.owner(),
-                target.repo(),
-                encode(reference)
+                "https://api.github.com/repos/{repository}/contents/{encoded_path}?ref={reference}"
             ),
             "application/vnd.github.raw+json",
         )
         .await
     }
 
-    pub async fn pull_commits(&self, target: &GitHubTarget) -> AppResult<Vec<PullCommit>> {
-        let Some(number) = target.pull_number() else {
-            return Err(AppError::bad_request(
-                "GitHub commits are available for pull requests.",
-            ));
-        };
-        let mut commits = Vec::new();
-        for page in 1..=100 {
-            let values: Vec<PullCommitResponse> = self.json(&format!(
-                "https://api.github.com/repos/{}/{}/pulls/{number}/commits?per_page=100&page={page}",
-                target.owner(),
-                target.repo()
-            )).await?;
-            let count = values.len();
-            commits.extend(values.into_iter().map(|value| {
-                PullCommit {
-                    sha: value.sha,
-                    message: value.commit.message,
-                    author: author(value.author.as_ref(), value.commit.author.as_ref()),
-                    avatar_url: value
-                        .author
-                        .as_ref()
-                        .and_then(|user| user.avatar_url.clone())
-                        .unwrap_or_default(),
-                    authored_at: value
-                        .commit
-                        .author
-                        .and_then(|entry| entry.date)
-                        .unwrap_or_default(),
-                    html_url: value.html_url,
-                }
-            }));
-            if count < 100 {
-                break;
-            }
-        }
-        Ok(commits)
+    pub async fn pull_commits(&self, target: &PullTarget) -> AppResult<Vec<PullCommit>> {
+        let commits = self
+            .paged::<PullCommitResponse>(
+                |page| {
+                    format!(
+                        "https://api.github.com/repos/{}/pulls/{}/commits?per_page={PAGE_SIZE}&page={page}",
+                        target.repository, target.number
+                    )
+                },
+                PAGE_SIZE,
+                MAX_PAGES,
+            )
+            .await?;
+        Ok(commits.into_iter().map(PullCommit::from).collect())
     }
 }
 
@@ -215,7 +213,7 @@ struct CommitAuthor {
 struct GitRef {
     #[serde(rename = "ref")]
     reference: String,
-    sha: String,
+    sha: Oid,
 }
 
 #[derive(Deserialize)]
@@ -228,13 +226,12 @@ struct PullMetadataResponse {
 
 #[derive(Deserialize)]
 struct Sha {
-    sha: String,
+    sha: Oid,
 }
 
 #[derive(Deserialize)]
 struct CompareMetadataResponse {
-    base_commit: Sha,
-    commits: Vec<Sha>,
+    merge_base_commit: Sha,
 }
 
 #[derive(Deserialize)]
@@ -245,7 +242,7 @@ struct CommitDetails {
 
 #[derive(Deserialize)]
 struct CommitMetadataResponse {
-    sha: String,
+    sha: Oid,
     commit: CommitDetails,
     author: Option<User>,
     parents: Vec<Sha>,
@@ -253,10 +250,23 @@ struct CommitMetadataResponse {
 
 #[derive(Deserialize)]
 struct PullCommitResponse {
-    sha: String,
+    sha: Oid,
     commit: CommitDetails,
     author: Option<User>,
     html_url: String,
+}
+
+impl From<PullCommitResponse> for PullCommit {
+    fn from(value: PullCommitResponse) -> Self {
+        Self {
+            sha: value.sha,
+            author: author(value.author.as_ref(), value.commit.author.as_ref()),
+            avatar_url: value.author.and_then(|user| user.avatar_url),
+            authored_at: value.commit.author.and_then(|entry| entry.date),
+            message: value.commit.message,
+            html_url: value.html_url,
+        }
+    }
 }
 
 fn author(user: Option<&User>, commit: Option<&CommitAuthor>) -> String {

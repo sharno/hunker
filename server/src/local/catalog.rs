@@ -1,110 +1,88 @@
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
+    sync::LazyLock,
 };
 
+use futures::{StreamExt, stream};
 use regex::Regex;
 
 use crate::{
-    command,
+    command::Git,
     error::{AppError, AppResult},
-    settings,
-    types::{LocalGitRepository, Oid, RepositorySlug},
+    types::{LocalGitRepository, Oid, RelativePath, RepositoryRoot, RepositorySlug},
 };
 
 use super::{
-    Local, LocalRepositories, LocalRepositorySummary, MAX_FILE_CHARACTERS, RepositoryCommit,
-    RepositoryCommits, RepositoryFile, RepositoryFileContent, git_result, objects, valid_segment,
+    History, Local, LocalRepositories, LocalRepositorySummary, MAX_FILE_CHARACTERS,
+    RepositoryCommit, RepositoryCommits, RepositoryFile, RepositoryFileContent, objects,
 };
 
-impl Local {
-    pub async fn repository_path(&self, repository: &RepositorySlug) -> AppResult<PathBuf> {
-        if !valid_segment(&repository.owner) || !valid_segment(&repository.name) {
-            return Err(AppError::bad_request("That repository name is not valid."));
-        }
-        let document = settings::load().await?;
-        let repositories_root = settings::resolve_path(&document.settings.repositories_root);
-        let cache_root = settings::resolve_path(&document.settings.cache_root);
-        let candidates = [
-            repositories_root.join(&repository.name),
-            repositories_root
-                .join(&repository.owner)
-                .join(&repository.name),
-            cache_root.join(&repository.owner).join(&repository.name),
-        ];
-        for candidate in candidates {
-            if candidate.exists() {
-                return Ok(candidate);
-            }
-        }
-        Err(AppError::not_found(format!(
-            "Local repository not found for {}/{}.",
-            repository.owner, repository.name
-        )))
-    }
+const MAX_LISTED_FILES: usize = 20_000;
+const CATALOG_CONCURRENCY: usize = 8;
 
+static GITHUB_REMOTE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^(?:git@github\.com:|https?://github\.com/|ssh://git@github\.com/)([^/]+)/([^/]+?)(?:\.git)?$",
+    )
+    .expect("GitHub remote expression is valid")
+});
+
+impl Local {
+    /// Finds the local Git repository for `repository`, or `None` when no
+    /// candidate directory is a Git repository.
     pub async fn find(&self, repository: &RepositorySlug) -> AppResult<Option<LocalGitRepository>> {
-        let document = settings::load().await?;
-        let configured = settings::resolve_path(&document.settings.repositories_root);
-        let cache = settings::resolve_path(&document.settings.cache_root);
-        let candidates = [
-            (configured.join(&repository.name), "checkout"),
-            (
-                configured.join(&repository.owner).join(&repository.name),
-                "checkout",
-            ),
-            (
-                cache.join(&repository.owner).join(&repository.name),
-                "cache",
-            ),
-        ];
-        for (path, kind) in candidates {
-            if path.exists() && git_result(&path, &["rev-parse", "--git-dir"]).await?.0 {
-                return Ok(Some(LocalGitRepository { path, kind }));
+        let roots = self.settings.roots().await?;
+        for (path, root) in roots.candidates(repository) {
+            if is_repository(&path).await? {
+                return Ok(Some(LocalGitRepository { path, root }));
             }
         }
         Ok(None)
     }
 
+    pub async fn repository_path(&self, repository: &RepositorySlug) -> AppResult<PathBuf> {
+        self.find(repository)
+            .await?
+            .map(|found| found.path)
+            .ok_or_else(|| {
+                AppError::not_found(format!("Local repository not found for {repository}."))
+            })
+    }
+
     pub async fn list_repositories(&self) -> AppResult<LocalRepositories> {
-        let document = settings::load().await?;
-        let configured_root = settings::resolve_path(&document.settings.repositories_root);
-        let temporary_root = settings::resolve_path(&document.settings.cache_root);
-        let mut unique = BTreeMap::new();
-        for (root, source) in [
-            (&configured_root, "configured"),
-            (&temporary_root, "temporary"),
-        ] {
-            for path in repository_directories(root) {
-                let fallback_name = path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("repository")
-                    .to_owned();
-                let fallback_owner = path
-                    .parent()
-                    .and_then(Path::file_name)
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("local")
-                    .to_owned();
-                let remote = command::git_config(&path, &["--get", "remote.origin.url"]).await?;
-                let (owner, name) = remote
-                    .as_deref()
-                    .and_then(parse_github_remote)
-                    .unwrap_or((fallback_owner, fallback_name));
-                unique
-                    .entry(format!("{owner}/{name}").to_lowercase())
-                    .or_insert(LocalRepositorySummary {
-                        owner,
-                        name,
-                        path: path.to_string_lossy().into_owned(),
-                        source: source.to_owned(),
-                    });
-            }
-        }
+        let roots = self.settings.roots().await?;
+        let scanned = roots.clone();
+        let candidates = tokio::task::spawn_blocking(move || {
+            [RepositoryRoot::Configured, RepositoryRoot::Temporary]
+                .into_iter()
+                .flat_map(|root| {
+                    repository_directories(scanned.path(root))
+                        .into_iter()
+                        .map(move |path| (path, root))
+                })
+                .collect::<Vec<_>>()
+        })
+        .await
+        .map_err(|error| AppError::internal(format!("Repository discovery stopped: {error}")))?;
+        let summaries = stream::iter(candidates)
+            .map(|(path, root)| async move { summarize(path, root).await })
+            .buffered(CATALOG_CONCURRENCY)
+            .collect::<Vec<_>>()
+            .await;
+        let unique =
+            summaries
+                .into_iter()
+                .flatten()
+                .fold(BTreeMap::new(), |mut unique, summary| {
+                    unique
+                        .entry(format!("{}/{}", summary.owner, summary.name).to_lowercase())
+                        .or_insert(summary);
+                    unique
+                });
         Ok(LocalRepositories {
-            configured_root: configured_root.to_string_lossy().into_owned(),
-            temporary_root: temporary_root.to_string_lossy().into_owned(),
+            configured_root: display(roots.path(RepositoryRoot::Configured)),
+            temporary_root: display(roots.path(RepositoryRoot::Temporary)),
             repositories: unique.into_values().collect(),
         })
     }
@@ -115,15 +93,13 @@ impl Local {
         oid: &Oid,
     ) -> AppResult<Vec<RepositoryFile>> {
         let root = self.repository_path(repository).await?;
-        let raw = command::git(
-            &root,
-            &["ls-tree", "-r", "-z", "--long", oid.as_str(), "--"],
-        )
-        .await?;
+        let raw = Git::at(&root)
+            .ok(&["ls-tree", "-r", "-z", "--long", oid.as_str(), "--"])
+            .await?;
         Ok(raw
             .split('\0')
             .filter_map(parse_tree_file)
-            .take(20_000)
+            .take(MAX_LISTED_FILES)
             .collect())
     }
 
@@ -131,29 +107,28 @@ impl Local {
         &self,
         repository: &RepositorySlug,
         oid: &Oid,
-        relative: &str,
+        relative: &RelativePath,
     ) -> AppResult<RepositoryFileContent> {
         let root = self.repository_path(repository).await?;
-        objects::validate_git_path(relative)?;
-        let object = format!("{}:{relative}", oid.as_str());
-        let mut contents = objects::cat_file_batch(&root, &[object]).await?;
+        let mut contents =
+            objects::cat_file_batch(&root, vec![format!("{oid}:{relative}")]).await?;
         let content = contents
             .pop()
             .ok_or_else(|| AppError::not_found(format!("Could not read {relative}.")))?;
-        let truncated = content.chars().count() > MAX_FILE_CHARACTERS;
-        let content = content
-            .chars()
-            .take(MAX_FILE_CHARACTERS)
-            .collect::<String>();
-        let presentation_path = relative.to_owned();
-        let presentation_source = content.clone();
-        let presentation = tokio::task::spawn_blocking(move || {
-            crate::semantic::source_presentation(&presentation_path, &presentation_source)
+        let (content, truncated) = match content.char_indices().nth(MAX_FILE_CHARACTERS) {
+            Some((cutoff, _)) => (content[..cutoff].to_owned(), true),
+            None => (content, false),
+        };
+        let presentation_path = relative.clone();
+        let (content, presentation) = tokio::task::spawn_blocking(move || {
+            let presentation =
+                crate::semantic::source_presentation(presentation_path.as_str(), &content);
+            (content, presentation)
         })
         .await
         .map_err(|error| AppError::internal(format!("Syntax highlighting stopped: {error}")))?;
         Ok(RepositoryFileContent {
-            path: relative.to_owned(),
+            path: relative.to_string(),
             content,
             truncated,
             presentation,
@@ -166,97 +141,144 @@ impl Local {
         oid: &Oid,
     ) -> AppResult<RepositoryCommits> {
         let root = self.repository_path(repository).await?;
-        let raw = command::git(
-            &root,
-            &[
+        let git = Git::at(&root);
+        let raw = git
+            .ok(&[
                 "log",
                 "-100",
                 "--no-show-signature",
                 "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e",
                 oid.as_str(),
-            ],
-        )
-        .await?;
-        let shallow = command::git(&root, &["rev-parse", "--is-shallow-repository"])
-            .await?
-            .trim()
-            == "true";
+            ])
+            .await?;
+        let history = if git.is_shallow().await? {
+            History::Shallow
+        } else {
+            History::Complete
+        };
         Ok(RepositoryCommits {
-            reference: oid.to_string(),
-            shallow,
-            commits: parse_repository_commits(&raw),
+            reference: oid.clone(),
+            history,
+            commits: parse_repository_commits(&raw)?,
         })
     }
 }
 
-fn parse_tree_file(record: &str) -> Option<RepositoryFile> {
-    let (metadata, path) = record.split_once('\t')?;
-    let mut fields = metadata.split_whitespace();
-    fields.next()?;
-    if fields.next()? != "blob" {
-        return None;
+async fn is_repository(path: &Path) -> AppResult<bool> {
+    if !tokio::fs::try_exists(path).await.unwrap_or(false) {
+        return Ok(false);
     }
-    fields.next()?;
-    let size = fields.next()?.parse().ok()?;
-    Some(RepositoryFile {
-        path: path.to_owned(),
-        size,
-        git_status: "clean".to_owned(),
+    Ok(Git::at(path)
+        .run(&["rev-parse", "--git-dir"])
+        .await?
+        .status
+        .success())
+}
+
+/// Summarizes one discovered checkout. Directories that do not map to a
+/// GitHub repository, or whose Git config cannot be read, are left out of the
+/// catalog because Hunker cannot open them by slug anyway.
+async fn summarize(path: PathBuf, root: RepositoryRoot) -> Option<LocalRepositorySummary> {
+    let remote = match Git::at(&path).config(&["--get", "remote.origin.url"]).await {
+        Ok(remote) => remote,
+        Err(error) => {
+            tracing::warn!(path = %path.display(), %error, "skipping unreadable repository");
+            return None;
+        }
+    };
+    let repository = remote
+        .as_deref()
+        .and_then(parse_github_remote)
+        .or_else(|| directory_slug(&path))?;
+    Some(LocalRepositorySummary {
+        owner: repository.owner().to_owned(),
+        name: repository.name().to_owned(),
+        path: display(&path),
+        source: root,
     })
 }
 
-fn repository_directories(root: &Path) -> Vec<PathBuf> {
-    let mut found = Vec::new();
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return found;
+fn directory_slug(path: &Path) -> Option<RepositorySlug> {
+    let name = path.file_name()?.to_str()?;
+    let owner = path.parent()?.file_name()?.to_str()?;
+    RepositorySlug::new(owner, name).ok()
+}
+
+fn display(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+fn parse_tree_file(record: &str) -> Option<RepositoryFile> {
+    let (metadata, path) = record.split_once('\t')?;
+    let [_, "blob", _, size] = metadata.split_whitespace().collect::<Vec<_>>()[..] else {
+        return None;
     };
-    for entry in entries.flatten().filter(|entry| entry.path().is_dir()) {
-        let path = entry.path();
-        if path.join(".git").exists() {
-            found.push(path);
-            continue;
-        }
-        if let Ok(nested) = std::fs::read_dir(&path) {
-            found.extend(
-                nested
-                    .flatten()
-                    .map(|child| child.path())
-                    .filter(|child| child.is_dir() && child.join(".git").exists()),
-            );
-        }
-    }
-    found
+    Some(RepositoryFile {
+        path: path.to_owned(),
+        size: size.parse().ok()?,
+    })
 }
 
-fn parse_github_remote(remote: &str) -> Option<(String, String)> {
-    let regex = Regex::new(r"^(?:git@github\.com:|https?://github\.com/|ssh://git@github\.com/)([^/]+)/([^/]+?)(?:\.git)?$").ok()?;
-    let captures = regex.captures(remote.trim())?;
-    Some((
-        captures.get(1)?.as_str().to_owned(),
-        captures.get(2)?.as_str().to_owned(),
-    ))
-}
-
-fn parse_repository_commits(raw: &str) -> Vec<RepositoryCommit> {
-    raw.split('\x1e')
-        .filter_map(|record| {
-            let mut fields = record.trim().split('\x1f');
-            let sha = fields.next()?.to_owned();
-            if sha.is_empty() {
-                return None;
+/// Checkouts live directly under a root (`~/src/name`) or one level down
+/// (`~/src/owner/name`).
+fn repository_directories(root: &Path) -> Vec<PathBuf> {
+    let directories = |path: &Path| -> Vec<PathBuf> {
+        std::fs::read_dir(path)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect()
+    };
+    directories(root)
+        .into_iter()
+        .flat_map(|path| {
+            if path.join(".git").exists() {
+                vec![path]
+            } else {
+                directories(&path)
+                    .into_iter()
+                    .filter(|child| child.join(".git").exists())
+                    .collect()
             }
-            Some(RepositoryCommit {
+        })
+        .collect()
+}
+
+fn parse_github_remote(remote: &str) -> Option<RepositorySlug> {
+    let captures = GITHUB_REMOTE.captures(remote.trim())?;
+    RepositorySlug::new(captures.get(1)?.as_str(), captures.get(2)?.as_str()).ok()
+}
+
+fn parse_repository_commits(raw: &str) -> AppResult<Vec<RepositoryCommit>> {
+    raw.split('\x1e')
+        .map(str::trim)
+        .filter(|record| !record.is_empty())
+        .map(|record| {
+            let [
                 sha,
-                parents: fields
-                    .next()
-                    .unwrap_or("")
+                parents,
+                author_name,
+                author_email,
+                authored_at,
+                subject,
+            ] = record.split('\x1f').collect::<Vec<_>>()[..]
+            else {
+                return Err(AppError::upstream(
+                    "Git returned a malformed commit record.",
+                ));
+            };
+            Ok(RepositoryCommit {
+                sha: Oid::parse(sha).map_err(AppError::upstream)?,
+                parents: parents
                     .split_whitespace()
-                    .map(str::to_owned)
-                    .collect(),
-                author_name: fields.next().unwrap_or("").to_owned(),
-                author_email: fields.next().unwrap_or("").to_owned(),
-                authored_at: fields.next().unwrap_or("").to_owned(),
-                subject: fields.next().unwrap_or("").to_owned(),
+                    .map(|parent| Oid::parse(parent).map_err(AppError::upstream))
+                    .collect::<AppResult<_>>()?,
+                author_name: author_name.to_owned(),
+                author_email: author_email.to_owned(),
+                authored_at: authored_at.to_owned(),
+                subject: subject.to_owned(),
             })
         })
         .collect()
@@ -270,12 +292,13 @@ mod tests {
     fn parses_github_remotes() {
         assert_eq!(
             parse_github_remote("git@github.com:acme/demo.git"),
-            Some(("acme".to_owned(), "demo".to_owned()))
+            Some(RepositorySlug::parse("acme/demo").unwrap())
         );
         assert_eq!(
             parse_github_remote("https://github.com/acme/demo"),
-            Some(("acme".to_owned(), "demo".to_owned()))
+            Some(RepositorySlug::parse("acme/demo").unwrap())
         );
+        assert_eq!(parse_github_remote("https://gitlab.com/acme/demo"), None);
     }
 
     #[test]
@@ -284,7 +307,18 @@ mod tests {
             .expect("blob entry should be visible in the file tree");
         assert_eq!(file.path, "src/main.rs");
         assert_eq!(file.size, 42);
-        assert_eq!(file.git_status, "clean");
         assert!(parse_tree_file("160000 commit 0123456789abcdef -\tvendor/effect").is_none());
+    }
+
+    #[test]
+    fn rejects_malformed_commit_records() {
+        let oid = "a".repeat(40);
+        let commits = parse_repository_commits(&format!(
+            "{oid}\x1f\x1fAda\x1fada@example.com\x1f2026-01-01T00:00:00Z\x1fInitial\x1e"
+        ))
+        .unwrap();
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].parents, Vec::<Oid>::new());
+        assert!(parse_repository_commits("not-a-commit\x1e").is_err());
     }
 }

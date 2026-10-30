@@ -776,6 +776,18 @@
     @apply border-0 bg-transparent underline;
   }
 
+  .settings-save-banner {
+    @apply flex items-center justify-center gap-3 border-b border-red-300 bg-red-50 px-4 py-2 text-xs font-bold text-red-800;
+  }
+
+  .settings-save-banner button {
+    @apply border-0 bg-transparent underline;
+  }
+
+  .review-comments-error {
+    @apply mx-4 my-2 rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800;
+  }
+
   .compact-review-toolbar {
     @apply sticky z-30 flex h-11 min-w-0 items-center gap-3 border-b border-slate-700 bg-ink px-4 text-white shadow-md;
     top: var(--app-bar-height);
