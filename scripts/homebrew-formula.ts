@@ -56,12 +56,24 @@ ${platforms}
 
   def install
     bin.install "hunker"
+    pkgshare.install "extension"
+  end
+
+  # Chrome remembers an unpacked extension by its resolved path, so keep a copy
+  # outside the versioned Cellar that upgrades refresh in place.
+  post_install_steps do
+    remove "hunker/extension", base: :var, recursive: true
+    copy "extension", "hunker/extension", source_base: :pkgshare, target_base: :var, recursive: true
   end
 
   def caveats
     <<~EOS
       Run \`hunker\` or \`brew services start hunker\`, then open
       http://127.0.0.1:5173. Private repositories use GITHUB_TOKEN or \`gh auth\`.
+
+      To open GitHub links in Hunker, load its Chrome extension: turn on
+      Developer mode in chrome://extensions, choose Load unpacked, and pick
+        #{var}/hunker/extension
     EOS
   end
 
@@ -75,6 +87,7 @@ ${platforms}
 
   test do
     assert_match version.to_s, shell_output("#{bin}/hunker --version")
+    assert_path_exists pkgshare/"extension/manifest.json"
 
     port = free_port
     pid = spawn({ "HUNKER_PORT" => port.to_s, "HUNKER_CONFIG_FILE" => (testpath/"settings.json").to_s },
@@ -82,6 +95,7 @@ ${platforms}
     begin
       sleep 2
       assert_match "<title>Hunker", shell_output("curl -s http://127.0.0.1:#{port}/")
+      assert_match '"application":"hunker"', shell_output("curl -s http://127.0.0.1:#{port}/api/about")
     ensure
       Process.kill("TERM", pid)
       Process.wait(pid)

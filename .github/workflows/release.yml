@@ -31,16 +31,21 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - run: bun install --frozen-lockfile
-      - name: Check the tag matches the crate version
+      - name: Check the tag matches every version
         run: |
           version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "hunker") | .version')
           test "$GITHUB_REF_NAME" = "v$version"
+          test "$(jq -r .version extension/manifest.json)" = "$version"
+          test "$(jq -r .version package.json)" = "$version"
       - run:
           cargo build --release --locked -p hunker --target ${{ matrix.target }}
-      - name: Package
-        run:
-          tar -czf "hunker-$GITHUB_REF_NAME-${{ matrix.target }}.tar.gz" -C
-          "target/${{ matrix.target }}/release" hunker
+      - run: bun run extension:build
+      - name: Package the binary and the browser extension
+        run: |
+          mkdir package
+          cp "target/${{ matrix.target }}/release/hunker" package/
+          cp -R extension/dist package/extension
+          tar -czf "hunker-$GITHUB_REF_NAME-${{ matrix.target }}.tar.gz" -C package hunker extension
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}

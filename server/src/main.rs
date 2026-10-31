@@ -155,6 +155,7 @@ async fn serve() -> AppResult<()> {
 
 fn router(state: Arc<AppState>) -> Router {
     Router::new()
+        .merge(api::about::routes())
         .merge(api::settings::routes())
         .merge(api::repository::routes())
         .merge(api::review::routes())

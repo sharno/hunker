@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Hunker",
+  "version": "0.2.0",
+  "description": "Open GitHub pull requests, commits, and comparisons in your local Hunker.",
+  "minimum_chrome_version": "120",
+  "permissions": ["alarms", "declarativeNetRequest", "storage"],
+  "host_permissions": ["https://github.com/*", "http://127.0.0.1/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_title": "Hunker", "default_popup": "popup.html" }
+}

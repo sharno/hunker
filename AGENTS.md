@@ -293,9 +293,18 @@
   type problems.
 - Hunker ships as one `hunker` binary with every asset embedded; runtime
   dependencies stay limited to `git` (and optionally `gh`). Release by bumping
-  the version in `server/Cargo.toml` and pushing a matching `vX.Y.Z` tag. The
-  release workflow's target matrix and the target table in
-  `scripts/homebrew-formula.ts` must list the same platforms.
+  the version in `server/Cargo.toml`, `extension/manifest.json`, and
+  `package.json` and pushing a matching `vX.Y.Z` tag. The release workflow's
+  target matrix and the target table in `scripts/homebrew-formula.ts` must list
+  the same platforms.
+- The Chrome extension (`extension/`) redirects GitHub links with
+  `declarativeNetRequest` rules generated from one route table in
+  `extension/src/model.ts`. List only GitHub paths `Hunker.Route` parses. Rule
+  regexes are RE2 under a 2 KB compiled limit, so avoid counted repetition such
+  as `{7,40}`. The background worker owns storage, probing, and rules, and
+  installs rules only while `/api/about` identifies Hunker. Navigations started
+  from Hunker or github.com are excluded. `tests/extension.spec.ts` loads the
+  built extension in Chromium.
 - Before pushing, run `bun run format:check`, `bun run lint`,
   `bun run typecheck`, `bun run test`, `bun run build`, and
   `bun run test:integration`.

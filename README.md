@@ -19,6 +19,23 @@ Run `hunker`, or `brew services start hunker` to keep it running, and open
 [http://127.0.0.1:5173](http://127.0.0.1:5173). `hunker --help` lists the
 environment variables. Git must be on `PATH`.
 
+### Open GitHub links in Hunker
+
+The Chrome extension in `extension/` redirects GitHub links to the running
+Hunker. Pull requests, commits, and comparisons redirect by default; files,
+commit history, and pull-request lists are an opt-in. Links that start in Hunker
+or on github.com stay on GitHub, so "Open on GitHub" and GitHub's own navigation
+keep working. Its popup opens the current GitHub page in Hunker and sets the
+port.
+
+The extension redirects only while `/api/about` on that port answers as Hunker,
+so a stopped Hunker, or another server such as Vite on 5173, leaves GitHub links
+alone. To install it, open `chrome://extensions`, turn on Developer mode, choose
+Load unpacked, and pick `$(brew --prefix)/var/hunker/extension`, or
+`extension/dist` after `bun run extension:build` in a checkout.
+
+### Releases
+
 Hunker ships as one self-contained binary per platform. Pushing a `vX.Y.Z` tag
 that matches `server/Cargo.toml` runs `.github/workflows/release.yml`, which
 builds macOS and Linux binaries, publishes a GitHub release, and points the
